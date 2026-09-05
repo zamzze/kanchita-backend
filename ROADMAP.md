@@ -25,7 +25,7 @@
 2. ✅ Crear migración para `subtitles` con unicidad `(content_type, content_id, language)` e índices. Completado en Fase 1B.
 3. ✅ Añadir la restricción que exige `streams.upsertStream`; `server_name NULL` usa `UNIQUE NULLS NOT DISTINCT`. Completado en Fase 1B.
 4. Añadir checks de duración/progreso, URL de stream y estados; documentar la estrategia para integridad polimórfica.
-5. 🟡 Se añadieron pruebas para base vacía y esquema legacy. Falta ejecutarlas en CI/entorno con PostgreSQL real.
+5. ✅ La Fase 1C ejecuta las pruebas de base vacía y esquema legacy automáticamente contra PostgreSQL 15 real en GitHub Actions.
 
 ### P0/P1: ejecución reproducible
 
@@ -106,6 +106,6 @@
 
 ## Estado de las primeras fases
 
-La Fase 1A completó higiene y ejecución reproducible. La Fase 1B alinea el contrato mínimo PostgreSQL. Permanecen como PRs separadas: seguridad HTTP/JWT, validación, healthchecks, checks adicionales de integridad, vulnerabilidades de dependencias y el procedimiento operativo de secretos/historial.
+La Fase 1A completó higiene y ejecución reproducible. La Fase 1B alinea el contrato mínimo PostgreSQL y la Fase 1C lo valida en CI contra PostgreSQL 15. Permanecen como PRs separadas: seguridad HTTP/JWT, validación, healthchecks, checks adicionales de integridad, vulnerabilidades de dependencias y el procedimiento operativo de secretos/historial.
 
 

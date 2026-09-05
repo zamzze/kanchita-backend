@@ -107,6 +107,12 @@ TEST_DB_URL=postgresql://user:password@localhost:5432/test_db npm run test:db
 
 La base indicada debe ser exclusiva para pruebas. Los tests crean y eliminan esquemas aislados dentro de ella.
 
+## Integración continua
+
+GitHub Actions ejecuta `npm ci`, el smoke test y las pruebas de migración contra un servicio PostgreSQL 15 real en cada pull request hacia `main` y cada push a `main`. Una ejecución verde valida la Fase 1B sobre una base vacía y sobre el baseline legacy, incluida la idempotencia, subtítulos y el upsert de streams.
+
+`npm audit` también se ejecuta para dar visibilidad, pero permanece informativo mientras se resuelven de forma controlada las vulnerabilidades heredadas. La seguridad HTTP/JWT continúa pendiente y no forma parte de este workflow.
+
 ## Documentación técnica
 
 - [Arquitectura](ARCHITECTURE.md)
