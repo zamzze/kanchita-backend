@@ -23,13 +23,13 @@ const findEpisodeWithSeries = async (episodeId) => {
   return rows[0] || null;
 };
 
-const upsertStream = async (stream) => {
-  const { rows } = await pool.query(
+const upsertStreamWithClient = async (client, stream) => {
+  const { rows } = await client.query(
     `INSERT INTO streams (
         content_type, content_id, server_name, quality, language,
         stream_url, embed_url, stream_type, priority, is_active
      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, TRUE)
-     ON CONFLICT (content_type, content_id, server_name)
+     ON CONFLICT ON CONSTRAINT streams_content_server_unique
      DO UPDATE SET
         stream_url  = EXCLUDED.stream_url,
         embed_url   = EXCLUDED.embed_url,
@@ -54,8 +54,16 @@ const upsertStream = async (stream) => {
   return rows[0];
 };
 
+const upsertStream = async (stream) => upsertStreamWithClient(pool, stream);
+
 const getStreamsByContent = async (contentType, contentId) => {
   return findStreams(contentType, contentId);
 };
 
-module.exports = { findStreams, findEpisodeWithSeries, upsertStream, getStreamsByContent };
+module.exports = {
+  findStreams,
+  findEpisodeWithSeries,
+  upsertStream,
+  upsertStreamWithClient,
+  getStreamsByContent,
+};

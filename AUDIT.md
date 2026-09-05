@@ -6,6 +6,12 @@ El proyecto conserva una separación razonable entre rutas, controladores, servi
 
 Alcance: rama `main`, commit `6844ef4`, 5.087 archivos versionados; 5.024 pertenecen a `node_modules` (aprox. 44 MB en el checkout). No se modificó el backend ni se probaron proveedores con las credenciales expuestas.
 
+## Estado de remediación
+
+- **Fase 1A:** corrigió higiene, lockfile, Dockerfile, README y smoke test. Los hallazgos originales se conservan como registro histórico.
+- **Fase 1B:** resuelve A-01 mediante migraciones versionadas, tabla `subtitles` y restricción compatible con el upsert de streams.
+- La rotación de secretos, reescritura del historial y los demás hallazgos continúan pendientes.
+
 ## CRÍTICO
 
 ### C-01 — Secretos versionados en un repositorio público
@@ -18,13 +24,13 @@ Alcance: rama `main`, commit `6844ef4`, 5.087 archivos versionados; 5.024 perten
 
 ## ALTO
 
-### A-01 — El esquema no satisface el código de streams/subtítulos
+### A-01 — El esquema no satisface el código de streams/subtítulos — RESUELTO EN FASE 1B
 
 - `subtitles.service.js` consulta e inserta en `subtitles`, pero `database/init.sql` no crea esa tabla.
 - `streams.queries.js` usa `ON CONFLICT (content_type, content_id, server_name)`, pero `streams` no tiene esa restricción única. PostgreSQL responderá que no existe una restricción compatible.
 - Los scripts de inicialización sólo corren al crear un volumen; no existe sistema de migraciones para corregir bases ya creadas.
 
-**Impacto:** el primer acceso sin caché puede resolver externamente una URL y fallar al guardarla; cualquier acceso a subtítulos falla contra una base recién creada.
+**Remediación:** `database/migrations/002_phase_1b_schema_alignment.sql` crea `subtitles` y añade `streams_content_server_unique` con `NULLS NOT DISTINCT`. El runner registra y serializa migraciones. Bases con duplicados lógicos preexistentes fallan sin borrar filas y requieren resolución explícita.
 
 ### A-02 — Endpoint de subtítulos sin autenticación y procesamiento remoto no acotado
 
@@ -70,7 +76,7 @@ El refresh token se guarda en texto claro, sólo se permite uno por usuario y `r
 
 ## MEDIO
 
-### M-01 — Instalación y pruebas no reproducibles
+### M-01 — Instalación y pruebas no reproducibles — PARCIALMENTE RESUELTO EN FASE 1A
 
 - No existe script `test`; `npm test` falla.
 - `npm ci --ignore-scripts` en una carpeta limpia falla porque el lock no incluye `fsevents@2.3.3` requerido por el árbol resuelto.
@@ -113,9 +119,9 @@ La clasificación `rating` se inventa a partir de `adult` (`PG-13`/`TV-PG`), no 
 
 Los VTT viven en el filesystem del contenedor y no hay volumen de producción, limpieza, límite, atomicidad ni coordinación entre réplicas. Hay un VTT generado ya versionado. `API_BASE_URL` manual puede producir URLs HTTP o host incorrecto detrás de TLS/proxy.
 
-### M-10 — Esquema sin integridad/migraciones suficientes
+### M-10 — Esquema sin integridad/migraciones suficientes — PARCIALMENTE RESUELTO EN FASE 1B
 
-Las relaciones polimórficas de streams, historial, géneros y logs no aseguran existencia del contenido. Faltan checks útiles (progreso/duración no negativos, al menos una URL de stream, estados permitidos), timestamps de actualización coherentes y estrategia de migración/versionado.
+Ya existe estrategia de migración/versionado. Las relaciones polimórficas de streams, historial, géneros y logs aún no aseguran existencia del contenido; también faltan checks útiles (progreso/duración no negativos, al menos una URL de stream, estados permitidos) y timestamps de actualización coherentes.
 
 ## BAJO
 

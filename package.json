@@ -4,7 +4,10 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node --env-file=.env ./node_modules/nodemon/bin/nodemon.js server.js",
-    "test": "node test/smoke.js",
+    "test": "node test/smoke.js && node --test test/database/migrations.test.js",
+    "test:smoke": "node test/smoke.js",
+    "test:db": "node --test test/database/migrations.test.js",
+    "migrate": "node --env-file=.env database/migrate.js",
     "initial-load": "node src/ingestion/scripts/initialLoad.js"
   },
   "dependencies": {

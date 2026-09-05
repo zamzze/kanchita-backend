@@ -37,6 +37,31 @@ npm ci
 
 El lockfile está destinado a Node 20 y debe actualizarse de forma deliberada. No uses `npm install` sólo para corregir automáticamente alertas de seguridad sin revisar el cambio.
 
+## Esquema y migraciones
+
+Los archivos ordenados de `database/migrations/` son la fuente de verdad del esquema. `database/init.sql` es un wrapper para bases nuevas creadas por la imagen oficial de PostgreSQL y ejecuta esos mismos archivos; no mantiene una segunda copia del DDL.
+
+Ejecuta las migraciones después de configurar `DB_URL`, antes de arrancar una versión nueva del API:
+
+```bash
+npm run migrate
+```
+
+El runner:
+
+- aplica archivos pendientes en orden y dentro de una transacción;
+- registra versión, checksum y fecha en `schema_migrations`;
+- usa un advisory lock de PostgreSQL para impedir dos ejecuciones simultáneas;
+- rechaza cambios en una migración ya aplicada.
+
+Para consultar la versión instalada:
+
+```sql
+SELECT version, checksum, applied_at
+FROM schema_migrations
+ORDER BY version;
+```
+
 ## Desarrollo local
 
 Con PostgreSQL disponible y `.env` configurado:
@@ -58,6 +83,12 @@ docker compose build
 docker compose up
 ```
 
+En una base nueva, `database/init.sql` deja el esquema en la versión actual. El runner debe ejecutarse igualmente para registrar las versiones:
+
+```bash
+docker compose run --rm api npm run migrate
+```
+
 El Compose actual es únicamente para desarrollo. No debe utilizarse como configuración final de un VPS.
 
 ## Smoke test
@@ -66,7 +97,15 @@ El Compose actual es únicamente para desarrollo. No debe utilizarse como config
 npm test
 ```
 
-El smoke test fuerza `NODE_ENV=test`, carga la aplicación Express y comprueba que no se programe la ingesta. Utiliza configuración ficticia, no abre una conexión PostgreSQL y no llama a TMDB, SubDL ni proveedores de streams.
+El smoke test fuerza `NODE_ENV=test`, carga la aplicación Express y comprueba que no se programe la ingesta. Utiliza configuración ficticia, no abre una conexión PostgreSQL y no llama a TMDB, SubDL ni proveedores de streams. `npm test` también descubre las pruebas PostgreSQL; si `TEST_DB_URL` no está definido, se muestran como omitidas.
+
+Para ejecutar explícitamente las pruebas de migración contra PostgreSQL 15:
+
+```bash
+TEST_DB_URL=postgresql://user:password@localhost:5432/test_db npm run test:db
+```
+
+La base indicada debe ser exclusiva para pruebas. Los tests crean y eliminan esquemas aislados dentro de ella.
 
 ## Documentación técnica
 
