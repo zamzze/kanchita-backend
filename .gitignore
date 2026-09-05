@@ -1,1 +1,33 @@
-"node_modules/.env*.envdocker-compose.override.yml" 
+# Dependencies
+node_modules/
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+
+# Logs and test output
+*.log
+npm-debug.log*
+coverage/
+.nyc_output/
+
+# Runtime/generated files
+tmp/
+public/subtitles/*.vtt
+!public/subtitles/.gitkeep
+.cache/
+
+# Build output
+dist/
+
+# OS/editor metadata
+.DS_Store
+Thumbs.db
+*.swp
+
+# Local Compose overrides
+docker-compose.override.yml
+compose.override.yml
+
+
