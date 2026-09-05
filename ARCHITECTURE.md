@@ -2,7 +2,7 @@
 
 ## Alcance y estado observado
 
-Auditoría de `zamzze/kanchita-backend`, rama `main`, commit `6844ef4`, realizada el 5 de septiembre de 2026. El repositorio es público, contiene dos commits y no incluye README, especificación OpenAPI, migraciones incrementales, CI ni pruebas automatizadas.
+Auditoría de `zamzze/kanchita-backend`, rama `main`, commit `6844ef4`, realizada el 5 de septiembre de 2026. La Fase 1A añadió README y smoke test; la Fase 1B añadió las migraciones PostgreSQL descritas aquí. Siguen pendientes OpenAPI, CI y una suite funcional completa.
 
 El sistema es un monolito Node.js/CommonJS con Express 4 y acceso directo a PostgreSQL mediante `pg`. No hay ORM. La API, el planificador de ingesta, el scraping con Chromium y el almacenamiento local de subtítulos viven en el mismo proceso/contenedor.
 
@@ -66,7 +66,7 @@ Acepta UUID local de película o episodio. Primero devuelve streams directos act
 
 ### Subtítulos
 
-Consulta un supuesto caché en la tabla `subtitles`, busca en SubDL, descarga ZIP/RAR en memoria, selecciona un `.srt`/`.sub`, lo convierte a WebVTT y escribe `public/subtitles/<content-id>.vtt`. Publica una URL absoluta basada en `API_BASE_URL`. **El esquema versionado no crea la tabla `subtitles`**, de modo que este flujo falla en una base creada desde `database/init.sql`.
+Consulta el caché en `subtitles`, busca en SubDL, descarga ZIP/RAR en memoria, selecciona un `.srt`/`.sub`, lo convierte a WebVTT y escribe `public/subtitles/<content-id>.vtt`. Publica una URL absoluta basada en `API_BASE_URL`. La Fase 1B incorporó la tabla y la unicidad que requiere el upsert; los riesgos de red, archivos y acceso al endpoint siguen pendientes.
 
 ### Ingesta programada
 
@@ -107,11 +107,16 @@ Consulta un supuesto caché en la tabla `subtitles`, busca en SubDL, descarga ZI
 | `series` | Metadatos de series | UUID; `tmdb_id` único |
 | `episodes` | Episodios | FK a serie; temporada/episodio único por serie |
 | `content_genres` | Relación polimórfica | Sin FK para `content_id` |
-| `streams` | URLs directas/embed | Sin FK y sin clave única compatible con el upsert |
+| `streams` | URLs directas/embed | Sin FK; única `(content_type, content_id, server_name) NULLS NOT DISTINCT` |
+| `subtitles` | Caché de URLs VTT por idioma | Única `(content_type, content_id, language)` |
 | `watch_history` | Progreso por usuario | FK sólo a usuario; contenido polimórfico sin FK |
 | `scraper_log` | Resultado de ingesta | Sin FK |
 
-La implementación también espera `subtitles(content_type, content_id, subtitle_url, language, is_active)` con unicidad en `(content_type, content_id, language)`, pero esa tabla no existe en el SQL.
+## Migraciones
+
+`database/migrations/` es la fuente de verdad. El runner `database/migrate.js` aplica archivos en orden, registra checksum y fecha en `schema_migrations`, usa un advisory lock y envuelve cada migración pendiente en una transacción. `database/init.sql` incluye los mismos archivos para inicializaciones de PostgreSQL mediante Docker.
+
+La restricción de streams usa `UNIQUE NULLS NOT DISTINCT` de PostgreSQL 15: dos valores `NULL` para el mismo contenido representan el mismo servidor lógico y activan el upsert. Si una base antigua ya contiene duplicados lógicos, la migración falla sin borrarlos para exigir una resolución explícita.
 
 ## Integraciones externas
 
@@ -122,6 +127,6 @@ La implementación también espera `subtitles(content_type, content_id, subtitle
 
 ## Despliegue actual
 
-`docker-compose.yml` define PostgreSQL 15 Alpine y API, publica 5432 y 3000, usa credenciales fijas para PostgreSQL, carga `.env` y monta el repositorio completo en `/app`. La imagen usa Node 20, instala Chromium/Xvfb y ejecuta `npm install`. En Linux, Compose buscará `Dockerfile`, pero el archivo versionado se llama `dockerfile`; además no hay healthchecks ni espera real de disponibilidad de PostgreSQL.
+`docker-compose.yml` define PostgreSQL 15 Alpine y API, publica 5432 y 3000, usa credenciales fijas para PostgreSQL, carga `.env` y monta el repositorio completo en `/app`. La Fase 1A corrigió `Dockerfile` y el build reproducible; la Fase 1B monta `database/` para que la inicialización consuma las migraciones. Siguen pendientes healthchecks, espera real de PostgreSQL y endurecimiento para VPS.
 
 

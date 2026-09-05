@@ -21,11 +21,11 @@
 
 ### P0: restaurar contrato esquema-código
 
-1. Introducir una herramienta ligera de migraciones PostgreSQL y capturar el esquema actual como baseline.
-2. Crear migración para `subtitles` con unicidad `(content_type, content_id, language)` e índices.
-3. Añadir la restricción/índice único que exige `streams.upsertStream`; decidir cómo tratar `server_name NULL`.
+1. ✅ Introducir una herramienta ligera de migraciones PostgreSQL y capturar el esquema actual como baseline. Completado en Fase 1B.
+2. ✅ Crear migración para `subtitles` con unicidad `(content_type, content_id, language)` e índices. Completado en Fase 1B.
+3. ✅ Añadir la restricción que exige `streams.upsertStream`; `server_name NULL` usa `UNIQUE NULLS NOT DISTINCT`. Completado en Fase 1B.
 4. Añadir checks de duración/progreso, URL de stream y estados; documentar la estrategia para integridad polimórfica.
-5. Probar migración desde base vacía y desde un snapshot representativo; no confiar sólo en `docker-entrypoint-initdb.d`.
+5. 🟡 Se añadieron pruebas para base vacía y esquema legacy. Falta ejecutarlas en CI/entorno con PostgreSQL real.
 
 ### P0/P1: ejecución reproducible
 
@@ -104,8 +104,8 @@
 3. Evaluar HLS/VTT, navegación con mando, refresh tokens por dispositivo y telemetría mínima.
 4. Decidir reutilización, migración incremental o cliente nuevo sólo después de estabilizar la API/PWA.
 
-## Cambios concretos propuestos para la primera PR
+## Estado de las primeras fases
 
-Una primera PR debería ser pequeña y revisable: corregir `.gitignore`/`.env.example`; retirar artefactos del índice; regenerar lock; añadir test de carga y CI; mover limitador; cerrar/proteger registro y subtítulos mediante flags; dejar de registrar secretos/URLs; añadir validación básica; crear migraciones de `subtitles` y unicidad de streams; corregir refresh de usuario deshabilitado; y preparar Docker/Compose de desarrollo con healthcheck. El saneamiento del historial y la rotación de secretos deben ejecutarse como procedimiento operativo separado, antes o inmediatamente después de fusionar.
+La Fase 1A completó higiene y ejecución reproducible. La Fase 1B alinea el contrato mínimo PostgreSQL. Permanecen como PRs separadas: seguridad HTTP/JWT, validación, healthchecks, checks adicionales de integridad, vulnerabilidades de dependencias y el procedimiento operativo de secretos/historial.
 
 
