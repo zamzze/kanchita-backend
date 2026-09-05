@@ -10,6 +10,7 @@ Alcance: rama `main`, commit `6844ef4`, 5.087 archivos versionados; 5.024 perten
 
 - **Fase 1A:** corrigió higiene, lockfile, Dockerfile, README y smoke test. Los hallazgos originales se conservan como registro histórico.
 - **Fase 1B:** resuelve A-01 mediante migraciones versionadas, tabla `subtitles` y restricción compatible con el upsert de streams.
+- **Fase 1C:** valida automáticamente instalación, smoke test y migraciones contra PostgreSQL 15 real mediante GitHub Actions. `npm audit` se informa sin bloquear mientras se corrigen las vulnerabilidades heredadas.
 - La rotación de secretos, reescritura del historial y los demás hallazgos continúan pendientes.
 
 ## CRÍTICO
