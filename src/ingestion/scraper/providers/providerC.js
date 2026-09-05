@@ -1,5 +1,6 @@
 const { connect } = require('puppeteer-real-browser');
 const https = require('https');
+const { redactSensitive } = require('../../../utils/redact');
 
 const CINEBY_BASE = 'https://cinebytv.com';
 
@@ -24,7 +25,7 @@ async function getImdbId(tmdbId, type) {
         const data = await httpsGet(url);
         return data.imdb_id || null;
     } catch (e) {
-        console.error('[ProviderC] Error obteniendo imdb_id:', e.message);
+        console.error('[ProviderC] Error obteniendo imdb_id:', redactSensitive(e.message));
         return null;
     }
 }
@@ -48,7 +49,7 @@ async function getStreamFromCineby(tmdbId, type, season = null, episode = null) 
         } else {
             watchUrl = `${CINEBY_BASE}/watch/tv/${tmdbId}?imdb_id=${imdbId}&season=${season}&episode=${episode}`;
         }
-        console.log(`[ProviderC] Watch URL: ${watchUrl}`);
+        console.log(`[ProviderC] Abriendo reproductor para tmdb:${tmdbId}`);
 
         ({ browser, page } = await connect({
             headless: false,
@@ -97,15 +98,15 @@ async function getStreamFromCineby(tmdbId, type, season = null, episode = null) 
         // MTA4MA== = "1080" / aW5kZXgubTN1OA== = "index.m3u8"
         m3u8Url  = reqUrl;
         resolved = true;
-        console.log(`[ProviderC] 1080p M3U8 capturado: ${reqUrl}`);
+        console.log('[ProviderC] Playlist 1080p capturada');
     } else if (!m3u8Url && reqUrl.includes('aW5kZXgubTN1OA==')) {
         // Cualquier index.m3u8 como fallback (720p, 360p)
         m3u8Url = reqUrl;
-        console.log(`[ProviderC] Index M3U8 fallback: ${reqUrl}`);
+        console.log('[ProviderC] Playlist index fallback capturada');
     } else if (!m3u8Url) {
         // playlist.m3u8 como último recurso
         m3u8Url = reqUrl;
-        console.log(`[ProviderC] Playlist M3U8 último recurso: ${reqUrl}`);
+        console.log('[ProviderC] Playlist fallback capturada');
     }
 }
 
@@ -124,7 +125,7 @@ async function getStreamFromCineby(tmdbId, type, season = null, episode = null) 
 
         // Buscar el frame de vidfast y clickear play si es necesario
         const frames = page.frames();
-        console.log(`[ProviderC] Frames: ${frames.map(f => f.url()).join(', ')}`);
+        console.log(`[ProviderC] Frames detectados: ${frames.length}`);
 
         for (const frame of frames) {
             if (frame.url().includes('vidfast.pro')) {
@@ -167,7 +168,7 @@ async function getStreamFromCineby(tmdbId, type, season = null, episode = null) 
         return m3u8Url;
 
     } catch (err) {
-        console.error(`[ProviderC] Error: ${err.message}`);
+        console.error(`[ProviderC] Error: ${redactSensitive(err.message)}`);
         return null;
     } finally {
         if (browser) await browser.close().catch(() => {});

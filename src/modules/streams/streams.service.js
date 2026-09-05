@@ -1,6 +1,7 @@
 const { getStreamFromCineby } = require('../../ingestion/scraper/providers/providerC');
 const { upsertStream }        = require('../../db/streams.queries');
 const { getSubtitle }         = require('../subtitles/subtitles.service');
+const { redactSensitive }     = require('../../utils/redact');
 const pool                    = require('../../config/db');
 const moviesDb                = require('../../db/movies.queries');
 const { getActiveSubscription } = require('../../db/auth.queries');
@@ -43,7 +44,7 @@ const fetchSubtitle = async (tmdbId, contentType, contentId, season = null, epis
     const subtitle = await getSubtitle(tmdbId, contentType, contentId, season, episode);
     return subtitle?.subtitle_url || null;
   } catch (err) {
-    console.warn('[Streams] Subtítulo no encontrado:', err.message);
+    console.warn('[Streams] Subtítulo no encontrado:', redactSensitive(err.message));
     return null;
   }
 };
@@ -74,7 +75,7 @@ const getMovieStreams = async (movieId, userId) => {
   console.log(`[Streams] Scrapeando ProviderC para "${movie.title}"`);
   const m3u8Url = await getStreamFromCineby(movie.tmdb_id, 'movie')
     .catch(err => {
-      console.warn('[Streams] ProviderC falló:', err.message);
+      console.warn('[Streams] ProviderC falló:', redactSensitive(err.message));
       return null;
     });
 
@@ -147,7 +148,7 @@ const getEpisodeStreams = async (episodeId, userId) => {
     episode.season_number,
     episode.episode_number
   ).catch(err => {
-    console.warn('[Streams] ProviderC episodio falló:', err.message);
+    console.warn('[Streams] ProviderC episodio falló:', redactSensitive(err.message));
     return null;
   });
 

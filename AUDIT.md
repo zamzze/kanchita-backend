@@ -11,6 +11,7 @@ Alcance: rama `main`, commit `6844ef4`, 5.087 archivos versionados; 5.024 perten
 - **Fase 1A:** corrigió higiene, lockfile, Dockerfile, README y smoke test. Los hallazgos originales se conservan como registro histórico.
 - **Fase 1B:** resuelve A-01 mediante migraciones versionadas, tabla `subtitles` y restricción compatible con el upsert de streams.
 - **Fase 1C:** valida automáticamente instalación, smoke test y migraciones contra PostgreSQL 15 real mediante GitHub Actions. `npm audit` se informa sin bloquear mientras se corrigen las vulnerabilidades heredadas.
+- **Fase 1D:** corrige el orden del rate limiter, restringe CORS, cierra el registro por defecto, protege la resolución de subtítulos, evita detalles internos en respuestas 5xx y redacta logging sensible básico. Los límites de red/archivo y el rediseño JWT siguen pendientes.
 - La rotación de secretos, reescritura del historial y los demás hallazgos continúan pendientes.
 
 ## CRÍTICO
@@ -33,17 +34,21 @@ Alcance: rama `main`, commit `6844ef4`, 5.087 archivos versionados; 5.024 perten
 
 **Remediación:** `database/migrations/002_phase_1b_schema_alignment.sql` crea `subtitles` y añade `streams_content_server_unique` con `NULLS NOT DISTINCT`. El runner registra y serializa migraciones. Bases con duplicados lógicos preexistentes fallan sin borrar filas y requieren resolución explícita.
 
-### A-02 — Endpoint de subtítulos sin autenticación y procesamiento remoto no acotado
+### A-02 — Endpoint de subtítulos sin autenticación y procesamiento remoto no acotado — PARCIALMENTE RESUELTO EN FASE 1D
 
 `GET /api/subtitles/:tmdbId` no usa middleware de autenticación. Puede provocar consultas externas, descargas de archivos comprimidos, descompresión en memoria, escritura en disco y operaciones de base. Las respuestas remotas no tienen timeout, límite de bytes, límite de redirects ni validación robusta de estado/tipo. Esto se combina con una vulnerabilidad alta conocida de `adm-zip` ante ZIP construido para reservar memoria masiva.
 
 **Impacto:** consumo de cuota, memoria y disco; caída del proceso o llenado del VPS.
 
-### A-03 — URLs y credenciales sensibles terminan en logs
+**Remediación parcial:** `/api/subtitles` requiere access token; `/subtitles/*.vtt` permanece estático para el reproductor. Siguen pendientes timeouts, límites de descarga/descompresión y cuotas de disco.
+
+### A-03 — URLs y credenciales sensibles terminan en logs — PARCIALMENTE RESUELTO EN FASE 1D
 
 SubDL registra la URL que contiene `api_key`. ProviderC registra URLs completas `.m3u8`, que pueden contener tokens o firmas temporales, además de todos los frames visitados.
 
 **Impacto:** las credenciales y URLs reproducibles pueden aparecer en stdout, agregadores de logs, backups o soporte.
+
+**Remediación parcial:** ya no se registran URLs SubDL con clave, playlists HLS, URLs de frames, rutas del VTT ni contenido del subtítulo. Una utilidad mínima redacta Bearer tokens, parámetros sensibles, credenciales PostgreSQL y URLs `.m3u8` en mensajes de error. Queda pendiente logging estructurado.
 
 ### A-04 — Caché de streams incorrecta para URLs temporales
 
@@ -51,11 +56,13 @@ La tabla no tiene `expires_at`, `last_verified_at`, estado de fallo ni origen/ve
 
 **Impacto:** reproducción que deja de funcionar de manera permanente hasta intervención manual; exposición prolongada de URLs firmadas.
 
-### A-05 — Controles de abuso insuficientes para Puppeteer
+### A-05 — Controles de abuso insuficientes para Puppeteer — PARCIALMENTE RESUELTO EN FASE 1D
 
 El limitador global está montado después de las rutas. Registro de usuario está abierto aunque la aplicación será privada. Cualquier cuenta puede disparar búsquedas/ingestas y resoluciones que crean procesos Chromium. Sólo existe un mutex en memoria para el cron, no para scraping por contenido ni entre réplicas.
 
 **Impacto:** agotamiento rápido de CPU/RAM/PIDs en un VPS y llamadas masivas a terceros.
+
+**Remediación parcial:** el limitador general ya precede a `/api`, auth mantiene un límite más estricto y el registro queda deshabilitado salvo flag explícito. Persisten los límites en memoria y la falta de locks/colas para trabajo pesado.
 
 ### A-06 — Refresh token débilmente gestionado
 
@@ -85,13 +92,13 @@ El refresh token se guarda en texto claro, sólo se permite uno por usuario y `r
 - Docker usa `npm install`, que puede modificar resolución en cada build.
 - No hay lint, formatter, cobertura, CI ni smoke tests.
 
-### M-02 — CORS y reverse proxy
+### M-02 — CORS y reverse proxy — PARCIALMENTE RESUELTO EN FASE 1D
 
-`cors()` permite cualquier origen. Para una PWA privada debe existir allowlist explícita. Helmet aplica por defecto `Cross-Origin-Resource-Policy: same-origin`, lo que puede bloquear VTT si frontend y API usan orígenes distintos aun cuando CORS esté abierto. Tampoco se configura `trust proxy`; detrás de Nginx/Traefik, el rate limiting por IP será incorrecto o agrupará clientes bajo la IP del proxy.
+`CORS_ORIGINS` configura una allowlist exacta, los clientes sin `Origin` siguen funcionando y los VTT usan `Cross-Origin-Resource-Policy: cross-origin`. Sigue pendiente configurar `trust proxy` con el reverse proxy real; hasta entonces el rate limiting por IP no está preparado para producción detrás de Nginx/Caddy.
 
-### M-03 — Validación de entrada incompleta
+### M-03 — Validación de entrada incompleta — PARCIALMENTE RESUELTO EN FASE 1D
 
-No hay esquema de validación. `page=abc` o `limit=abc` produce `NaN` y termina como error SQL; UUID, `type`, email, password, `genre_id`, duración y TMDB ID no se validan consistentemente. Cualquier `type` distinto de `movie` se trata como serie en contenido. El error handler devuelve `err.message` incluso en producción, lo que puede filtrar detalles de PostgreSQL o terceros.
+No hay esquema de validación. `page=abc` o `limit=abc` produce `NaN` y termina como error SQL; UUID, `type`, email, password, `genre_id`, duración y TMDB ID no se validan consistentemente. Cualquier `type` distinto de `movie` se trata como serie en contenido. La Fase 1D ya reemplaza mensajes 5xx por un error genérico y conserva 4xx legítimos; la validación de entradas sigue pendiente.
 
 ### M-04 — Bugs del historial
 

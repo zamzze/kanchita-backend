@@ -1,4 +1,5 @@
 const { getSubtitle } = require('./subtitles.service');
+const { error } = require('../../utils/response');
 
 const getSubtitleForContent = async (req, res, next) => {
     try {
@@ -6,10 +7,7 @@ const getSubtitleForContent = async (req, res, next) => {
         const { type, id, season, episode }    = req.query;
 
         if (!tmdbId || !type || !id) {
-            return res.status(400).json({
-                success: false,
-                message: 'Faltan parámetros: tmdbId, type, id'
-            });
+            return error(res, 'Faltan parámetros: tmdbId, type, id', 400);
         }
 
         const subtitle = await getSubtitle(
@@ -21,10 +19,7 @@ const getSubtitleForContent = async (req, res, next) => {
         );
 
         if (!subtitle) {
-            return res.status(404).json({
-                success: false,
-                message: 'No se encontraron subtítulos'
-            });
+            return error(res, 'No se encontraron subtítulos', 404);
         }
 
         res.json({ success: true, data: subtitle });

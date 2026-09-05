@@ -1,5 +1,6 @@
 const { normalizeStream }     = require('../normalizer/streamNormalizer');
 const { getStreamFromCineby } = require('./providers/providerC');
+const { redactSensitive }     = require('../../utils/redact');
 
 
 const scrapeContent = async ({
@@ -32,7 +33,10 @@ const scrapeContent = async ({
         }
 
     } catch (err) {
-        console.error(`[Scraper] ProviderC falló para "${title}":`, err.message);
+        console.error(
+            `[Scraper] ProviderC falló para "${title}":`,
+            redactSensitive(err.message)
+        );
     }
 
 

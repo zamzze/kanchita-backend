@@ -6,6 +6,7 @@ const {
 } = require('../../ingestion/normalizer/movieNormalizer');
 const { processMovie, processSeries } = require('../../ingestion/ingestionService');
 const db = require('../../db/ingestion.queries');
+const { redactSensitive } = require('../../utils/redact');
 
 const searchAndFetch = async (query, contentType = 'movie') => {
   const endpoint = contentType === 'movie' ? '/search/movie' : '/search/tv';
@@ -105,9 +106,12 @@ const triggerScraping = (tmdbId, contentId, contentType, title, year) => {
     ? processMovie({ id: tmdbId })
     : processSeries({ id: tmdbId });
 
-  task.catch(err =>
-    console.error(`[OnDemand] Scrape failed for tmdb:${tmdbId}`, err.message)
-  );
+  task.catch(err => {
+    console.error(
+      `[OnDemand] Scrape failed for tmdb:${tmdbId}`,
+      redactSensitive(err.message)
+    );
+  });
 };
 
 module.exports = { searchAndFetch, getOrFetchContent };

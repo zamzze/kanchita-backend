@@ -1,25 +1,28 @@
 const rateLimit = require('express-rate-limit');
 
-const defaultLimiter = rateLimit({
-  windowMs:         15 * 60 * 1000, // 15 minutos
-  max:              100,             // 100 requests por ventana
+const rateLimitMessage = (message) => ({
+  success: false,
+  code: 'RATE_LIMITED',
+  message,
+});
+
+const createDefaultLimiter = (overrides = {}) => rateLimit({
+  windowMs:         15 * 60 * 1000,
+  max:              300,
   standardHeaders:  true,
   legacyHeaders:    false,
-  message: {
-    success: false,
-    message: 'Too many requests, please try again later.',
-  },
+  message: rateLimitMessage('Too many requests, please try again later.'),
+  ...overrides,
 });
+
+const defaultLimiter = createDefaultLimiter();
 
 const authLimiter = rateLimit({
   windowMs:         15 * 60 * 1000, // 15 minutos
   max:              10,              // solo 10 intentos de login por ventana
   standardHeaders:  true,
   legacyHeaders:    false,
-  message: {
-    success: false,
-    message: 'Too many login attempts, please try again later.',
-  },
+  message: rateLimitMessage('Too many authentication attempts, please try again later.'),
 });
 
 const searchLimiter = rateLimit({
@@ -27,10 +30,12 @@ const searchLimiter = rateLimit({
   max:              30,         // 30 búsquedas por minuto
   standardHeaders:  true,
   legacyHeaders:    false,
-  message: {
-    success: false,
-    message: 'Too many search requests, please slow down.',
-  },
+  message: rateLimitMessage('Too many search requests, please slow down.'),
 });
 
-module.exports = { defaultLimiter, authLimiter, searchLimiter };
+module.exports = {
+  createDefaultLimiter,
+  defaultLimiter,
+  authLimiter,
+  searchLimiter,
+};

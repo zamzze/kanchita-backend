@@ -2,7 +2,7 @@
 
 ## Alcance y estado observado
 
-Auditoría de `zamzze/kanchita-backend`, rama `main`, commit `6844ef4`, realizada el 5 de septiembre de 2026. La Fase 1A añadió README y smoke test; la Fase 1B añadió las migraciones PostgreSQL descritas aquí. Siguen pendientes OpenAPI, CI y una suite funcional completa.
+Auditoría de `zamzze/kanchita-backend`, rama `main`, commit `6844ef4`, realizada el 5 de septiembre de 2026. Las Fases 1A–1D añadieron ejecución reproducible, migraciones, CI PostgreSQL y seguridad HTTP básica. Siguen pendientes OpenAPI y una suite funcional completa.
 
 El sistema es un monolito Node.js/CommonJS con Express 4 y acceso directo a PostgreSQL mediante `pg`. No hay ORM. La API, el planificador de ingesta, el scraping con Chromium y el almacenamiento local de subtítulos viven en el mismo proceso/contenedor.
 
@@ -32,11 +32,11 @@ flowchart LR
 
 ## Arranque y middleware
 
-- `server.js` importa `src/app.js`, añade `/subtitles` como directorio estático y monta `/api/subtitles`, y abre `PORT`.
-- `src/app.js` configura Helmet, CORS abierto y JSON; monta los módulos y arranca el planificador salvo con `NODE_ENV=test`.
+- `server.js` importa la aplicación ya configurada y abre `PORT`.
+- `src/app.js` configura Helmet, allowlist CORS, JSON, VTT estáticos, limitador general antes de `/api`, módulos, 404 y errores; arranca el planificador salvo con `NODE_ENV=test`.
 - El manejador global de errores es el último middleware.
-- El limitador global se registra **después** de las rutas, por lo que las respuestas atendidas por estas rutas no lo atraviesan. Los limitadores colocados directamente en autenticación y búsqueda sí se ejecutan.
-- No existen ruta raíz, ruta de salud, manejador 404 ni apagado ordenado de HTTP/PostgreSQL/trabajos.
+- Registro y autenticación conservan un limitador más estricto; el registro está cerrado salvo `ALLOW_PUBLIC_REGISTRATION=true`.
+- No existen ruta raíz, ruta de salud ni apagado ordenado de HTTP/PostgreSQL/trabajos.
 
 ## Módulos
 
@@ -66,7 +66,7 @@ Acepta UUID local de película o episodio. Primero devuelve streams directos act
 
 ### Subtítulos
 
-Consulta el caché en `subtitles`, busca en SubDL, descarga ZIP/RAR en memoria, selecciona un `.srt`/`.sub`, lo convierte a WebVTT y escribe `public/subtitles/<content-id>.vtt`. Publica una URL absoluta basada en `API_BASE_URL`. La Fase 1B incorporó la tabla y la unicidad que requiere el upsert; los riesgos de red, archivos y acceso al endpoint siguen pendientes.
+Consulta el caché en `subtitles`, busca en SubDL, descarga ZIP/RAR en memoria, selecciona un `.srt`/`.sub`, lo convierte a WebVTT y escribe `public/subtitles/<content-id>.vtt`. Publica una URL absoluta basada en `API_BASE_URL`. Resolver/generar mediante `/api/subtitles` requiere JWT, mientras `/subtitles/*.vtt` permanece público para el reproductor y limitado por CORS. Persisten los riesgos de red, archivos y almacenamiento.
 
 ### Ingesta programada
 
@@ -76,7 +76,7 @@ Consulta el caché en `subtitles`, busca en SubDL, descarga ZIP/RAR en memoria, 
 
 | Método | Ruta | Auth | Función |
 |---|---|---:|---|
-| POST | `/api/auth/register` | No | Registrar usuario |
+| POST | `/api/auth/register` | Flag | Registrar usuario sólo con `ALLOW_PUBLIC_REGISTRATION=true` |
 | POST | `/api/auth/login` | No | Emitir access/refresh token |
 | POST | `/api/auth/refresh` | No | Rotar refresh token |
 | POST | `/api/auth/logout` | Sí | Borrar refresh token del usuario |
@@ -93,7 +93,7 @@ Consulta el caché en `subtitles`, busca en SubDL, descarga ZIP/RAR en memoria, 
 | GET | `/api/content/:tmdb_id?type=` | Sí | Obtener/importar contenido |
 | GET | `/api/streams/movie/:id` | Sí | Resolver stream de película |
 | GET | `/api/streams/episode/:id` | Sí | Resolver stream de episodio |
-| GET | `/api/subtitles/:tmdbId?type=&id=&season=&episode=` | **No** | Buscar/crear subtítulo |
+| GET | `/api/subtitles/:tmdbId?type=&id=&season=&episode=` | Sí | Buscar/crear subtítulo |
 | GET | `/subtitles/:file.vtt` | No | Servir WebVTT estático |
 
 ## Esquema PostgreSQL actual
@@ -121,7 +121,7 @@ La restricción de streams usa `UNIQUE NULLS NOT DISTINCT` de PostgreSQL 15: dos
 ## Integraciones externas
 
 - **TMDB:** búsqueda, trending, detalles, temporadas e IDs externos. Autenticación mediante `TMDB_API_KEY` en query string. No hay timeout, retry ni backoff.
-- **SubDL:** búsqueda y descarga de archivos. `SUBDL_API_KEY`; la URL completa con clave se escribe actualmente en logs.
+- **SubDL:** búsqueda y descarga de archivos mediante `SUBDL_API_KEY`; la URL con clave ya no se escribe en logs.
 - **Cineby/Vidfast y un worker de terceros:** navegación automatizada y observación de playlists. La implementación depende de dominios y estructura concretos y puede romperse sin cambios locales.
 - **Chromium/Xvfb:** instalados en la imagen para el flujo Puppeteer. Se ejecuta Chromium sin sandbox.
 

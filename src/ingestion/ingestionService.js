@@ -8,6 +8,7 @@ const {
 const db            = require('../db/ingestion.queries');
 const logDb         = require('../db/scraper_log.queries');
 const { upsertStream } = require('../db/streams.queries');
+const { redactSensitive } = require('../utils/redact');
 
 const delay = (ms) => new Promise(r => setTimeout(r, ms));
 
@@ -40,7 +41,7 @@ const processMovie = async (tmdbMovie) => {
 
     console.log(`[Ingestion] Movie "${normalized.title}" — ${streams.length} streams`);
   } catch (err) {
-    console.error(`[Ingestion] Failed movie tmdb:${tmdbMovie.id}`, err.message);
+    console.error(`[Ingestion] Failed movie tmdb:${tmdbMovie.id}`, redactSensitive(err.message));
   }
 };
 
@@ -64,7 +65,7 @@ const processSeries = async (tmdbSerie) => {
 
     console.log(`[Ingestion] Series "${normalized.title}" processed`);
   } catch (err) {
-    console.error(`[Ingestion] Failed series tmdb:${tmdbSerie.id}`, err.message);
+    console.error(`[Ingestion] Failed series tmdb:${tmdbSerie.id}`, redactSensitive(err.message));
   }
 };
 
@@ -88,7 +89,7 @@ const runIngestionJob = async () => {
 
     console.log('[Ingestion] Job completed.');
   } catch (err) {
-    console.error('[Ingestion] Job failed:', err.message);
+    console.error('[Ingestion] Job failed:', redactSensitive(err.message));
   }
 };
 

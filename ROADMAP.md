@@ -38,17 +38,17 @@
 
 ### P1: seguridad y robustez HTTP
 
-1. Mover el limitador global antes de rutas; configurar `trust proxy` de forma exacta y usar almacén compartido si hay múltiples réplicas.
-2. Allowlist CORS por entorno y política CORP/CSP compatible con el origen real de la PWA y VTT.
-3. Proteger el endpoint de subtítulos; cerrar registro público mediante bootstrap/invitación/configuración privada.
-4. Validar cuerpos, params y queries con esquemas; normalizar email y respuestas de error; ocultar mensajes internos.
+1. 🟡 La Fase 1D movió el limitador antes de `/api`; faltan `trust proxy` exacto y almacén compartido para múltiples réplicas.
+2. ✅ La Fase 1D añadió allowlist CORS por entorno y CORP compatible con VTT.
+3. 🟡 La Fase 1D protegió el resolver de subtítulos y cerró registro mediante configuración; invitaciones/bootstrap quedan pendientes.
+4. 🟡 La Fase 1D oculta mensajes internos 5xx y normaliza errores HTTP básicos; faltan esquemas de validación para cuerpos, params y queries.
 5. Guardar hashes de refresh tokens en tabla de sesiones, verificar `is_active`, usar `jti`/familias y fijar algoritmo, issuer y audience.
-6. Eliminar claves y URLs firmadas de logs; adoptar logging estructurado con redacción.
+6. 🟡 La Fase 1D elimina logs directos de claves/URLs HLS y añade redacción básica; falta logging estructurado.
 
 ### P1: pruebas mínimas y observabilidad
 
 1. Unit tests para JWT, normalizadores, paginación, progreso y conversión de subtítulos.
-2. Integration tests contra PostgreSQL efímero para auth, catálogos, historial, streams y migraciones.
+2. 🟡 Las Fases 1C/1D cubren migraciones PostgreSQL y protecciones HTTP; faltan integraciones de auth, catálogos, historial y streams.
 3. Contratos simulados para TMDB/SubDL/proveedor; no depender de Internet en CI.
 4. Smoke test de Compose en Linux y CI con `npm ci`, lint, tests, audit y build.
 5. Endpoints `/health/live` y `/health/ready`, graceful shutdown y métricas básicas.
@@ -106,6 +106,6 @@
 
 ## Estado de las primeras fases
 
-La Fase 1A completó higiene y ejecución reproducible. La Fase 1B alinea el contrato mínimo PostgreSQL y la Fase 1C lo valida en CI contra PostgreSQL 15. Permanecen como PRs separadas: seguridad HTTP/JWT, validación, healthchecks, checks adicionales de integridad, vulnerabilidades de dependencias y el procedimiento operativo de secretos/historial.
+La Fase 1A completó higiene y ejecución reproducible. La Fase 1B alinea el contrato mínimo PostgreSQL, la Fase 1C lo valida en CI y la Fase 1D añade seguridad HTTP básica. Permanecen como PRs separadas: sesiones/JWT, validación de entradas, proxy/healthchecks, integridad adicional, vulnerabilidades de dependencias y el procedimiento operativo de secretos/historial.
 
 

@@ -1,5 +1,6 @@
 const { getTrendingMovies, getTrendingSeries } = require('../tmdb/tmdbFetcher');
 const { processMovie, processSeries }          = require('../ingestionService');
+const { redactSensitive }                      = require('../../utils/redact');
 
 const delay = (ms) => new Promise(r => setTimeout(r, ms));
 
@@ -32,6 +33,6 @@ const run = async () => {
 };
 
 run().catch(err => {
-  console.error('[InitialLoad] Fatal error:', err);
+  console.error('[InitialLoad] Fatal error:', redactSensitive(err.message));
   process.exit(1);
 });
