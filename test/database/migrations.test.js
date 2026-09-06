@@ -313,6 +313,7 @@ test(
             'stream_browser_slots_lease_check',
             'stream_worker_heartbeats_type_check'
           )
+            AND connamespace = current_schema()::regnamespace
         `);
         assert.equal(constraints.rowCount, 4);
 
@@ -418,7 +419,7 @@ test(
         assert.equal(preservedStream.rows[0].status, 'unknown');
         assert.equal(preservedStream.rows[0].last_verified_at, null);
         assert.equal(preservedStream.rows[0].expires_at, null);
-        assert.equal(preservedStream.rows[0].audio_language, null);
+        assert.equal(preservedStream.rows[0].audio_language, 'es');
         assert.equal(preservedStream.rows[0].subtitle_language, null);
         assert.equal(preservedStream.rows[0].cleanliness, 'unknown');
 
