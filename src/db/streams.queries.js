@@ -6,7 +6,8 @@ const streamColumns = `
   id, server_name, quality, language, stream_url, embed_url,
   stream_type, priority, is_active, provider, status, expires_at,
   resolved_at, last_verified_at, failure_count, last_failure_at,
-  next_retry_at, last_error_code`;
+  next_retry_at, last_error_code, audio_language, subtitle_language,
+  cleanliness`;
 
 const createStreamStore = (db = pool) => {
   const findStreams = async (contentType, contentId) => {
@@ -34,7 +35,7 @@ const createStreamStore = (db = pool) => {
     return rows;
   };
 
-  const markVerified = async (streamId, fallbackExpiresAt) => {
+  const markVerified = async (streamId, fallbackExpiresAt, cleanliness = 'unknown') => {
     const { rows } = await db.query(
       `UPDATE streams
        SET status = 'ready',
@@ -43,10 +44,11 @@ const createStreamStore = (db = pool) => {
            failure_count = 0,
            last_failure_at = NULL,
            next_retry_at = NULL,
-           last_error_code = NULL
+           last_error_code = NULL,
+           cleanliness = $3
        WHERE id = $1
        RETURNING ${streamColumns}`,
-      [streamId, fallbackExpiresAt]
+      [streamId, fallbackExpiresAt, cleanliness]
     );
     return rows[0] || null;
   };
@@ -107,16 +109,31 @@ const createStreamStore = (db = pool) => {
     return rows[0];
   };
 
+  const recordRefreshFailure = async (streamId, errorCode) => {
+    const { rows } = await db.query(
+      `UPDATE streams
+       SET failure_count = failure_count + 1,
+           last_failure_at = NOW(),
+           next_retry_at = NOW() + ${failureDelaySql},
+           last_error_code = $2
+       WHERE id = $1 AND status = 'ready' AND expires_at > NOW()
+       RETURNING ${streamColumns}`,
+      [streamId, errorCode]
+    );
+    return rows[0] || null;
+  };
+
   const upsertStreamWithClient = async (client, stream) => {
     const { rows } = await client.query(
       `INSERT INTO streams (
          content_type, content_id, server_name, quality, language,
          stream_url, embed_url, stream_type, priority, is_active,
          provider, status, expires_at, resolved_at, last_verified_at,
-         failure_count, last_failure_at, next_retry_at, last_error_code
+         failure_count, last_failure_at, next_retry_at, last_error_code,
+         audio_language, subtitle_language, cleanliness
        ) VALUES (
          $1, $2, $3, $4, $5, $6, $7, $8, $9, TRUE,
-         $10, $11, $12, $13, $14, $15, $16, $17, $18
+         $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21
        )
        ON CONFLICT ON CONSTRAINT streams_content_server_unique
        DO UPDATE SET
@@ -135,7 +152,10 @@ const createStreamStore = (db = pool) => {
          failure_count = EXCLUDED.failure_count,
          last_failure_at = EXCLUDED.last_failure_at,
          next_retry_at = EXCLUDED.next_retry_at,
-         last_error_code = EXCLUDED.last_error_code
+         last_error_code = EXCLUDED.last_error_code,
+         audio_language = EXCLUDED.audio_language,
+         subtitle_language = EXCLUDED.subtitle_language,
+         cleanliness = EXCLUDED.cleanliness
        RETURNING ${streamColumns}`,
       [
         stream.content_type,
@@ -156,6 +176,9 @@ const createStreamStore = (db = pool) => {
         stream.last_failure_at || null,
         stream.next_retry_at || null,
         stream.last_error_code || null,
+        stream.audio_language || null,
+        stream.subtitle_language || null,
+        stream.cleanliness || 'unknown',
       ]
     );
     return rows[0];
@@ -169,6 +192,7 @@ const createStreamStore = (db = pool) => {
     markVerified,
     markStale,
     recordFailure,
+    recordRefreshFailure,
     upsertStream,
     upsertStreamWithClient,
   };

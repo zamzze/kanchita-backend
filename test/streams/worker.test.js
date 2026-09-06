@@ -328,6 +328,39 @@ test(
       assert.ok(stream.rows[0].next_retry_at);
     });
 
+    await t.test('browser capacity exhaustion retries with stream backoff', async () => {
+      await reset();
+      const movie = await createContent('movie');
+      const queue = createResolutionQueue(pool);
+      const job = await queue.enqueue('movie', movie.id);
+      const setup = makeWorker({
+        queue,
+        resolver: async () => {
+          throw Object.assign(new Error('fixture capacity'), {
+            code: 'BROWSER_CAPACITY_UNAVAILABLE',
+          });
+        },
+      });
+      await setup.worker.runOnce();
+      const stored = await pool.query(
+        `SELECT status, last_error_code, run_after
+         FROM stream_resolution_jobs WHERE id = $1`,
+        [job.id]
+      );
+      assert.equal(stored.rows[0].status, 'pending');
+      assert.equal(stored.rows[0].last_error_code, 'BROWSER_CAPACITY_UNAVAILABLE');
+      assert.ok(new Date(stored.rows[0].run_after).getTime() > Date.now());
+      const stream = await pool.query(
+        `SELECT status, failure_count, last_error_code, next_retry_at
+         FROM streams WHERE content_type = 'movie' AND content_id = $1`,
+        [movie.id]
+      );
+      assert.equal(stream.rows[0].status, 'failed');
+      assert.equal(stream.rows[0].failure_count, 1);
+      assert.equal(stream.rows[0].last_error_code, 'BROWSER_CAPACITY_UNAVAILABLE');
+      assert.ok(stream.rows[0].next_retry_at);
+    });
+
     await t.test('worker logs do not expose signed URLs', async () => {
       await reset();
       const movie = await createContent('movie');
@@ -358,6 +391,7 @@ test('shutdown waits for the current job and prevents new claims', async () => {
     },
     completeJob: async () => ({}),
     failJob: async () => ({}),
+    renewJobLease: async () => true,
   };
   const processor = () => new Promise((resolve) => { releaseProcessor = resolve; });
   const worker = createStreamWorker({
@@ -377,6 +411,50 @@ test('shutdown waits for the current job and prevents new claims', async () => {
   assert.equal(worker.isStopping(), true);
   assert.equal(await worker.runOnce(), false);
   assert.equal(claims, 1);
+});
+
+test('a living worker renews its current job lease until processing completes', async () => {
+  let releaseProcessor;
+  let renewalCallback;
+  let renewed = 0;
+  let cleared = 0;
+  const job = { id: crypto.randomUUID() };
+  const queue = {
+    recoverStaleJobs: async () => [],
+    claimNextJob: async () => job,
+    renewJobLease: async (jobId, workerId) => {
+      assert.equal(jobId, job.id);
+      assert.equal(workerId, 'lease-worker');
+      renewed += 1;
+      return true;
+    },
+    completeJob: async () => ({}),
+    failJob: async () => ({}),
+  };
+  const processor = () => new Promise((resolve) => { releaseProcessor = resolve; });
+  const worker = createStreamWorker({
+    queue,
+    processor,
+    logger: messagesLogger(),
+    workerId: 'lease-worker',
+    leaseSeconds: 60,
+    resolutionTimeoutMs: 1000,
+    setTimer: (callback) => {
+      renewalCallback = callback;
+      return { unref() {} };
+    },
+    clearTimer: () => { cleared += 1; },
+  });
+
+  const running = worker.runOnce();
+  while (!releaseProcessor || !renewalCallback) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  await renewalCallback();
+  assert.equal(renewed, 1);
+  releaseProcessor();
+  await running;
+  assert.equal(cleared, 1);
 });
 
 test('unsafe lease configuration is rejected before the worker starts', () => {

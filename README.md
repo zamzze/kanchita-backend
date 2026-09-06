@@ -39,6 +39,8 @@ El caché de streams directos usa por defecto TTL de 60 minutos, reverificación
 
 La resolución pesada se ejecuta en un child process aislado por cada job. La cola usa por defecto polling cada segundo, lease de 180 segundos, tres intentos y timeout de resolución de 90 segundos. `STREAM_RESOLVER_KILL_GRACE_MS=2000` controla el margen entre terminación limpia y kill forzado; `STREAM_PENDING_RETRY_SECONDS=2` controla el `Retry-After` sugerido por el API.
 
+El Fast Stream Engine limita Chromium globalmente con PostgreSQL (`STREAM_BROWSER_MAX_CONCURRENT=1`), renueva leases de slots, prepara como máximo `STREAM_PREWARM_BATCH_SIZE=10` candidatos por ciclo y refresca en background desde `STREAM_REFRESH_AHEAD_MINUTES=10`. `STREAM_REJECT_AD_MARKED=true` rechaza manifests con marcadores publicitarios estándar sin modificarlos. ProviderC continúa siendo fallback browser; no hay un provider directo productivo configurado.
+
 ## Instalación reproducible
 
 ```bash
@@ -143,6 +145,9 @@ TEST_DB_URL=postgresql://user:password@localhost:5432/test_db npm run test:queue
 TEST_DB_URL=postgresql://user:password@localhost:5432/test_db npm run test:worker
 npm run test:resolver-process
 npm run test:boundary
+npm run test:providers
+npm run test:subtitles
+TEST_DB_URL=postgresql://user:password@localhost:5432/test_db npm run test:fast-stream
 ```
 
 La resolución mediante `/api/subtitles` requiere Bearer JWT. Los `.vtt` ya generados continúan disponibles en `/subtitles` para el reproductor; CORS y `Cross-Origin-Resource-Policy: cross-origin` limitan/permiten su consumo desde los orígenes configurados.
@@ -193,6 +198,18 @@ El cliente consulta de nuevo el mismo endpoint. Obtiene `200` cuando `streams` c
 `attempt_count` aumenta únicamente cuando un worker reclama trabajo real, nunca por enqueue, polling o recuperación de lease, y no puede superar `max_attempts`. Los fallos recuperables reintentan con backoff de 30 segundos, 2 minutos y 5 minutos. Los jobs cuyo lease expiró vuelven a `pending`, o terminan `failed` si agotaron intentos. El lease debe superar timeout + kill grace por al menos 30 segundos (defaults: 180 s frente a 90 s + 2 s); una configuración insegura impide iniciar el worker. Tras `SIGINT`/`SIGTERM`, deja de iniciar claims, termina el árbol resolver activo y espera que quede recolectado antes de cerrar PostgreSQL. Películas y episodios comparten cola, procesador, validator y lifecycle.
 
 El antiguo advisory lock de resolución síncrona fue retirado: single-flight pertenece ahora al índice parcial y al claim atómico. La tabla de jobs no almacena URLs, manifests, tokens, payloads externos ni mensajes arbitrarios.
+
+## Fast Stream Engine
+
+Los endpoints autenticados `POST /api/streams/movie/:id/prepare` y `POST /api/streams/episode/:id/prepare` permiten adelantar trabajo desde una pantalla de detalle. Devuelven `200 STREAM_ALREADY_READY`, `202 STREAM_PREPARING`, `404` o el `503` de backoff existente; nunca llaman al resolver. El enqueue es idempotente y eleva la prioridad del job activo hasta 100.
+
+El worker reclama por `priority DESC, run_after ASC, created_at ASC`. El prewarm acotado prioriza expiración próxima y actividad reciente; al consumir un episodio puede preparar sólo su siguiente episodio publicado. Un stream aún válido próximo a vencer sigue sirviéndose y recibe un job `refresh`: si el refresh falla, la URL vigente no se degrada antes de expirar.
+
+`ProviderManager` prueba estrategias directas antes del fallback browser. Los proveedores declaran capacidades; el único productivo actual es `provider_c`, clasificado como browser/costoso/fallback y ejecutado dentro del child aislado. Antes de Chromium adquiere un slot global PostgreSQL con lease renovable. Varios workers pueden reclamar jobs distintos, pero por defecto sólo uno entra al resolver browser; un crash libera capacidad al vencer el lease.
+
+El manifest validado se inspecciona pasivamente como `clean`, `unknown` o `ad_marked`; no se reescribe ni se eliminan segmentos. Audio y subtítulo se normalizan por separado, conservando compatibilidad con `en-sub`. SubDL permanece primero; OpenSubtitles REST es un fallback opcional desactivado por defecto y requiere sus propias credenciales.
+
+Las sondas públicas `/health/live` y `/health/ready` no contactan proveedores. `/api/internal/stream-health` requiere access JWT y expone sólo agregados de cola, browser, workers, providers y métricas. Consulta [Fast Stream Engine](docs/FAST_STREAM_ENGINE.md) y [auditoría de providers](docs/STREAM_PROVIDERS_AUDIT.md).
 
 La fijación de la IP elimina la ventana habitual entre pre-resolución y conexión, pero no convierte al destino público en confiable: un servidor público aprobado todavía podría actuar como proxy hacia redes internas o cambiar su comportamiento. La política de redirects sólo controla destinos visibles en la respuesta HTTP.
 

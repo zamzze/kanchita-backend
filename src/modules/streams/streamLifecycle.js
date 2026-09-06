@@ -1,12 +1,27 @@
 'use strict';
 
 const { createStreamStore } = require('../../db/streams.queries');
+const { inspectManifestCleanliness } = require('./streamCleanlinessInspector');
 
 const processingError = (code) => {
   const error = new Error('Stream processing failed');
   error.code = code;
   return error;
 };
+
+const RESOLUTION_ERROR_CODES = new Set([
+  'RESOLUTION_FAILED',
+  'RESOLUTION_TIMEOUT',
+  'BROWSER_CAPACITY_UNAVAILABLE',
+  'HLS_INVALID_URL',
+  'HLS_TIMEOUT',
+  'HLS_HTTP_ERROR',
+  'HLS_TOO_MANY_REDIRECTS',
+  'HLS_TOO_LARGE',
+  'HLS_INVALID_MANIFEST',
+  'HLS_CONNECTION_ERROR',
+  'HLS_UNSAFE_DESTINATION',
+]);
 
 const isFreshReadyStream = (stream, verifyIntervalMs, now = Date.now()) =>
   stream.status === 'ready' &&
@@ -51,7 +66,13 @@ const createStreamLifecycle = ({
     }
 
     logger.log('[Streams] cache validated');
-    return store.markVerified(stream.id, fallbackExpiry());
+    return store.markVerified(
+      stream.id,
+      fallbackExpiry(),
+      validation.manifest
+        ? inspectManifestCleanliness(validation.manifest)
+        : stream.cleanliness
+    );
   };
 
   const readUsableCache = async (contentType, contentId, { validate = false } = {}) => {
@@ -95,10 +116,16 @@ const createStreamLifecycle = ({
     throw processingError(errorCode);
   };
 
-  const resolveAndPersist = async (contentType, contentId, content, resolver) => {
+  const resolveAndPersist = async (
+    contentType,
+    contentId,
+    content,
+    resolver,
+    { preserveCurrent = false } = {}
+  ) => {
     const cached = await store.findDirectStreams(contentType, contentId);
     const candidate = cached.find((stream) => stream.stream_url) || cached[0] || null;
-    if (candidate) await store.markStale(candidate.id);
+    if (candidate && !preserveCurrent) await store.markStale(candidate.id);
     logger.log('[Streams] resolving content');
 
     let resolved;
@@ -112,27 +139,45 @@ const createStreamLifecycle = ({
         episode: content.episode_number,
       });
     } catch (error) {
-      const code = error?.code === 'RESOLUTION_TIMEOUT'
-        ? 'RESOLUTION_TIMEOUT'
+      const code = RESOLUTION_ERROR_CODES.has(error?.code)
+        ? error.code
         : 'RESOLUTION_FAILED';
       logger.warn(`[Streams] resolution failed: ${code}`);
+      if (preserveCurrent && candidate) {
+        await store.recordRefreshFailure(candidate.id, code);
+        throw processingError(code);
+      }
       return recordFailure(contentType, contentId, candidate, code);
     }
 
     if (!resolved?.url) {
       logger.warn('[Streams] resolution failed: RESOLUTION_FAILED');
+      if (preserveCurrent && candidate) {
+        await store.recordRefreshFailure(candidate.id, 'RESOLUTION_FAILED');
+        throw processingError('RESOLUTION_FAILED');
+      }
       return recordFailure(contentType, contentId, candidate, 'RESOLUTION_FAILED');
     }
 
-    const validation = await validator(resolved.url);
+    const validation = resolved.validated
+      ? { valid: true, code: null, cleanliness: resolved.cleanliness }
+      : await validator(resolved.url);
     if (!validation.valid) {
       logger.warn(`[Streams] validation failed: ${validation.code}`);
+      if (preserveCurrent && candidate) {
+        await store.recordRefreshFailure(candidate.id, validation.code);
+        throw processingError(validation.code);
+      }
       return recordFailure(contentType, contentId, candidate, validation.code);
     }
 
     const now = new Date();
     const explicitExpiry = resolved.expiresAt ? new Date(resolved.expiresAt) : null;
     if (explicitExpiry && (!Number.isFinite(explicitExpiry.getTime()) || explicitExpiry <= now)) {
+      if (preserveCurrent && candidate) {
+        await store.recordRefreshFailure(candidate.id, 'RESOLUTION_FAILED');
+        throw processingError('RESOLUTION_FAILED');
+      }
       return recordFailure(contentType, contentId, candidate, 'RESOLUTION_FAILED');
     }
 
@@ -142,6 +187,10 @@ const createStreamLifecycle = ({
       server_name: candidate ? candidate.server_name : (resolved.serverName || 'HD'),
       quality: resolved.quality || 'auto',
       language: resolved.language || 'en-sub',
+      audio_language: resolved.audioLanguage || null,
+      subtitle_language: resolved.subtitleLanguage || null,
+      cleanliness: resolved.cleanliness || validation.cleanliness ||
+        inspectManifestCleanliness(validation.manifest),
       stream_url: resolved.url,
       embed_url: null,
       stream_type: 'direct',

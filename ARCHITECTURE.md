@@ -2,7 +2,7 @@
 
 ## Alcance y estado observado
 
-Auditoría de `zamzze/kanchita-backend`, actualizada desde `main` en `22e77f2` el 6 de septiembre de 2026. La Fase 1 cerró ejecución reproducible, migraciones, CI PostgreSQL, seguridad HTTP básica y sesiones rotativas. Las Fases 2A–2C añaden lifecycle confiable, resolución asíncrona persistente y aislamiento real del resolver sin cambiar el proveedor existente.
+Auditoría de `zamzze/kanchita-backend`, actualizada para Fase 3A desde la base `75a3338` el 6 de septiembre de 2026. La Fase 1 cerró ejecución reproducible, migraciones, CI PostgreSQL, seguridad HTTP básica y sesiones rotativas. Las Fases 2A–2C añaden lifecycle confiable, resolución asíncrona persistente y aislamiento real; Fase 3A agrega ProviderManager, prepare/prewarm, prioridad, presupuesto global de browser, refresh anticipado y salud operativa.
 
 El sistema usa Node.js/CommonJS con Express 4 y acceso directo a PostgreSQL mediante `pg`. No hay ORM. API y worker de streams son procesos separados que comparten código y PostgreSQL; el planificador de ingesta y el almacenamiento local de subtítulos todavía pertenecen al proceso API.
 
@@ -23,11 +23,14 @@ flowchart LR
   Streams -->|enqueue / poll| PG
   PG --> Queue[Persistent stream jobs]
   Queue --> Worker[Stream resolution worker]
-  Worker --> Executor[Resolver executor]
+  Worker --> Manager[Provider manager]
+  Manager --> Direct[Direct strategies]
+  Manager --> Slots[PostgreSQL browser slots]
+  Slots --> Executor[Resolver executor]
   Executor -->|fork + IPC| Child[Resolver child process]
   Child --> Scraper[Puppeteer + Chromium]
   Child -->|SUCCESS / FAILURE| Executor
-  Worker --> Validator[SSRF-safe HLS validator]
+  Manager --> Validator[SSRF-safe HLS validator]
   Worker --> PG
   Scraper --> Provider[Cineby / Vidfast chain]
   Subs --> SubDL[SubDL API]
@@ -42,7 +45,7 @@ flowchart LR
 - `src/app.js` configura Helmet, allowlist CORS, JSON, VTT estáticos, limitador general antes de `/api`, módulos, 404 y errores; arranca el planificador salvo con `NODE_ENV=test`.
 - El manejador global de errores es el último middleware.
 - Registro y autenticación conservan un limitador más estricto; el registro está cerrado salvo `ALLOW_PUBLIC_REGISTRATION=true`.
-- No existen ruta raíz, ruta de salud ni apagado ordenado de HTTP/PostgreSQL/trabajos.
+- `/health/live` comprueba proceso; `/health/ready` comprueba PostgreSQL y migración 006 sin llamar proveedores. El worker maneja shutdown; el proceso HTTP aún no tiene cierre ordenado propio.
 
 ## Módulos
 
@@ -74,11 +77,15 @@ Películas y episodios entran en un único flujo de lifecycle. Una fila `ready`,
 
 El validador aplica una frontera SSRF fail-closed antes de la URL inicial y de cada redirect. Resuelve todas las IP, rechaza rangos no públicos IPv4/IPv6 y entrega al socket una resolución fijada a las direcciones aprobadas. Los fixtures localhost sólo se habilitan mediante una opción inyectada explícitamente en tests; producción la deniega por defecto.
 
+`ProviderRegistry` valida capacidades y `ProviderManager` ejecuta estrategias directas antes de browser. ProviderC es el único provider productivo y conserva `browser`, `expensive` y `fallback`; no se modificó su scraping. Los providers browser adquieren un slot global en `stream_browser_slots`; el lease se renueva durante la operación y puede recuperarse tras crash. Los directos no consumen slot.
+
+`POST .../prepare` y el prewarm sólo consultan lifecycle y encolan. Los jobs tienen prioridad 0–100 y tipo `resolve|refresh`. La deduplicación parcial existente mantiene un job activo por contenido incluso con múltiples usuarios. El refresh anticipado aplica stale-while-valid: se sirve la fila vigente y se encola reemplazo; un fallo incrementa diagnóstico/backoff sin cambiar `ready` mientras no haya expirado.
+
 Los estados persistentes del stream son `unknown`, `ready`, `stale` y `failed`. Éxitos actualizan resolución/verificación y reinician fallos. Fallos incrementan una vez por intento y aplican backoff 30 s/2 min/5 min/15 min. Los jobs usan `pending`, `processing`, `completed` y `failed`, deduplicación mediante índice parcial, claim `FOR UPDATE SKIP LOCKED`, lease y retries 30 s/2 min/5 min. `attempt_count` sólo aumenta al claim y tiene constraint `attempt_count <= max_attempts`; recuperar un lease no cuenta como ejecución nueva. La lease mínima es timeout + kill grace + 30 s. El executor limita cada worker a un child, valida IPC y no resuelve hasta haber recolectado el proceso. En Linux usa un PGID aislado para terminar también Chromium; crashes normales no derriban ni obligan a reciclar el worker. No hay una transacción abierta durante Chromium/red. El backend no descarga segmentos ni hace proxy de playback.
 
 ### Subtítulos
 
-Consulta el caché en `subtitles`, busca en SubDL, descarga ZIP/RAR en memoria, selecciona un `.srt`/`.sub`, lo convierte a WebVTT y escribe `public/subtitles/<content-id>.vtt`. Publica una URL absoluta basada en `API_BASE_URL`. Resolver/generar mediante `/api/subtitles` requiere JWT, mientras `/subtitles/*.vtt` permanece público para el reproductor y limitado por CORS. Persisten los riesgos de red, archivos y almacenamiento.
+Consulta el caché en `subtitles`, busca primero en SubDL y opcionalmente en OpenSubtitles REST, descarga ZIP/RAR o subtítulo directo, lo convierte a WebVTT y escribe `public/subtitles/<content-id>.vtt`. El ranking favorece Latino, coincidencia de episodio/release y WEB. Publica una URL absoluta basada en `API_BASE_URL`. Resolver/generar mediante `/api/subtitles` requiere JWT, mientras `/subtitles/*.vtt` permanece público para el reproductor y limitado por CORS. Persisten los riesgos de límites de archivos y almacenamiento.
 
 ### Ingesta programada
 
@@ -105,6 +112,11 @@ Consulta el caché en `subtitles`, busca en SubDL, descarga ZIP/RAR en memoria, 
 | GET | `/api/content/:tmdb_id?type=` | Sí | Obtener/importar contenido |
 | GET | `/api/streams/movie/:id` | Sí | Devolver stream o `202` mientras se resuelve |
 | GET | `/api/streams/episode/:id` | Sí | Devolver stream o `202` mientras se resuelve |
+| POST | `/api/streams/movie/:id/prepare` | Sí | Preparar idempotentemente una película |
+| POST | `/api/streams/episode/:id/prepare` | Sí | Preparar idempotentemente un episodio |
+| GET | `/health/live` | No | Liveness local sin dependencias externas |
+| GET | `/health/ready` | No | Readiness PostgreSQL/esquema |
+| GET | `/api/internal/stream-health` | Sí | Estado agregado sin URLs ni secretos |
 | GET | `/api/subtitles/:tmdbId?type=&id=&season=&episode=` | Sí | Buscar/crear subtítulo |
 | GET | `/subtitles/:file.vtt` | No | Servir WebVTT estático |
 
@@ -120,8 +132,13 @@ Consulta el caché en `subtitles`, busca en SubDL, descarga ZIP/RAR en memoria, 
 | `series` | Metadatos de series | UUID; `tmdb_id` único |
 | `episodes` | Episodios | FK a serie; temporada/episodio único por serie |
 | `content_genres` | Relación polimórfica | Sin FK para `content_id` |
-| `streams` | URLs directas/embed y lifecycle | Única `(content_type, content_id, server_name) NULLS NOT DISTINCT`; estado, proveedor, expiración, verificación y backoff |
-| `stream_resolution_jobs` | Cola persistente movie/episode | Un job activo por contenido; estado, intentos, scheduling, lease y ownership |
+| `streams` | URLs directas/embed y lifecycle | Única `(content_type, content_id, server_name) NULLS NOT DISTINCT`; estado, proveedor, expiración, verificación, idiomas y limpieza |
+| `stream_resolution_jobs` | Cola persistente movie/episode | Un job activo; prioridad, tipo resolve/refresh, scheduling, lease y ownership |
+| `stream_content_stats` | Actividad agregada para KPI/prewarm | Conteo, última solicitud/ready y duración |
+| `stream_provider_health` | Circuit breaker agregado | Éxitos/fallos consecutivos, latencia y cooldown |
+| `stream_browser_slots` | Semáforo global PostgreSQL | Slot, owner y lease renovable |
+| `stream_worker_heartbeats` | Presencia del worker | Último heartbeat y job activo |
+| `stream_metrics` | Contadores/duraciones ligeros | Sólo nombres allowlisted, sin labels sensibles |
 | `subtitles` | Caché de URLs VTT por idioma | Única `(content_type, content_id, language)` |
 | `watch_history` | Progreso por usuario | FK sólo a usuario; contenido polimórfico sin FK |
 | `scraper_log` | Resultado de ingesta | Sin FK |
@@ -130,7 +147,7 @@ Consulta el caché en `subtitles`, busca en SubDL, descarga ZIP/RAR en memoria, 
 
 `database/migrations/` es la fuente de verdad. El runner `database/migrate.js` aplica archivos en orden, registra checksum y fecha en `schema_migrations`, usa un advisory lock y envuelve cada migración pendiente en una transacción. `database/init.sql` incluye los mismos archivos para inicializaciones de PostgreSQL mediante Docker.
 
-La restricción de streams usa `UNIQUE NULLS NOT DISTINCT` de PostgreSQL 15 y mantiene su semántica. La migración 003 crea `auth_sessions`; la 004 añade lifecycle; la 005 crea la cola persistente y su índice único parcial. Streams anteriores no se eliminan ni se declaran válidos: quedan `unknown`, sin verificación/expiración, para evaluación perezosa en el primer acceso.
+La restricción de streams usa `UNIQUE NULLS NOT DISTINCT` de PostgreSQL 15 y mantiene su semántica. La migración 003 crea `auth_sessions`; la 004 añade lifecycle; la 005 crea la cola persistente; la 006 añade prioridad/tipo de job, lenguaje/limpieza y tablas operativas. Streams anteriores no se eliminan: `en-sub` se normaliza a audio inglés/subtítulo español y limpieza queda `unknown` hasta observar un manifest.
 
 ## Integraciones externas
 

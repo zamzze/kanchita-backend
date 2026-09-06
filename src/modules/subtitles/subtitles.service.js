@@ -5,6 +5,7 @@ const fs       = require('fs');
 const path     = require('path');
 const AdmZip   = require('adm-zip');
 const pool     = require('../../config/db');
+const { createMetricsStore } = require('../streams/streamMetrics');
 
 const SUBTITLES_DIR = path.join(__dirname, '../../../public/subtitles');
 // Crear directorio si no existe
@@ -40,6 +41,65 @@ function httpsGetJson(url) {
     });
 }
 
+const requestJson = (url, { method = 'GET', headers = {}, body = null } = {}) =>
+    new Promise((resolve, reject) => {
+        const request = https.request(url, { method, headers }, res => {
+            let data = '';
+            res.on('data', chunk => data += chunk);
+            res.on('end', () => {
+                if (res.statusCode < 200 || res.statusCode >= 300) {
+                    return reject(new Error('Subtitle provider request failed'));
+                }
+                try { return resolve(JSON.parse(data)); }
+                catch { return reject(new Error('Subtitle provider returned invalid JSON')); }
+            });
+        });
+        request.setTimeout(5000, () => request.destroy(new Error('Subtitle provider timeout')));
+        request.on('error', reject);
+        if (body) request.write(JSON.stringify(body));
+        request.end();
+    });
+
+const subtitleScore = (subtitle, {
+    season = null,
+    episode = null,
+    releaseName = '',
+} = {}) => {
+    let points = 0;
+    const text = [
+        subtitle.release_name,
+        subtitle.name,
+        subtitle.language,
+        subtitle.language_code,
+        subtitle.attributes?.release,
+    ].filter(Boolean).join(' ').toLowerCase();
+    if (/latino|latin america|es[-_](419|mx|us|lat|latam)|spanish\s*\(latin/.test(text)) {
+        points += 1000;
+    } else if (/\b(spanish|español|spa|es)\b/.test(text)) {
+        points += 500;
+    }
+    if (/web[- .]?(dl|rip)|\bweb\b/.test(text)) points += 120;
+    if (/blu[- .]?ray/.test(text)) points += 60;
+    if (/1080p/.test(text)) points += 30;
+    if (season && episode) {
+        const s = String(season).padStart(2, '0');
+        const e = String(episode).padStart(2, '0');
+        if (text.includes(`s${s}e${e}`) || text.includes(`${season}x${e}`)) points += 180;
+    }
+    const releaseTokens = String(releaseName).toLowerCase().split(/[^a-z0-9]+/)
+        .filter(token => token.length >= 4);
+    points += releaseTokens.filter(token => text.includes(token)).length * 15;
+    if (subtitle.hearing_impaired || subtitle.attributes?.hearing_impaired) points -= 10;
+    points += Math.min(50, Math.log10(Number(subtitle.downloads || subtitle.attributes?.download_count || 0) + 1) * 10);
+    if (/\b(hdts|cam|hd-ts)\b/.test(text)) points -= 300;
+    return points;
+};
+
+const rankSubtitles = (subtitles, context = {}) =>
+    [...subtitles].sort((left, right) =>
+        subtitleScore(right, context) - subtitleScore(left, context)
+    );
+
 // Convertir .srt a .vtt
 function srtToVtt(srt) {
     return 'WEBVTT\n\n' + srt
@@ -66,48 +126,46 @@ const findSubtitle = async (tmdbId, type, season = null, episode = null) => {
 
     if (!data.status || !data.subtitles?.length) return null;
 
-    const subtitles = data.subtitles;
-
-    // Prioridad de selección:
-    // 1. WEB-DL o WEBRip en español latino con más descargas
-    // 2. Cualquier español latino
-    // 3. El de más descargas en español
-
-    const score = (s) => {
-    let points = 0;
-    const name = (s.release_name + ' ' + s.name).toLowerCase();
-
-    // Preferir WEB sources genéricas
-    if (name.includes('web')) points += 10;
-    if (name.includes('webrip') || name.includes('web-dl')) points += 5;
-
-    // Preferir latino
-    if (name.includes('lat') || name.includes('latino')) points += 20;
-    if (name.includes('spanish(latin') || name.includes('es-lat')) points += 20;
-
-    // Penalizar fuentes propietarias (timing diferente)
-    if (name.includes('dsnp') || name.includes('disney')) points -= 30;
-    if (name.includes('nflx') || name.includes('netflix')) points -= 30;
-    if (name.includes('amzn') || name.includes('amazon')) points -= 30;
-    if (name.includes('hmax') || name.includes('hbo')) points -= 30;
-    if (name.includes('atvp') || name.includes('apple')) points -= 30;
-
-    // Penalizar HDTS/CAM
-    if (name.includes('hdts') || name.includes('cam') || 
-        name.includes('.ts') || name.includes('hd-ts')) points -= 15;
-
-    // Preferir 1080p BluRay o WEB genérico
-    if (name.includes('1080')) points += 3;
-    if (name.includes('bluray') || name.includes('blu-ray')) points += 2;
-
-    return points;
+    const sorted = rankSubtitles(data.subtitles, { season, episode });
+    console.log(`[Subtitles] Mejor subtítulo seleccionado (score: ${subtitleScore(sorted[0], { season, episode })})`);
+    return sorted[0];
 };
 
-    // Ordenar por score descendente
-    const sorted = [...subtitles].sort((a, b) => score(b) - score(a));
-
-    console.log(`[Subtitles] Mejor subtítulo: ${sorted[0].release_name} (score: ${score(sorted[0])})`);
-    return sorted[0];
+const findOpenSubtitle = async (tmdbId, type, season = null, episode = null) => {
+    const apiKey = process.env.OPENSUBTITLES_API_KEY;
+    const username = process.env.OPENSUBTITLES_USERNAME;
+    const password = process.env.OPENSUBTITLES_PASSWORD;
+    if (!apiKey || !username || !password) return null;
+    const query = new URLSearchParams({
+        tmdb_id: String(tmdbId),
+        type: type === 'tv' ? 'episode' : 'movie',
+        languages: 'es',
+    });
+    if (season) query.set('season_number', String(season));
+    if (episode) query.set('episode_number', String(episode));
+    const headers = {
+        'Api-Key': apiKey,
+        'User-Agent': 'Kanchita/1.0',
+        'Content-Type': 'application/json',
+    };
+    const search = await requestJson(
+        `https://api.opensubtitles.com/api/v1/subtitles?${query}`,
+        { headers }
+    );
+    const ranked = rankSubtitles(search.data || [], { season, episode });
+    const fileId = ranked[0]?.attributes?.files?.[0]?.file_id;
+    if (!fileId) return null;
+    const login = await requestJson('https://api.opensubtitles.com/api/v1/login', {
+        method: 'POST',
+        headers,
+        body: { username, password },
+    });
+    const download = await requestJson('https://api.opensubtitles.com/api/v1/download', {
+        method: 'POST',
+        headers: { ...headers, Authorization: `Bearer ${login.token}` },
+        body: { file_id: fileId },
+    });
+    return download.link ? { ...ranked[0], url: download.link } : null;
 };
 
 function frameToTime(frame, fps) {
@@ -122,15 +180,19 @@ function frameToTime(frame, fps) {
 
 // Descargar zip/rar y extraer .srt → .vtt
 const downloadAndConvert = async (zipUrl, contentId, season = null, episode = null) => {
-    const fullUrl = `https://dl.subdl.com${zipUrl}`;
+    const fullUrl = /^https?:\/\//.test(zipUrl) ? zipUrl : `https://dl.subdl.com${zipUrl}`;
     console.log('[Subtitles] Descargando archivo seleccionado');
 
     const buffer = await httpsGet(fullUrl);
     const isRar  = fullUrl.toLowerCase().endsWith('.rar');
+    const isRawSubtitle = /\.(srt|sub)(?:\?|$)/i.test(fullUrl);
 
     let srtContent = null;
 
-    if (isRar) {
+    if (isRawSubtitle) {
+        const utf8Text = buffer.toString('utf8');
+        srtContent = utf8Text.includes('\uFFFD') ? buffer.toString('latin1') : utf8Text;
+    } else if (isRar) {
         const { createExtractorFromData } = require('node-unrar-js');
         const extractor   = await createExtractorFromData({ data: buffer });
         const list        = extractor.getFileList();
@@ -270,8 +332,8 @@ const downloadAndConvert = async (zipUrl, contentId, season = null, episode = nu
 };
 
 // Leer caché de BD
-const getCachedSubtitle = async (contentType, contentId) => {
-    const { rows } = await pool.query(
+const getCachedSubtitle = async (contentType, contentId, db = pool) => {
+    const { rows } = await db.query(
         `SELECT subtitle_url, language FROM subtitles
          WHERE content_type = $1 AND content_id = $2
          AND language = 'es' AND is_active = TRUE LIMIT 1`,
@@ -281,8 +343,8 @@ const getCachedSubtitle = async (contentType, contentId) => {
 };
 
 // Guardar en BD
-const cacheSubtitle = async (contentType, contentId, subtitleUrl) => {
-    await pool.query(
+const cacheSubtitle = async (contentType, contentId, subtitleUrl, db = pool) => {
+    await db.query(
         `INSERT INTO subtitles (content_type, content_id, subtitle_url, language, is_active)
          VALUES ($1, $2, $3, 'es', TRUE)
          ON CONFLICT (content_type, content_id, language)
@@ -292,36 +354,76 @@ const cacheSubtitle = async (contentType, contentId, subtitleUrl) => {
 };
 
 // Función principal
-const getSubtitle = async (tmdbId, contentType, contentId, season = null, episode = null) => {
+const createSubtitleService = ({
+    db = pool,
+    subdlFinder = findSubtitle,
+    openSubtitlesFinder = findOpenSubtitle,
+    downloader = downloadAndConvert,
+    fileExists = fs.existsSync,
+    metrics = createMetricsStore(db),
+    subdlEnabled = () => process.env.SUBDL_ENABLED !== 'false',
+    openSubtitlesEnabled = () => process.env.OPENSUBTITLES_ENABLED === 'true',
+    logger = console,
+} = {}) => ({
+getSubtitle: async (tmdbId, contentType, contentId, season = null, episode = null) => {
     // 1. Verificar caché en BD
-    const cached = await getCachedSubtitle(contentType, contentId);
+    const cached = await getCachedSubtitle(contentType, contentId, db);
     if (cached) {
         // Verificar que el archivo .vtt sigue existiendo en disco
         const localPath = path.join(SUBTITLES_DIR, `${contentId}.vtt`);
-        if (fs.existsSync(localPath)) {
-            console.log(`[Subtitles] Caché hit para ${contentId}`);
+        if (fileExists(localPath)) {
+            logger.log('[Subtitles] cache hit');
             return { subtitle_url: cached.subtitle_url, language: 'es' };
         }
     }
 
     // 2. Buscar en SubDL
     const subdlType = contentType === 'movie' ? 'movie' : 'tv';
-    console.log(`[Subtitles] Buscando en SubDL para tmdb:${tmdbId}`);
-    const subtitle = await findSubtitle(tmdbId, subdlType, season, episode);
+    logger.log('[Subtitles] searching configured providers');
+    let subtitle = null;
+    if (subdlEnabled()) {
+        try {
+            subtitle = await subdlFinder(tmdbId, subdlType, season, episode);
+            if (subtitle) await metrics.increment('subtitle_subdl_success_total');
+        } catch {
+            logger.warn('[Subtitles] SubDL unavailable');
+        }
+    }
+    if (!subtitle && openSubtitlesEnabled()) {
+        try {
+            subtitle = await openSubtitlesFinder(tmdbId, subdlType, season, episode);
+            if (subtitle) await metrics.increment('subtitle_opensubtitles_success_total');
+        } catch {
+            logger.warn('[Subtitles] OpenSubtitles unavailable');
+        }
+    }
 
     if (!subtitle) {
-        console.warn(`[Subtitles] No encontrado para tmdb:${tmdbId}`);
+        logger.warn('[Subtitles] no compatible subtitle found');
         return null;
     }
 
     // 3. Descargar y convertir a .vtt
-    const subtitlePath = await downloadAndConvert(subtitle.url, contentId, season, episode);
+    const subtitlePath = await downloader(subtitle.url, contentId, season, episode);
 
     // 4. Cachear en BD (URL pública desde el backend)
     const publicUrl = `${process.env.API_BASE_URL || 'http://localhost:3000'}${subtitlePath}`;
-    await cacheSubtitle(contentType, contentId, publicUrl);
+    await cacheSubtitle(contentType, contentId, publicUrl, db);
 
     return { subtitle_url: publicUrl, language: 'es' };
-};
+},
+});
 
-module.exports = { getSubtitle };
+const defaultSubtitleService = createSubtitleService();
+const getSubtitle = defaultSubtitleService.getSubtitle;
+
+module.exports = {
+    findOpenSubtitle,
+    findSubtitle,
+    getSubtitle,
+    createSubtitleService,
+    getCachedSubtitle,
+    cacheSubtitle,
+    rankSubtitles,
+    subtitleScore,
+};

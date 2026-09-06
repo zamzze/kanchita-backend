@@ -25,12 +25,33 @@ const createStreamsController = (service = streamsService) => ({
       return next(err);
     }
   },
+  prepareMovie: async (req, res, next) => {
+    try {
+      return sendResult(res, await service.prepareMovie(req.params.id));
+    } catch (err) {
+      return next(err);
+    }
+  },
+  prepareEpisode: async (req, res, next) => {
+    try {
+      return sendResult(res, await service.prepareEpisode(req.params.id));
+    } catch (err) {
+      return next(err);
+    }
+  },
 });
 
-const { getMovieStreams, getEpisodeStreams } = createStreamsController();
+const {
+  getMovieStreams,
+  getEpisodeStreams,
+  prepareMovie,
+  prepareEpisode,
+} = createStreamsController();
 
 module.exports = {
   createStreamsController,
   getMovieStreams,
   getEpisodeStreams,
+  prepareMovie,
+  prepareEpisode,
 };

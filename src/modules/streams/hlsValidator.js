@@ -261,6 +261,7 @@ const createHlsValidator = ({
   dnsLookup = dns.lookup,
   requestImpl = requestManifest,
   allowPrivateNetworks = false,
+  includeManifest = false,
 } = {}) => async (candidate) => {
   let currentUrl = parseHttpUrl(candidate);
   if (!currentUrl) return { valid: false, code: 'HLS_INVALID_URL' };
@@ -300,7 +301,11 @@ const createHlsValidator = ({
       if (!manifest.startsWith('#EXTM3U')) {
         return { valid: false, code: 'HLS_INVALID_MANIFEST' };
       }
-      return { valid: true, code: null };
+      return {
+        valid: true,
+        code: null,
+        ...(includeManifest ? { manifest } : {}),
+      };
     }
   } catch (error) {
     if (error.validationCode) return { valid: false, code: error.validationCode };

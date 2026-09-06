@@ -202,6 +202,48 @@ test(
       assert.equal(stillLive.rows[0].locked_by, 'worker-live');
     });
 
+    await t.test('only the living owner can renew a processing job lease', async () => {
+      await reset();
+      const job = await queue.enqueue('movie', contentId());
+      const claimed = await queue.claimNextJob('living-worker');
+      await pool.query(
+        `UPDATE stream_resolution_jobs
+         SET locked_at = NOW() - INTERVAL '30 seconds' WHERE id = $1`,
+        [job.id]
+      );
+      const before = (await pool.query(
+        'SELECT locked_at FROM stream_resolution_jobs WHERE id = $1',
+        [job.id]
+      )).rows[0].locked_at;
+
+      assert.equal(await queue.renewJobLease(claimed.id, 'wrong-worker'), false);
+      assert.equal(await queue.renewJobLease(claimed.id, 'living-worker'), true);
+      const renewed = (await pool.query(
+        'SELECT locked_at FROM stream_resolution_jobs WHERE id = $1',
+        [job.id]
+      )).rows[0].locked_at;
+      assert.ok(new Date(renewed).getTime() > new Date(before).getTime());
+      assert.deepEqual(await queue.recoverStaleJobs(10), []);
+
+      await queue.completeJob(job.id, 'living-worker');
+      assert.equal(await queue.renewJobLease(job.id, 'living-worker'), false);
+    });
+
+    await t.test('a dead worker lease is still recovered after renewal stops', async () => {
+      await reset();
+      const job = await queue.enqueue('episode', contentId());
+      await queue.claimNextJob('dead-worker');
+      await pool.query(
+        `UPDATE stream_resolution_jobs
+         SET locked_at = NOW() - INTERVAL '10 minutes' WHERE id = $1`,
+        [job.id]
+      );
+      const recovered = await queue.recoverStaleJobs(60);
+      assert.equal(recovered.length, 1);
+      assert.equal(recovered[0].id, job.id);
+      assert.equal(recovered[0].last_error_code, 'JOB_LEASE_EXPIRED');
+    });
+
     await t.test('concurrent stale recovery is idempotent', async () => {
       await reset();
       const job = await queue.enqueue('movie', contentId());
