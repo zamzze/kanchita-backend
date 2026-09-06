@@ -42,13 +42,13 @@
 2. ✅ La Fase 1D añadió allowlist CORS por entorno y CORP compatible con VTT.
 3. 🟡 La Fase 1D protegió el resolver de subtítulos y cerró registro mediante configuración; invitaciones/bootstrap quedan pendientes.
 4. 🟡 La Fase 1D oculta mensajes internos 5xx y normaliza errores HTTP básicos; faltan esquemas de validación para cuerpos, params y queries.
-5. Guardar hashes de refresh tokens en tabla de sesiones, verificar `is_active`, usar `jti`/familias y fijar algoritmo, issuer y audience.
+5. ✅ La Fase 1E guarda hashes SHA-256 en sesiones independientes, verifica `is_active`, rota con `jti`, detecta reutilización y fija algoritmo, issuer y audience. Familias globales y logout-all no son necesarios todavía.
 6. 🟡 La Fase 1D elimina logs directos de claves/URLs HLS y añade redacción básica; falta logging estructurado.
 
 ### P1: pruebas mínimas y observabilidad
 
 1. Unit tests para JWT, normalizadores, paginación, progreso y conversión de subtítulos.
-2. 🟡 Las Fases 1C/1D cubren migraciones PostgreSQL y protecciones HTTP; faltan integraciones de auth, catálogos, historial y streams.
+2. 🟡 Las Fases 1C–1E cubren migraciones PostgreSQL, protecciones HTTP y sesiones auth reales; faltan integraciones de catálogos, historial y streams.
 3. Contratos simulados para TMDB/SubDL/proveedor; no depender de Internet en CI.
 4. Smoke test de Compose en Linux y CI con `npm ci`, lint, tests, audit y build.
 5. Endpoints `/health/live` y `/health/ready`, graceful shutdown y métricas básicas.
@@ -106,6 +106,6 @@
 
 ## Estado de las primeras fases
 
-La Fase 1A completó higiene y ejecución reproducible. La Fase 1B alinea el contrato mínimo PostgreSQL, la Fase 1C lo valida en CI y la Fase 1D añade seguridad HTTP básica. Permanecen como PRs separadas: sesiones/JWT, validación de entradas, proxy/healthchecks, integridad adicional, vulnerabilidades de dependencias y el procedimiento operativo de secretos/historial.
+La Fase 1A completó higiene y ejecución reproducible. La Fase 1B alinea el contrato mínimo PostgreSQL, la Fase 1C lo valida en CI, la Fase 1D añade seguridad HTTP básica y la Fase 1E incorpora sesiones/JWT rotativos. Permanecen como PRs separadas: validación de entradas, proxy/healthchecks, integridad adicional, vulnerabilidades de dependencias y el procedimiento operativo de secretos/historial.
 
 

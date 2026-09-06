@@ -12,6 +12,7 @@ Alcance: rama `main`, commit `6844ef4`, 5.087 archivos versionados; 5.024 perten
 - **Fase 1B:** resuelve A-01 mediante migraciones versionadas, tabla `subtitles` y restricción compatible con el upsert de streams.
 - **Fase 1C:** valida automáticamente instalación, smoke test y migraciones contra PostgreSQL 15 real mediante GitHub Actions. `npm audit` se informa sin bloquear mientras se corrigen las vulnerabilidades heredadas.
 - **Fase 1D:** corrige el orden del rate limiter, restringe CORS, cierra el registro por defecto, protege la resolución de subtítulos, evita detalles internos en respuestas 5xx y redacta logging sensible básico. Los límites de red/archivo y el rediseño JWT siguen pendientes.
+- **Fase 1E:** resuelve A-06 con sesiones múltiples, hash de refresh tokens, rotación transaccional, revocación por sesión, detección básica de reutilización y JWT tipados con parámetros explícitos.
 - La rotación de secretos, reescritura del historial y los demás hallazgos continúan pendientes.
 
 ## CRÍTICO
@@ -64,9 +65,11 @@ El limitador global está montado después de las rutas. Registro de usuario est
 
 **Remediación parcial:** el limitador general ya precede a `/api`, auth mantiene un límite más estricto y el registro queda deshabilitado salvo flag explícito. Persisten los límites en memoria y la falta de locks/colas para trabajo pesado.
 
-### A-06 — Refresh token débilmente gestionado
+### A-06 — Refresh token débilmente gestionado — RESUELTO EN FASE 1E
 
 El refresh token se guarda en texto claro, sólo se permite uno por usuario y `refresh()` ignora `is_active`; una cuenta deshabilitada con refresh válido puede seguir obteniendo access tokens. No hay `jti`, familia, reutilización detectada, sesiones por dispositivo, hash en reposo, issuer/audience ni algoritmo fijado explícitamente.
+
+**Remediación:** `003_auth_sessions.sql` crea sesiones independientes y elimina valores legacy de `users.refresh_token`. El código almacena SHA-256, rota bajo transacción y `SELECT FOR UPDATE`, revoca ante reutilización y bloquea cuentas deshabilitadas. Access y refresh incluyen tipo y `sid`; refresh añade `jti`; ambos fijan HS256, issuer y audiencias separadas. Logout afecta sólo a la sesión actual. Como decisión consciente de alcance, los access tokens ya emitidos no se revocan y siguen válidos hasta su expiración corta.
 
 ### A-07 — Docker no es apto para producción Linux
 

@@ -29,7 +29,11 @@ test('migration files are ordered and checksummed deterministically', async () =
 
   assert.deepEqual(
     migrations.map(({ version }) => version),
-    ['001_legacy_baseline.sql', '002_phase_1b_schema_alignment.sql']
+    [
+      '001_legacy_baseline.sql',
+      '002_phase_1b_schema_alignment.sql',
+      '003_auth_sessions.sql',
+    ]
   );
   assert.ok(migrations.every(({ checksum }) => /^[a-f0-9]{64}$/.test(checksum)));
 });
@@ -69,6 +73,7 @@ test(
         assert.deepEqual(first.applied, [
           '001_legacy_baseline.sql',
           '002_phase_1b_schema_alignment.sql',
+          '003_auth_sessions.sql',
         ]);
 
         const second = await runMigrations({
@@ -120,6 +125,36 @@ test(
           ),
           (error) => error.code === '23505'
         );
+      });
+
+      await t.test('creates the auth sessions contract and indexes', async () => {
+        const columns = await pools.empty.query(`
+          SELECT column_name
+          FROM information_schema.columns
+          WHERE table_schema = current_schema()
+            AND table_name = 'auth_sessions'
+          ORDER BY ordinal_position
+        `);
+        assert.deepEqual(columns.rows.map((row) => row.column_name), [
+          'id',
+          'user_id',
+          'refresh_token_hash',
+          'expires_at',
+          'created_at',
+          'last_used_at',
+          'revoked_at',
+        ]);
+
+        const indexes = await pools.empty.query(`
+          SELECT indexname
+          FROM pg_indexes
+          WHERE schemaname = current_schema()
+            AND tablename = 'auth_sessions'
+        `);
+        const indexNames = indexes.rows.map((row) => row.indexname);
+        assert.ok(indexNames.includes('auth_sessions_pkey'));
+        assert.ok(indexNames.includes('auth_sessions_user_id_idx'));
+        assert.ok(indexNames.includes('auth_sessions_active_user_idx'));
       });
 
       await t.test('upserts one logical NULL-named stream predictably', async () => {
@@ -184,6 +219,11 @@ test(
            RETURNING id`,
           [movie.rows[0].id]
         );
+        const legacyUser = await pools.legacy.query(
+          `INSERT INTO users (email, password_hash, refresh_token)
+           VALUES ('legacy@example.test', 'legacy-password-hash', 'legacy-plaintext-token')
+           RETURNING id`
+        );
 
         await runMigrations({
           pool: pools.legacy,
@@ -201,6 +241,13 @@ test(
         assert.equal(preservedMovie.rowCount, 1);
         assert.equal(preservedStream.rowCount, 1);
 
+        const preservedUser = await pools.legacy.query(
+          'SELECT id, refresh_token FROM users WHERE id = $1',
+          [legacyUser.rows[0].id]
+        );
+        assert.equal(preservedUser.rowCount, 1);
+        assert.equal(preservedUser.rows[0].refresh_token, null);
+
         const contract = await pools.legacy.query(`
           SELECT
             to_regclass('subtitles') IS NOT NULL AS has_subtitles,
@@ -209,10 +256,12 @@ test(
               FROM pg_constraint
               WHERE conrelid = 'streams'::regclass
                 AND conname = 'streams_content_server_unique'
-            ) AS has_stream_constraint
+            ) AS has_stream_constraint,
+            to_regclass('auth_sessions') IS NOT NULL AS has_auth_sessions
         `);
         assert.equal(contract.rows[0].has_subtitles, true);
         assert.equal(contract.rows[0].has_stream_constraint, true);
+        assert.equal(contract.rows[0].has_auth_sessions, true);
       });
 
       await t.test('refuses ambiguous legacy duplicates without deleting them', async () => {

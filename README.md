@@ -1,6 +1,6 @@
 # Kanchita Backend
 
-Backend personal de catálogo y reproducción multimedia construido con Express y PostgreSQL. Esta rama conserva la arquitectura existente y se limita a hacer el repositorio instalable y verificable de forma reproducible.
+Backend personal de catálogo y reproducción multimedia construido con Express y PostgreSQL. El proyecto conserva su API actual y dispone de instalación reproducible, migraciones, controles HTTP básicos y sesiones de autenticación rotativas.
 
 ## Requisitos
 
@@ -32,6 +32,8 @@ Al ejecutar Node directamente en el host, cambia el hostname de `DB_URL` de `pos
 `CORS_ORIGINS` es una lista de orígenes web exactos separados por comas. Las peticiones de clientes nativos o servidor-a-servidor sin cabecera `Origin` siguen permitidas. Una petición de navegador con un origen no configurado recibe `403`; no hardcodees aquí el futuro dominio del VPS.
 
 El registro público está cerrado por defecto. `ALLOW_PUBLIC_REGISTRATION` sólo lo habilita cuando su valor es exactamente `true`; úsalo temporalmente para aprovisionamiento controlado y vuelve a `false` después. El login permanece público.
+
+`JWT_ISSUER`, `JWT_ACCESS_AUDIENCE` y `JWT_REFRESH_AUDIENCE` forman parte del contrato criptográfico. Los valores deben ser coherentes en todas las réplicas y no deben cambiarse sin forzar un nuevo login de los clientes.
 
 ## Instalación reproducible
 
@@ -109,6 +111,12 @@ Para ejecutar únicamente los tests HTTP:
 npm run test:http
 ```
 
+Para ejecutar las pruebas de sesiones contra PostgreSQL 15:
+
+```bash
+TEST_DB_URL=postgresql://user:password@localhost:5432/test_db npm run test:auth
+```
+
 La resolución mediante `/api/subtitles` requiere Bearer JWT. Los `.vtt` ya generados continúan disponibles en `/subtitles` para el reproductor; CORS y `Cross-Origin-Resource-Policy: cross-origin` limitan/permiten su consumo desde los orígenes configurados.
 
 Para ejecutar explícitamente las pruebas de migración contra PostgreSQL 15:
@@ -117,13 +125,21 @@ Para ejecutar explícitamente las pruebas de migración contra PostgreSQL 15:
 TEST_DB_URL=postgresql://user:password@localhost:5432/test_db npm run test:db
 ```
 
-La base indicada debe ser exclusiva para pruebas. Los tests crean y eliminan esquemas aislados dentro de ella.
+La base indicada debe ser exclusiva para pruebas. Los tests crean y eliminan esquemas aislados dentro de ella. `npm test` ejecuta tanto `test:db` como `test:auth` cuando `TEST_DB_URL` está definido.
+
+## Sesiones de autenticación
+
+Cada login crea una fila independiente en `auth_sessions`, de modo que navegador, teléfono y TV pueden mantener sesiones simultáneas. PostgreSQL sólo recibe el SHA-256 del refresh token; el JWT completo nunca se persiste. SHA-256 resulta apropiado aquí porque los tokens son valores aleatorios de alta entropía y la comparación se realiza en tiempo constante.
+
+Cada refresh rota el token dentro de una transacción con bloqueo de fila. Presentar de nuevo un token ya rotado revoca la sesión completa, incluido su token más reciente. Logout revoca únicamente la sesión indicada por `sid`; no existe todavía logout global. Un access token emitido antes del logout continúa siendo criptográficamente válido hasta su expiración corta (15 minutos por defecto), pero esa sesión ya no puede renovar tokens.
+
+La migración `003_auth_sessions.sql` borra todos los valores legacy de `users.refresh_token` sin copiarlos. Después de actualizar, las sesiones anteriores deben iniciar login nuevamente.
 
 ## Integración continua
 
-GitHub Actions ejecuta `npm ci`, el smoke test, las protecciones HTTP y las pruebas de migración contra un servicio PostgreSQL 15 real en cada pull request hacia `main` y cada push a `main`. Una ejecución verde valida la Fase 1B sobre una base vacía y sobre el baseline legacy, incluida la idempotencia, subtítulos y el upsert de streams.
+GitHub Actions ejecuta `npm ci`, el smoke test, las protecciones HTTP, migraciones y sesiones contra un servicio PostgreSQL 15 real en cada pull request hacia `main` y cada push a `main`. Una ejecución verde valida bases vacías y legacy, además de rotación, reutilización, revocación, múltiples sesiones y concurrencia de refresh.
 
-`npm audit` también se ejecuta para dar visibilidad, pero permanece informativo mientras se resuelven de forma controlada las vulnerabilidades heredadas. El rediseño de sesiones y refresh tokens continúa pendiente.
+`npm audit` también se ejecuta para dar visibilidad, pero permanece informativo mientras se resuelven de forma controlada las vulnerabilidades heredadas.
 
 ## Documentación técnica
 

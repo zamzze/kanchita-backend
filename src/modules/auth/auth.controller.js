@@ -50,7 +50,7 @@ const refreshHandler = async (req, res, next) => {
 
 const logoutHandler = async (req, res, next) => {
   try {
-    await authService.logout(req.user.sub);
+    await authService.logout(req.user.sub, req.user.sid);
     return ok(res, { message: 'Logged out successfully' });
   } catch (err) {
     next(err);
