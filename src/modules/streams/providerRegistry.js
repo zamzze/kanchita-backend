@@ -16,6 +16,7 @@ const validateProvider = (provider) => {
     qualityHint: 'unknown',
     expensive: provider.strategy === 'browser',
     fallback: provider.strategy === 'browser',
+    enabled: true,
     ...provider,
     requiresBrowser: provider.strategy === 'browser',
   });
@@ -28,7 +29,9 @@ const createProviderRegistry = (providers = []) => {
   return {
     all: () => [...entries],
     compatible: (contentType) => entries.filter((provider) =>
-      contentType === 'movie' ? provider.supportsMovies : provider.supportsEpisodes
+      provider.enabled && (contentType === 'movie'
+        ? provider.supportsMovies
+        : provider.supportsEpisodes)
     ),
     get: (id) => entries.find((provider) => provider.id === id) || null,
   };

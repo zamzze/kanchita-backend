@@ -34,36 +34,50 @@ const createProviderManager = ({
       const result = provider.requiresBrowser
         ? await browserSlots.withSlot(workerId, invoke)
         : await invoke();
-      if (!result?.url) throw new Error('empty provider result');
-      const validationStartedAt = Date.now();
-      const validation = await validator(result.url);
-      await metrics.observe('hls_validation_ms', Date.now() - validationStartedAt);
-      if (!validation.valid) {
-        const error = new Error('invalid provider stream');
-        error.code = validation.code;
+      const results = Array.isArray(result) ? result : [result];
+      if (!results.some((item) => item?.url)) throw new Error('empty provider result');
+      const candidates = [];
+      for (const item of results) {
+        if (!item?.url) continue;
+        const validationStartedAt = Date.now();
+        const validation = await validator(item.url);
+        await metrics.observe('hls_validation_ms', Date.now() - validationStartedAt);
+        if (!validation.valid) {
+          lastErrorCode = validation.code || 'RESOLUTION_FAILED';
+          continue;
+        }
+        const cleanliness = inspectManifestCleanliness(validation.manifest);
+        if (cleanliness === 'ad_marked') {
+          await metrics.increment('ad_marked_stream_total');
+          if (rejectAdMarked) continue;
+        }
+        candidates.push({
+          ...item,
+          provider: provider.id,
+          strategy: provider.strategy,
+          cleanliness,
+          quality: normalizeQuality(item.quality || provider.qualityHint),
+          audioLanguage: normalizeLanguage(
+            item.audioLanguage || item.language || provider.audioLanguages[0]
+          ),
+          subtitleLanguage: normalizeLanguage(item.subtitleLanguage),
+          validated: true,
+        });
+      }
+      if (!candidates.length) {
+        const error = new Error('no valid provider candidates');
+        error.code = lastErrorCode;
         throw error;
       }
-      const cleanliness = inspectManifestCleanliness(validation.manifest);
-      if (cleanliness === 'ad_marked') {
-        await metrics.increment('ad_marked_stream_total');
-        if (rejectAdMarked) throw new Error('ad-marked stream rejected');
-      }
       const duration = Date.now() - startedAt;
+      for (const candidate of candidates) {
+        candidate.avgResolutionMs = candidate.avgResolutionMs ??
+          provider.avgResolutionMs ?? duration;
+      }
       await health.recordSuccess(provider.id, duration);
       await metrics.increment('provider_success_total');
       await metrics.observe('resolver_duration_ms', duration);
-      return {
-        ...result,
-        provider: provider.id,
-        strategy: provider.strategy,
-        cleanliness,
-        quality: normalizeQuality(result.quality || provider.qualityHint),
-        audioLanguage: normalizeLanguage(
-          result.audioLanguage || result.language || provider.audioLanguages[0]
-        ),
-        subtitleLanguage: normalizeLanguage(result.subtitleLanguage),
-        validated: true,
-      };
+      return candidates;
     } catch (error) {
       lastErrorCode = typeof error?.code === 'string' ? error.code : 'RESOLUTION_FAILED';
       const duration = Date.now() - startedAt;
@@ -74,27 +88,29 @@ const createProviderManager = ({
     }
   };
 
-  const resolve = async (context) => {
+  const resolveCandidates = async (context) => {
     lastErrorCode = 'RESOLUTION_FAILED';
     const candidates = [];
     const compatible = registry.compatible(context.contentType);
     for (const strategy of ['direct', 'browser']) {
       for (const provider of compatible.filter((item) => item.strategy === strategy)) {
-        const candidate = await tryProvider(provider, context);
-        if (candidate) candidates.push(candidate);
+        const providerCandidates = await tryProvider(provider, context);
+        if (providerCandidates) candidates.push(...providerCandidates);
       }
       if (candidates.length) break;
     }
-    const selected = candidates.sort(
+    const ranked = candidates.sort(
       (left, right) => streamScore(right) - streamScore(left)
-    )[0];
-    if (selected) return selected;
+    );
+    if (ranked.length) return ranked;
     const error = new Error('No stream provider succeeded');
     error.code = lastErrorCode;
     throw error;
   };
 
-  return { resolve, registry };
+  const resolve = async (context) => (await resolveCandidates(context))[0];
+
+  return { resolve, resolveCandidates, registry };
 };
 
 module.exports = { createProviderManager };

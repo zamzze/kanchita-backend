@@ -139,8 +139,14 @@ test('stream ranking preserves business priority order', () => {
   assert.ok(streamScore({ cleanliness: 'clean', strategy: 'direct', quality: '1080p' }) >
     streamScore({ cleanliness: 'clean', strategy: 'direct', quality: '720p',
       audioLanguage: 'es-419' }));
+  assert.ok(streamScore({ cleanliness: 'clean', strategy: 'direct', quality: '720p',
+    avgResolutionMs: 100 }) >
+    streamScore({ cleanliness: 'clean', strategy: 'direct', quality: '2160p',
+      avgResolutionMs: 5000 }));
   assert.ok(languageScore({ audioLanguage: 'es-419' }) >
     languageScore({ audioLanguage: 'es' }));
+  assert.ok(languageScore({ audioLanguage: 'en', subtitleLanguage: 'es' }) >
+    languageScore({ audioLanguage: 'en' }));
   assert.equal(normalizeLanguage('es-LATAM'), 'es-419');
   assert.equal(normalizeLanguage('en-sub'), 'en');
   assert.equal(normalizeQuality('FullHD 1080'), '1080p');
