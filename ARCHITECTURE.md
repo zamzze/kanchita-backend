@@ -61,11 +61,11 @@ Lista paginada, filtro opcional por género, detalle por UUID local y catálogo 
 
 ### Series y episodios
 
-Lista y detalle de series por UUID local. El detalle añade temporadas calculadas desde episodios. Los episodios se listan por serie y número de temporada. No existe endpoint de detalle de episodio independiente.
+Lista y detalle de series por UUID local. El detalle añade temporadas calculadas desde episodios. Los episodios se listan por serie y número de temporada. `GET /api/series/episodes/:episodeId` expone el detalle publicado por UUID con la metadata de su serie para EpisodeWatch.
 
 ### Historial
 
-Upsert por `(user_id, content_type, content_id)`, listado cronológico y consulta de progreso. Marca completado al 90% si recibe duración. Usa una relación polimórfica hacia película o episodio sin clave foránea.
+Upsert por `(user_id, content_type, content_id)`, listado cronológico y consulta de progreso. Marca completado con la única constante efectiva del backend, 95%, si recibe duración. Una consulta sin fila devuelve cero segundos y `completed=false`. Usa una relación polimórfica hacia película o episodio sin clave foránea.
 
 ### Búsqueda e ingesta bajo demanda
 
@@ -105,6 +105,7 @@ Consulta el caché en `subtitles`, busca primero en SubDL y opcionalmente en Ope
 | GET | `/api/series` | Sí | Listar series |
 | GET | `/api/series/:id` | Sí | Detalle y temporadas |
 | GET | `/api/series/:id/seasons/:season` | Sí | Episodios de temporada |
+| GET | `/api/series/episodes/:episodeId` | Sí | Detalle de episodio por UUID |
 | POST | `/api/history` | Sí | Guardar progreso |
 | GET | `/api/history` | Sí | Listar historial |
 | GET | `/api/history/:content_type/:content_id` | Sí | Consultar progreso |

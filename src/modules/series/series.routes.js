@@ -1,9 +1,17 @@
-const router = require('express').Router();
 const auth   = require('../../middleware/auth');
-const { listSeries, getSeries, getEpisodes } = require('./series.controller');
+const { createSeriesController } = require('./series.controller');
 
-router.get('/',                          auth, listSeries);
-router.get('/:id',                       auth, getSeries);
-router.get('/:id/seasons/:season',       auth, getEpisodes);
+const createSeriesRouter = (service) => {
+  const router = require('express').Router();
+  const { listSeries, getSeries, getEpisodes, getEpisode } =
+    createSeriesController(service);
 
-module.exports = router;
+  router.get('/',                          auth, listSeries);
+  router.get('/episodes/:episodeId',       auth, getEpisode);
+  router.get('/:id/seasons/:season',       auth, getEpisodes);
+  router.get('/:id',                       auth, getSeries);
+  return router;
+};
+
+module.exports = createSeriesRouter();
+module.exports.createSeriesRouter = createSeriesRouter;

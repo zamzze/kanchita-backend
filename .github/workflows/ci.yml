@@ -94,6 +94,9 @@ jobs:
       - name: Run subtitle selection tests explicitly
         run: npm run test:subtitles
 
+      - name: Run history completion contract explicitly
+        run: npm run test:history
+
       - name: Verify resolver process boundary explicitly
         run: npm run test:boundary
 
