@@ -1,15 +1,15 @@
 const pool = require('../config/db');
 
-const findUserByEmail = async (email) => {
-  const { rows } = await pool.query(
+const findUserByEmail = async (email, db = pool) => {
+  const { rows } = await db.query(
     'SELECT id, email, password_hash, display_name, is_active FROM users WHERE email = $1',
     [email]
   );
   return rows[0] || null;
 };
 
-const createUser = async ({ email, passwordHash, displayName }) => {
-  const { rows } = await pool.query(
+const createUser = async ({ email, passwordHash, displayName }, db = pool) => {
+  const { rows } = await db.query(
     `INSERT INTO users (email, password_hash, display_name)
      VALUES ($1, $2, $3)
      RETURNING id, email, display_name, created_at`,
@@ -18,30 +18,8 @@ const createUser = async ({ email, passwordHash, displayName }) => {
   return rows[0];
 };
 
-const saveRefreshToken = async (userId, token) => {
-  await pool.query(
-    'UPDATE users SET refresh_token = $1, updated_at = NOW() WHERE id = $2',
-    [token, userId]
-  );
-};
-
-const findUserByRefreshToken = async (token) => {
-  const { rows } = await pool.query(
-    'SELECT id, email, is_active FROM users WHERE refresh_token = $1',
-    [token]
-  );
-  return rows[0] || null;
-};
-
-const clearRefreshToken = async (userId) => {
-  await pool.query(
-    'UPDATE users SET refresh_token = NULL, updated_at = NOW() WHERE id = $1',
-    [userId]
-  );
-};
-
-const getActiveSubscription = async (userId) => {
-  const { rows } = await pool.query(
+const getActiveSubscription = async (userId, db = pool) => {
+  const { rows } = await db.query(
     `SELECT plan_type FROM subscriptions
      WHERE user_id = $1 AND status = 'active'
        AND (ends_at IS NULL OR ends_at > NOW())
@@ -54,8 +32,5 @@ const getActiveSubscription = async (userId) => {
 module.exports = {
   findUserByEmail,
   createUser,
-  saveRefreshToken,
-  findUserByRefreshToken,
-  clearRefreshToken,
   getActiveSubscription,
 };

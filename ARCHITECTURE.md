@@ -2,7 +2,7 @@
 
 ## Alcance y estado observado
 
-Auditoría de `zamzze/kanchita-backend`, rama `main`, commit `6844ef4`, realizada el 5 de septiembre de 2026. Las Fases 1A–1D añadieron ejecución reproducible, migraciones, CI PostgreSQL y seguridad HTTP básica. Siguen pendientes OpenAPI y una suite funcional completa.
+Auditoría de `zamzze/kanchita-backend`, actualizada desde `main` en `941feff` el 5 de septiembre de 2026. Las Fases 1A–1E añadieron ejecución reproducible, migraciones, CI PostgreSQL, seguridad HTTP básica y sesiones rotativas. Siguen pendientes OpenAPI y cobertura funcional de los demás módulos.
 
 El sistema es un monolito Node.js/CommonJS con Express 4 y acceso directo a PostgreSQL mediante `pg`. No hay ORM. La API, el planificador de ingesta, el scraping con Chromium y el almacenamiento local de subtítulos viven en el mismo proceso/contenedor.
 
@@ -42,7 +42,9 @@ flowchart LR
 
 ### Autenticación
 
-`auth.controller` valida sólo presencia y longitud mínima. `auth.service` usa bcrypt (12 rondas), emite access JWT y refresh JWT, y guarda un único refresh token en texto claro en `users.refresh_token`. El access token incluye `sub`, `email` y `plan`; dura 15 minutos por defecto y el refresh 7 días. El middleware Bearer verifica el access token. Las suscripciones sólo se consultan para calcular `plan_type`; no controlan acceso ni cambian la respuesta de streams.
+`auth.controller` conserva los contratos JSON existentes. `auth.service` usa bcrypt (12 rondas) y crea una sesión independiente por login. El access JWT incluye `sub`, `sid`, `token_type=access` y `plan`; el refresh incluye `sub`, `sid`, `jti` y `token_type=refresh`. Ambos fijan HS256, issuer y audiencias distintas, con secretos separados.
+
+PostgreSQL almacena únicamente SHA-256 del refresh token. La renovación bloquea la fila `auth_sessions` dentro de una transacción, comprueba usuario activo, revocación, expiración y hash, y rota el token. Un hash distinto para un JWT criptográficamente válido se trata como reutilización y revoca esa sesión. Logout revoca sólo el `sid` del access token; otras sesiones siguen activas. No hay blacklist de access tokens, por lo que uno ya emitido vive hasta su expiración corta.
 
 ### Películas
 
@@ -79,7 +81,7 @@ Consulta el caché en `subtitles`, busca en SubDL, descarga ZIP/RAR en memoria, 
 | POST | `/api/auth/register` | Flag | Registrar usuario sólo con `ALLOW_PUBLIC_REGISTRATION=true` |
 | POST | `/api/auth/login` | No | Emitir access/refresh token |
 | POST | `/api/auth/refresh` | No | Rotar refresh token |
-| POST | `/api/auth/logout` | Sí | Borrar refresh token del usuario |
+| POST | `/api/auth/logout` | Sí | Revocar la sesión actual (`sid`) |
 | GET | `/api/movies/genres` | Sí | Listar géneros |
 | GET | `/api/movies` | Sí | Listar películas (`page`, `limit`, `genre_id`) |
 | GET | `/api/movies/:id` | Sí | Detalle por UUID local |
@@ -101,7 +103,8 @@ Consulta el caché en `subtitles`, busca en SubDL, descarga ZIP/RAR en memoria, 
 | Tabla | Propósito | Claves relevantes |
 |---|---|---|
 | `genres` | Catálogo TMDB de géneros | `id` serial; `name`/`slug` únicos |
-| `users` | Identidad y refresh token | UUID; email único |
+| `users` | Identidad | UUID; email único; columna refresh legacy sin uso |
+| `auth_sessions` | Sesiones refresh por cliente | UUID; FK usuario; hash, expiración, uso y revocación |
 | `subscriptions` | Plan activo | FK a usuario |
 | `movies` | Metadatos de películas | UUID; `tmdb_id` único |
 | `series` | Metadatos de series | UUID; `tmdb_id` único |
@@ -116,7 +119,7 @@ Consulta el caché en `subtitles`, busca en SubDL, descarga ZIP/RAR en memoria, 
 
 `database/migrations/` es la fuente de verdad. El runner `database/migrate.js` aplica archivos en orden, registra checksum y fecha en `schema_migrations`, usa un advisory lock y envuelve cada migración pendiente en una transacción. `database/init.sql` incluye los mismos archivos para inicializaciones de PostgreSQL mediante Docker.
 
-La restricción de streams usa `UNIQUE NULLS NOT DISTINCT` de PostgreSQL 15: dos valores `NULL` para el mismo contenido representan el mismo servidor lógico y activan el upsert. Si una base antigua ya contiene duplicados lógicos, la migración falla sin borrarlos para exigir una resolución explícita.
+La restricción de streams usa `UNIQUE NULLS NOT DISTINCT` de PostgreSQL 15: dos valores `NULL` para el mismo contenido representan el mismo servidor lógico y activan el upsert. Si una base antigua ya contiene duplicados lógicos, la migración falla sin borrarlos para exigir una resolución explícita. La migración 003 crea `auth_sessions` e invalida los refresh tokens plaintext legacy, lo que exige un nuevo login tras actualizar.
 
 ## Integraciones externas
 

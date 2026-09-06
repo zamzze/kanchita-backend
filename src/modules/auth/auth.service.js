@@ -1,89 +1,146 @@
-const bcrypt = require('bcryptjs');
+'use strict';
+
+const crypto = require('node:crypto');
+const defaultPool = require('../../config/db');
 const { hashPassword, comparePassword } = require('../../utils/hash');
 const {
   findUserByEmail,
   createUser,
-  saveRefreshToken,
-  findUserByRefreshToken,
-  clearRefreshToken,
   getActiveSubscription,
 } = require('../../db/auth.queries');
-const { signAccessToken, signRefreshToken, verifyRefreshToken } = require('../../utils/jwt');
+const { createAuthSessionStore } = require('../../db/authSessions.queries');
+const {
+  signAccessToken,
+  signRefreshToken,
+  verifyRefreshToken,
+} = require('../../utils/jwt');
+const {
+  hashRefreshToken,
+  refreshTokenHashMatches,
+} = require('../../utils/tokenHash');
 
-const SALT_ROUNDS = 12;
-
-const register = async ({ email, password, displayName }) => {
-  const existing = await findUserByEmail(email);
-  if (existing) {
-    const err = new Error('Email already in use');
-    err.statusCode = 409;
-    throw err;
-  }
-
-  const passwordHash = await hashPassword(password);
-  const user = await createUser({ email, passwordHash, displayName });
-  return user;
+const authError = (message, statusCode) => {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  return error;
 };
 
-const login = async ({ email, password }) => {
-  const user = await findUserByEmail(email);
-  if (!user) {
-    const err = new Error('Invalid credentials');
-    err.statusCode = 401;
-    throw err;
-  }
-
-  if (!user.is_active) {
-    const err = new Error('Account disabled');
-    err.statusCode = 403;
-    throw err;
-  }
-
-  const valid = await comparePassword(password, user.password_hash)
-  if (!valid) {
-    const err = new Error('Invalid credentials');
-    err.statusCode = 401;
-    throw err;
-  }
-
-  const subscription = await getActiveSubscription(user.id);
-  const plan_type    = subscription?.plan_type || 'free';
-
-  const accessToken  = signAccessToken({ id: user.id, email: user.email, plan_type });
-  const refreshToken = signRefreshToken({ id: user.id });
-
-  await saveRefreshToken(user.id, refreshToken);
+const issueTokenPair = ({ userId, sessionId, planType }) => {
+  const refreshToken = signRefreshToken({
+    id: userId,
+    sessionId,
+    tokenId: crypto.randomUUID(),
+  });
+  const refreshPayload = verifyRefreshToken(refreshToken);
 
   return {
-    user: { id: user.id, email: user.email, display_name: user.display_name, plan_type },
-    accessToken,
+    accessToken: signAccessToken({
+      id: userId,
+      sessionId,
+      plan_type: planType,
+    }),
     refreshToken,
+    refreshTokenHash: hashRefreshToken(refreshToken),
+    expiresAt: new Date(refreshPayload.exp * 1000),
   };
 };
 
-const refresh = async (token) => {
-  const payload = verifyRefreshToken(token); // lanza si inválido
-  const user    = await findUserByRefreshToken(token);
+const createAuthService = ({ pool = defaultPool } = {}) => {
+  const sessions = createAuthSessionStore(pool);
 
-  if (!user || user.id !== payload.sub) {
-    const err = new Error('Invalid refresh token');
-    err.statusCode = 401;
-    throw err;
-  }
+  const register = async ({ email, password, displayName }) => {
+    const existing = await findUserByEmail(email, pool);
+    if (existing) throw authError('Email already in use', 409);
 
-  const subscription = await getActiveSubscription(user.id);
-  const plan_type    = subscription?.plan_type || 'free';
+    const passwordHash = await hashPassword(password);
+    return createUser({ email, passwordHash, displayName }, pool);
+  };
 
-  const accessToken  = signAccessToken({ id: user.id, email: user.email, plan_type });
-  const refreshToken = signRefreshToken({ id: user.id });
+  const login = async ({ email, password }) => {
+    const user = await findUserByEmail(email, pool);
+    if (!user) throw authError('Invalid credentials', 401);
+    if (!user.is_active) throw authError('Account disabled', 403);
 
-  await saveRefreshToken(user.id, refreshToken);
+    const valid = await comparePassword(password, user.password_hash);
+    if (!valid) throw authError('Invalid credentials', 401);
 
-  return { accessToken, refreshToken };
+    const subscription = await getActiveSubscription(user.id, pool);
+    const planType = subscription?.plan_type || 'free';
+    const sessionId = crypto.randomUUID();
+    const tokens = issueTokenPair({ userId: user.id, sessionId, planType });
+
+    await sessions.createSession({
+      id: sessionId,
+      userId: user.id,
+      refreshTokenHash: tokens.refreshTokenHash,
+      expiresAt: tokens.expiresAt,
+    });
+
+    return {
+      user: {
+        id: user.id,
+        email: user.email,
+        display_name: user.display_name,
+        plan_type: planType,
+      },
+      accessToken: tokens.accessToken,
+      refreshToken: tokens.refreshToken,
+    };
+  };
+
+  const refresh = async (token) => {
+    const payload = verifyRefreshToken(token);
+    const result = await sessions.withLockedSession(
+      { sessionId: payload.sid, userId: payload.sub },
+      async (client, session) => {
+        if (!session) return { status: 'invalid' };
+
+        if (!session.is_active) {
+          await sessions.revokeLockedSession(client, session.id);
+          return { status: 'disabled' };
+        }
+
+        if (session.revoked_at || new Date(session.expires_at) <= new Date()) {
+          await sessions.revokeLockedSession(client, session.id);
+          return { status: 'invalid' };
+        }
+
+        if (!refreshTokenHashMatches(token, session.refresh_token_hash)) {
+          await sessions.revokeLockedSession(client, session.id);
+          return { status: 'invalid' };
+        }
+
+        const tokens = issueTokenPair({
+          userId: session.user_id,
+          sessionId: session.id,
+          planType: session.plan_type,
+        });
+        await sessions.rotateSession(client, {
+          sessionId: session.id,
+          refreshTokenHash: tokens.refreshTokenHash,
+          expiresAt: tokens.expiresAt,
+        });
+        return { status: 'rotated', tokens };
+      }
+    );
+
+    if (result.status === 'disabled') throw authError('Account disabled', 403);
+    if (result.status !== 'rotated') throw authError('Invalid refresh token', 401);
+
+    return {
+      accessToken: result.tokens.accessToken,
+      refreshToken: result.tokens.refreshToken,
+    };
+  };
+
+  const logout = async (userId, sessionId) => {
+    await sessions.revokeSession(userId, sessionId);
+  };
+
+  return { register, login, refresh, logout };
 };
 
-const logout = async (userId) => {
-  await clearRefreshToken(userId);
+module.exports = {
+  ...createAuthService(),
+  createAuthService,
 };
-
-module.exports = { register, login, refresh, logout };

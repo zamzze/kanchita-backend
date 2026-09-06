@@ -29,6 +29,9 @@ module.exports = {
   JWT_REFRESH_SECRET: process.env.JWT_REFRESH_SECRET,
   JWT_EXPIRES_IN:     process.env.JWT_EXPIRES_IN  || '15m',
   JWT_REFRESH_IN:     process.env.JWT_REFRESH_IN  || '7d',
+  JWT_ISSUER:         process.env.JWT_ISSUER || 'kanchita-api',
+  JWT_ACCESS_AUDIENCE: process.env.JWT_ACCESS_AUDIENCE || 'kanchita-clients',
+  JWT_REFRESH_AUDIENCE: process.env.JWT_REFRESH_AUDIENCE || 'kanchita-refresh',
   NODE_ENV:           process.env.NODE_ENV        || 'development',
   TMDB_API_KEY:       process.env.TMDB_API_KEY,   // nuevo
   PROVIDER_A_URL:     process.env.PROVIDER_A_URL,
