@@ -25,6 +25,7 @@ const { runMigrations } = require('../../database/migrate');
 const { createApp } = require('../../src/app');
 const { createHlsValidator } = require('../../src/modules/streams/hlsValidator');
 const { createResolutionQueue } = require('../../src/modules/streams/resolutionQueue');
+const { createSeriesService } = require('../../src/modules/series/series.service');
 const { createStreamProcessor } = require('../../src/modules/streams/streamProcessor');
 const { createStreamsService } = require('../../src/modules/streams/streams.service');
 const { createStreamWorker } = require('../../src/workers/streamResolutionWorker');
@@ -83,6 +84,7 @@ test(
     });
     const app = createApp({
       streamsService,
+      seriesService: createSeriesService({ db: pool }),
       corsOrigins: ['https://pwa.example.test'],
       apiLimiter: (req, res, next) => next(),
     });
@@ -173,6 +175,10 @@ test(
       assert.equal(ready.status, 200);
       assert.equal(ready.body.data.content_type, 'movie');
       assert.equal(ready.body.data.content_id, movie.id);
+      assert.equal(ready.body.data.status, 'ready');
+      assert.equal(ready.body.data.stream.url, `${baseUrl}/movie.m3u8`);
+      assert.equal(ready.body.data.stream.type, 'hls');
+      assert.deepEqual(ready.body.data.subtitles, []);
       assert.equal(ready.body.data.streams[0].stream_url, `${baseUrl}/movie.m3u8`);
     });
 
@@ -182,6 +188,7 @@ test(
         .get(`/api/streams/movie/${missingId}`)
         .set('Authorization', `Bearer ${token}`);
       assert.equal(response.status, 404);
+      assert.equal(response.body.code, 'STREAM_NOT_AVAILABLE');
       const jobs = await pool.query(
         'SELECT id FROM stream_resolution_jobs WHERE content_id = $1',
         [missingId]
@@ -234,6 +241,72 @@ test(
       assert.equal(response.body.data.code, 'STREAM_RESOLUTION_PENDING');
       const job = await queue.findActiveJob('episode', episode.id);
       assert.equal(job.content_type, 'episode');
+
+      const detail = await request(app)
+        .get(`/api/series/episodes/${episode.id}`)
+        .set('Authorization', `Bearer ${token}`);
+      assert.equal(detail.status, 200);
+      assert.equal(detail.body.data.id, episode.id);
+      assert.equal(detail.body.data.series_id, series.id);
+      assert.equal(detail.body.data.series_title, series.title);
+      assert.equal(detail.body.data.season_number, 1);
+      assert.equal(detail.body.data.episode_number, 1);
+
+      await pool.query(
+        `INSERT INTO streams (
+           content_type, content_id, server_name, stream_url, stream_type,
+           status, expires_at, last_verified_at, is_active,
+           audio_language, subtitle_language
+         ) VALUES ('episode', $1, 'HD', $2, 'direct', 'ready',
+           NOW() + INTERVAL '1 hour', NOW(), TRUE, 'en', 'es')`,
+        [episode.id, `${baseUrl}/episode.m3u8`]
+      );
+      const ready = await request(app)
+        .get(`/api/streams/episode/${episode.id}`)
+        .set('Authorization', `Bearer ${token}`);
+      assert.equal(ready.status, 200);
+      assert.equal(ready.body.data.status, 'ready');
+      assert.equal(ready.body.data.stream.url, `${baseUrl}/episode.m3u8`);
+      assert.equal(ready.body.data.stream.audio_language, 'en');
+      assert.equal(ready.body.data.stream.subtitle_language, 'es');
+
+      const prepared = await request(app)
+        .post(`/api/streams/episode/${episode.id}/prepare`)
+        .set('Authorization', `Bearer ${token}`);
+      assert.equal(prepared.status, 200);
+      assert.equal(prepared.body.data.code, 'STREAM_ALREADY_READY');
+
+      const missing = await request(app)
+        .get(`/api/series/episodes/${crypto.randomUUID()}`)
+        .set('Authorization', `Bearer ${token}`);
+      assert.equal(missing.status, 404);
+      assert.equal(missing.body.code, 'EPISODE_NOT_FOUND');
+
+      const unavailableEpisode = (await pool.query(
+        `INSERT INTO episodes
+           (series_id, season_number, episode_number, title, is_published)
+         VALUES ($1, 1, 2, 'Unavailable', TRUE) RETURNING *`,
+        [series.id]
+      )).rows[0];
+      await pool.query(
+        `INSERT INTO streams (
+           content_type, content_id, server_name, stream_type, is_active,
+           status, failure_count, last_failure_at, next_retry_at, last_error_code
+         ) VALUES ('episode', $1, 'HD', 'direct', TRUE, 'failed', 1, NOW(),
+           NOW() + INTERVAL '10 minutes', 'RESOLUTION_FAILED')`,
+        [unavailableEpisode.id]
+      );
+      const unavailable = await request(app)
+        .get(`/api/streams/episode/${unavailableEpisode.id}`)
+        .set('Authorization', `Bearer ${token}`);
+      assert.equal(unavailable.status, 503);
+      assert.equal(unavailable.body.code, 'STREAM_TEMPORARILY_UNAVAILABLE');
+
+      const missingStream = await request(app)
+        .get(`/api/streams/episode/${crypto.randomUUID()}`)
+        .set('Authorization', `Bearer ${token}`);
+      assert.equal(missingStream.status, 404);
+      assert.equal(missingStream.body.code, 'STREAM_NOT_AVAILABLE');
     });
   }
 );

@@ -1,7 +1,11 @@
 const pool = require('../config/db');
+const COMPLETION_THRESHOLD = 0.95;
 
-const upsertProgress = async ({ userId, contentType, contentId, progressSeconds, durationSeconds }) => {
-  const { rows } = await pool.query(
+const upsertProgress = async (
+  { userId, contentType, contentId, progressSeconds, durationSeconds },
+  db = pool
+) => {
+  const { rows } = await db.query(
     `INSERT INTO watch_history
        (user_id, content_type, content_id, progress_seconds, duration_seconds,
         completed, last_watched_at)
@@ -16,7 +20,7 @@ const upsertProgress = async ({ userId, contentType, contentId, progressSeconds,
     [
       userId, contentType, contentId,
       progressSeconds, durationSeconds,
-      durationSeconds ? progressSeconds >= durationSeconds * 0.9 : false,
+      durationSeconds ? progressSeconds >= durationSeconds * COMPLETION_THRESHOLD : false,
     ]
   );
   return rows[0];
@@ -55,4 +59,4 @@ const findOne = async (userId, contentType, contentId) => {
   return rows[0] || null;
 };
 
-module.exports = { upsertProgress, findByUser, findOne };
+module.exports = { COMPLETION_THRESHOLD, upsertProgress, findByUser, findOne };

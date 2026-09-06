@@ -160,6 +160,9 @@ TEST_DB_URL=postgresql://user:password@localhost:5432/test_db npm run test:db
 
 La base indicada debe ser exclusiva para pruebas. Los tests crean y eliminan esquemas aislados dentro de ella. `npm test` ejecuta tanto `test:db` como `test:auth` cuando `TEST_DB_URL` está definido.
 
+El contrato concreto que debe consumir la PWA está en
+[`docs/BACKEND_INTEGRATION_TODO.md`](docs/BACKEND_INTEGRATION_TODO.md).
+
 ## Sesiones de autenticación
 
 Cada login crea una fila independiente en `auth_sessions`, de modo que navegador, teléfono y TV pueden mantener sesiones simultáneas. PostgreSQL sólo recibe el SHA-256 del refresh token; el JWT completo nunca se persiste. SHA-256 resulta apropiado aquí porque los tokens son valores aleatorios de alta entropía y la comparación se realiza en tiempo constante.
@@ -193,6 +196,12 @@ Si no hay stream usable, `GET /api/streams/movie/:id` y `GET /api/streams/episod
 
 El cliente consulta de nuevo el mismo endpoint. Obtiene `200` cuando `streams` contiene una fila usable, `202` mientras exista trabajo activo y `503 STREAM_TEMPORARILY_UNAVAILABLE` durante el backoff del lifecycle. Un ID inexistente continúa devolviendo `404` y nunca crea un job.
 
+El `200` ready incluye de forma aditiva `status=ready`, un `stream` primario
+normalizado (`url`, `type=hls`, calidad, idiomas y expiración) y
+`subtitles[]`. También conserva `streams[]`, `subtitle_url` y todos los
+campos históricos para no romper clientes existentes. El código estable para
+un contenido inexistente es `STREAM_NOT_AVAILABLE`.
+
 `stream_resolution_jobs` admite `pending`, `processing`, `completed` y `failed`. Un índice único parcial garantiza un solo job `pending|processing` por `(content_type, content_id)`. Cada worker reclama una fila mediante `FOR UPDATE SKIP LOCKED`, asigna `locked_by`/`locked_at` y confirma la transacción antes de llamar al resolver. La red y Chromium nunca se ejecutan dentro de una transacción o lock PostgreSQL.
 
 `attempt_count` aumenta únicamente cuando un worker reclama trabajo real, nunca por enqueue, polling o recuperación de lease, y no puede superar `max_attempts`. Los fallos recuperables reintentan con backoff de 30 segundos, 2 minutos y 5 minutos. Los jobs cuyo lease expiró vuelven a `pending`, o terminan `failed` si agotaron intentos. El lease debe superar timeout + kill grace por al menos 30 segundos (defaults: 180 s frente a 90 s + 2 s); una configuración insegura impide iniciar el worker. Tras `SIGINT`/`SIGTERM`, deja de iniciar claims, termina el árbol resolver activo y espera que quede recolectado antes de cerrar PostgreSQL. Películas y episodios comparten cola, procesador, validator y lifecycle.
@@ -206,6 +215,18 @@ Los endpoints autenticados `POST /api/streams/movie/:id/prepare` y `POST /api/st
 El worker reclama por `priority DESC, run_after ASC, created_at ASC`. El prewarm acotado prioriza expiración próxima y actividad reciente; al consumir un episodio puede preparar sólo su siguiente episodio publicado. Un stream aún válido próximo a vencer sigue sirviéndose y recibe un job `refresh`: si el refresh falla, la URL vigente no se degrada antes de expirar.
 
 `ProviderManager` prueba estrategias directas antes del fallback browser. Los proveedores declaran capacidades; el único productivo actual es `provider_c`, clasificado como browser/costoso/fallback y ejecutado dentro del child aislado. Antes de Chromium adquiere un slot global PostgreSQL con lease renovable. Varios workers pueden reclamar jobs distintos, pero por defecto sólo uno entra al resolver browser; un crash libera capacidad al vencer el lease.
+
+El worker renueva además el lease del job mientras lo procesa. Sólo el
+`locked_by` vigente puede renovarlo; un job completado no puede hacerlo. La
+falta temporal de browser usa `BROWSER_CAPACITY_UNAVAILABLE`, reintenta con
+backoff de job/stream y no penaliza la salud ni abre el circuito del provider.
+
+## Contrato MVP de episodios e historial
+
+`GET /api/series/episodes/:episodeId` devuelve por UUID la metadata publicada
+que necesita EpisodeWatch, incluida su serie. El progreso inexistente devuelve
+un objeto estable con cero segundos. El backend usa una sola definición de
+completado: 95% de la duración.
 
 El manifest validado se inspecciona pasivamente como `clean`, `unknown` o `ad_marked`; no se reescribe ni se eliminan segmentos. Audio y subtítulo se normalizan por separado, conservando compatibilidad con `en-sub`. SubDL permanece primero; OpenSubtitles REST es un fallback opcional desactivado por defecto y requiere sus propias credenciales.
 
