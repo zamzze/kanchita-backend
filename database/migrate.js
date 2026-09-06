@@ -4,6 +4,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { Pool } = require('pg');
+const { redactSensitive } = require('../src/utils/redact');
 
 const DEFAULT_MIGRATIONS_DIR = path.join(__dirname, 'migrations');
 const LOCK_NAME = 'kanchita_schema_migrations';
@@ -119,7 +120,7 @@ const main = async () => {
 
 if (require.main === module) {
   main().catch((error) => {
-    console.error(`[Migrate] ${error.message}`);
+    console.error(`[Migrate] ${redactSensitive(error.message)}`);
     process.exitCode = 1;
   });
 }

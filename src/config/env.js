@@ -6,6 +6,16 @@ const required = [
   'TMDB_API_KEY',       // nuevo
 ];
 
+const parseCorsOrigins = (value = '') =>
+  [...new Set(
+    value
+      .split(',')
+      .map((origin) => origin.trim().replace(/\/$/, ''))
+      .filter(Boolean)
+  )];
+
+const isExplicitlyEnabled = (value) => value === 'true';
+
 required.forEach((key) => {
   if (!process.env[key]) {
     throw new Error(`Missing required env var: ${key}`);
@@ -22,5 +32,11 @@ module.exports = {
   NODE_ENV:           process.env.NODE_ENV        || 'development',
   TMDB_API_KEY:       process.env.TMDB_API_KEY,   // nuevo
   PROVIDER_A_URL:     process.env.PROVIDER_A_URL,
-  API_BASE_URL: process.env.API_BASE_URL
+  API_BASE_URL:       process.env.API_BASE_URL,
+  CORS_ORIGINS:       parseCorsOrigins(process.env.CORS_ORIGINS),
+  ALLOW_PUBLIC_REGISTRATION: isExplicitlyEnabled(
+    process.env.ALLOW_PUBLIC_REGISTRATION
+  ),
+  parseCorsOrigins,
+  isExplicitlyEnabled,
 };

@@ -29,6 +29,10 @@ La configuración incluye conexión PostgreSQL, secretos JWT, URL pública del A
 
 Al ejecutar Node directamente en el host, cambia el hostname de `DB_URL` de `postgres` a `localhost`. Dentro de Docker Compose debe permanecer `postgres`.
 
+`CORS_ORIGINS` es una lista de orígenes web exactos separados por comas. Las peticiones de clientes nativos o servidor-a-servidor sin cabecera `Origin` siguen permitidas. Una petición de navegador con un origen no configurado recibe `403`; no hardcodees aquí el futuro dominio del VPS.
+
+El registro público está cerrado por defecto. `ALLOW_PUBLIC_REGISTRATION` sólo lo habilita cuando su valor es exactamente `true`; úsalo temporalmente para aprovisionamiento controlado y vuelve a `false` después. El login permanece público.
+
 ## Instalación reproducible
 
 ```bash
@@ -97,7 +101,15 @@ El Compose actual es únicamente para desarrollo. No debe utilizarse como config
 npm test
 ```
 
-El smoke test fuerza `NODE_ENV=test`, carga la aplicación Express y comprueba que no se programe la ingesta. Utiliza configuración ficticia, no abre una conexión PostgreSQL y no llama a TMDB, SubDL ni proveedores de streams. `npm test` también descubre las pruebas PostgreSQL; si `TEST_DB_URL` no está definido, se muestran como omitidas.
+El smoke test fuerza `NODE_ENV=test`, carga la aplicación Express y comprueba que no se programe la ingesta. Utiliza configuración ficticia, no abre una conexión PostgreSQL y no llama a TMDB, SubDL ni proveedores de streams. `npm test` también ejecuta las protecciones HTTP y descubre las pruebas PostgreSQL; si `TEST_DB_URL` no está definido, estas últimas se muestran como omitidas.
+
+Para ejecutar únicamente los tests HTTP:
+
+```bash
+npm run test:http
+```
+
+La resolución mediante `/api/subtitles` requiere Bearer JWT. Los `.vtt` ya generados continúan disponibles en `/subtitles` para el reproductor; CORS y `Cross-Origin-Resource-Policy: cross-origin` limitan/permiten su consumo desde los orígenes configurados.
 
 Para ejecutar explícitamente las pruebas de migración contra PostgreSQL 15:
 
@@ -109,9 +121,9 @@ La base indicada debe ser exclusiva para pruebas. Los tests crean y eliminan esq
 
 ## Integración continua
 
-GitHub Actions ejecuta `npm ci`, el smoke test y las pruebas de migración contra un servicio PostgreSQL 15 real en cada pull request hacia `main` y cada push a `main`. Una ejecución verde valida la Fase 1B sobre una base vacía y sobre el baseline legacy, incluida la idempotencia, subtítulos y el upsert de streams.
+GitHub Actions ejecuta `npm ci`, el smoke test, las protecciones HTTP y las pruebas de migración contra un servicio PostgreSQL 15 real en cada pull request hacia `main` y cada push a `main`. Una ejecución verde valida la Fase 1B sobre una base vacía y sobre el baseline legacy, incluida la idempotencia, subtítulos y el upsert de streams.
 
-`npm audit` también se ejecuta para dar visibilidad, pero permanece informativo mientras se resuelven de forma controlada las vulnerabilidades heredadas. La seguridad HTTP/JWT continúa pendiente y no forma parte de este workflow.
+`npm audit` también se ejecuta para dar visibilidad, pero permanece informativo mientras se resuelven de forma controlada las vulnerabilidades heredadas. El rediseño de sesiones y refresh tokens continúa pendiente.
 
 ## Documentación técnica
 

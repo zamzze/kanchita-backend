@@ -7,8 +7,6 @@ const AdmZip   = require('adm-zip');
 const pool     = require('../../config/db');
 
 const SUBTITLES_DIR = path.join(__dirname, '../../../public/subtitles');
-const SUBDL_API_KEY = process.env.SUBDL_API_KEY;
-
 // Crear directorio si no existe
 if (!fs.existsSync(SUBTITLES_DIR)) {
     fs.mkdirSync(SUBTITLES_DIR, { recursive: true });
@@ -63,7 +61,7 @@ const findSubtitle = async (tmdbId, type, season = null, episode = null) => {
         url += `&season_number=${season}&episode_number=${episode}`;
     }
 
-    console.log(`[Subtitles] SubDL URL: ${url}`);
+    console.log(`[Subtitles] Consultando SubDL para tmdb:${tmdbId} (${type})`);
     const data = await httpsGetJson(url);
 
     if (!data.status || !data.subtitles?.length) return null;
@@ -125,7 +123,7 @@ function frameToTime(frame, fps) {
 // Descargar zip/rar y extraer .srt → .vtt
 const downloadAndConvert = async (zipUrl, contentId, season = null, episode = null) => {
     const fullUrl = `https://dl.subdl.com${zipUrl}`;
-    console.log(`[Subtitles] Descargando: ${fullUrl}`);
+    console.log('[Subtitles] Descargando archivo seleccionado');
 
     const buffer = await httpsGet(fullUrl);
     const isRar  = fullUrl.toLowerCase().endsWith('.rar');
@@ -167,7 +165,7 @@ const downloadAndConvert = async (zipUrl, contentId, season = null, episode = nu
             throw new Error('No se encontró archivo .srt o .sub en el RAR');
         }
 
-        console.log(`[Subtitles] Extrayendo del RAR: ${targetFile.name}`);
+        console.log('[Subtitles] Extrayendo archivo compatible del RAR');
         const extracted  = extractor.extract({ files: [targetFile.name] });
         const files      = [...extracted.files];
         const rawContent = Buffer.from(files[0].extraction);
@@ -179,8 +177,6 @@ const downloadAndConvert = async (zipUrl, contentId, season = null, episode = nu
 
         if (isSub) {
     console.log(`[Subtitles] Convirtiendo .sub, líneas: ${rawText.split('\n').length}`);
-    console.log(`[Subtitles] Primera línea: ${rawText.split('\n')[0]}`);
-
     const lines = rawText.split('\n');
 
     // Detectar formato SubViewer (tiene [INFORMATION] header)
@@ -239,7 +235,6 @@ const downloadAndConvert = async (zipUrl, contentId, season = null, episode = nu
 
     } else {
         // ZIP normal
-        const AdmZip  = require('adm-zip');
         const zip     = new AdmZip(buffer);
         const entries = zip.getEntries();
 
@@ -270,7 +265,7 @@ const downloadAndConvert = async (zipUrl, contentId, season = null, episode = nu
     const filePath = path.join(SUBTITLES_DIR, fileName);
     fs.writeFileSync(filePath, vttContent, { encoding: 'utf8' });
 
-    console.log(`[Subtitles] Guardado: ${filePath}`);
+    console.log(`[Subtitles] VTT guardado para contenido ${contentId}`);
     return `/subtitles/${fileName}`;
 };
 

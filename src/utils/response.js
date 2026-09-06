@@ -3,7 +3,16 @@ const ok = (res, data, statusCode = 200) =>
 
 const created = (res, data) => ok(res, data, 201);
 
-const error = (res, message, statusCode = 400) =>
-  res.status(statusCode).json({ success: false, message });
+const codeForStatus = (statusCode) => ({
+  400: 'BAD_REQUEST',
+  401: 'UNAUTHORIZED',
+  403: 'FORBIDDEN',
+  404: 'NOT_FOUND',
+  409: 'CONFLICT',
+  429: 'RATE_LIMITED',
+}[statusCode] || 'REQUEST_ERROR');
 
-module.exports = { ok, created, error };
+const error = (res, message, statusCode = 400, code = codeForStatus(statusCode)) =>
+  res.status(statusCode).json({ success: false, code, message });
+
+module.exports = { ok, created, error, codeForStatus };
