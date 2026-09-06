@@ -2,7 +2,7 @@
 
 ## Alcance y estado observado
 
-Auditoría de `zamzze/kanchita-backend`, actualizada desde `main` en `aadbd6e` el 5 de septiembre de 2026. La Fase 1 cerró ejecución reproducible, migraciones, CI PostgreSQL, seguridad HTTP básica y sesiones rotativas. Las Fases 2A–2B añaden lifecycle confiable y resolución asíncrona persistente para streams directos sin cambiar el proveedor existente.
+Auditoría de `zamzze/kanchita-backend`, actualizada desde `main` en `22e77f2` el 6 de septiembre de 2026. La Fase 1 cerró ejecución reproducible, migraciones, CI PostgreSQL, seguridad HTTP básica y sesiones rotativas. Las Fases 2A–2C añaden lifecycle confiable, resolución asíncrona persistente y aislamiento real del resolver sin cambiar el proveedor existente.
 
 El sistema usa Node.js/CommonJS con Express 4 y acceso directo a PostgreSQL mediante `pg`. No hay ORM. API y worker de streams son procesos separados que comparten código y PostgreSQL; el planificador de ingesta y el almacenamiento local de subtítulos todavía pertenecen al proceso API.
 
@@ -20,11 +20,13 @@ flowchart LR
   Catalog --> PG
   Content --> TMDB[TMDB API]
   Content --> PG
-  Content --> Scraper[Puppeteer + Chromium]
   Streams -->|enqueue / poll| PG
   PG --> Queue[Persistent stream jobs]
   Queue --> Worker[Stream resolution worker]
-  Worker --> Scraper
+  Worker --> Executor[Resolver executor]
+  Executor -->|fork + IPC| Child[Resolver child process]
+  Child --> Scraper[Puppeteer + Chromium]
+  Child -->|SUCCESS / FAILURE| Executor
   Worker --> Validator[SSRF-safe HLS validator]
   Worker --> PG
   Scraper --> Provider[Cineby / Vidfast chain]
@@ -68,11 +70,11 @@ Busca hasta cinco resultados en TMDB y comprueba uno por uno si ya están en el 
 
 ### Streams
 
-Películas y episodios entran en un único flujo de lifecycle. Una fila `ready`, no expirada y verificada recientemente sale de caché. Filas `unknown`/`stale` se comprueban con un GET limitado que sólo lee el manifest y exige `#EXTM3U`; si hace falta una URL nueva, el API crea/reutiliza un job y responde `202`. El adapter del resolver sólo se invoca desde el worker y puede devolver URL, proveedor y expiración opcional; si falta expiración se aplica TTL configurable.
+Películas y episodios entran en un único flujo de lifecycle. Una fila `ready`, no expirada y verificada recientemente sale de caché. Filas `unknown`/`stale` se comprueban con un GET limitado que sólo lee el manifest y exige `#EXTM3U`; si hace falta una URL nueva, el API crea/reutiliza un job y responde `202`. El adapter del resolver sólo se carga dentro del child creado por el worker y puede devolver URL, proveedor y expiración opcional; si falta expiración se aplica TTL configurable.
 
 El validador aplica una frontera SSRF fail-closed antes de la URL inicial y de cada redirect. Resuelve todas las IP, rechaza rangos no públicos IPv4/IPv6 y entrega al socket una resolución fijada a las direcciones aprobadas. Los fixtures localhost sólo se habilitan mediante una opción inyectada explícitamente en tests; producción la deniega por defecto.
 
-Los estados persistentes del stream son `unknown`, `ready`, `stale` y `failed`. Éxitos actualizan resolución/verificación y reinician fallos. Fallos incrementan una vez por intento y aplican backoff 30 s/2 min/5 min/15 min. Los jobs usan `pending`, `processing`, `completed` y `failed`, deduplicación mediante índice parcial, claim `FOR UPDATE SKIP LOCKED`, lease y retries 30 s/2 min/5 min. `attempt_count` sólo aumenta al claim y tiene constraint `attempt_count <= max_attempts`; recuperar un lease no cuenta como ejecución nueva. La lease mínima es timeout + 30 s. Un timeout es terminal para el job y solicita reciclar el worker porque el adapter Chromium aún no permite cancelación cooperativa. No hay una transacción abierta durante Chromium/red. El backend no descarga segmentos ni hace proxy de playback.
+Los estados persistentes del stream son `unknown`, `ready`, `stale` y `failed`. Éxitos actualizan resolución/verificación y reinician fallos. Fallos incrementan una vez por intento y aplican backoff 30 s/2 min/5 min/15 min. Los jobs usan `pending`, `processing`, `completed` y `failed`, deduplicación mediante índice parcial, claim `FOR UPDATE SKIP LOCKED`, lease y retries 30 s/2 min/5 min. `attempt_count` sólo aumenta al claim y tiene constraint `attempt_count <= max_attempts`; recuperar un lease no cuenta como ejecución nueva. La lease mínima es timeout + kill grace + 30 s. El executor limita cada worker a un child, valida IPC y no resuelve hasta haber recolectado el proceso. En Linux usa un PGID aislado para terminar también Chromium; crashes normales no derriban ni obligan a reciclar el worker. No hay una transacción abierta durante Chromium/red. El backend no descarga segmentos ni hace proxy de playback.
 
 ### Subtítulos
 

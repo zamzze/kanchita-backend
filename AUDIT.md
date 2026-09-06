@@ -15,6 +15,7 @@ Alcance: rama `main`, commit `6844ef4`, 5.087 archivos versionados; 5.024 perten
 - **Fase 1E:** resuelve A-06 con sesiones múltiples, hash de refresh tokens, rotación transaccional, revocación por sesión, detección básica de reutilización y JWT tipados con parámetros explícitos.
 - **Fase 2A:** remedia el núcleo de A-04 con estados, TTL, validación HLS acotada, expiración, fallos/backoff y single-flight PostgreSQL.
 - **Fase 2B:** desacopla la resolución pesada del request mediante cola PostgreSQL, worker independiente, lease, claim atómico y retries limitados.
+- **Fase 2C:** aísla ProviderC/Chromium en un child process con IPC validado y terminación acotada del process group Linux.
 - La rotación de secretos, reescritura del historial y los demás hallazgos continúan pendientes.
 
 ## CRÍTICO
@@ -53,7 +54,7 @@ SubDL registra la URL que contiene `api_key`. ProviderC registra URLs completas 
 
 **Remediación parcial:** ya no se registran URLs SubDL con clave, playlists HLS, URLs de frames, rutas del VTT ni contenido del subtítulo. Una utilidad mínima redacta Bearer tokens, parámetros sensibles, credenciales PostgreSQL y URLs `.m3u8` en mensajes de error. Queda pendiente logging estructurado.
 
-### A-04 — Caché de streams incorrecta para URLs temporales — PARCIALMENTE RESUELTO EN FASES 2A–2B
+### A-04 — Caché de streams incorrecta para URLs temporales — PARCIALMENTE RESUELTO EN FASES 2A–2C
 
 La tabla no tiene `expires_at`, `last_verified_at`, estado de fallo ni origen/versionado. Todo stream directo activo se considera válido para siempre. Un 403/404 aguas arriba no causa refresh y el API devuelve URLs potencialmente caducadas. El scraper puede iniciar varias resoluciones iguales en paralelo y escribir duplicados.
 
@@ -62,6 +63,8 @@ La tabla no tiene `expires_at`, `last_verified_at`, estado de fallo ni origen/ve
 **Remediación parcial:** `004_stream_lifecycle.sql` incorpora proveedor, estado restringido, expiración, resolución, verificación, contador de fallos y backoff. `005_stream_resolution_jobs.sql` desacopla la resolución mediante un job persistente deduplicado; el API responde `202` y el worker reclama con `SKIP LOCKED`, lease y retries limitados. La validación bloquea destinos no públicos, revisa todas las respuestas DNS y cada redirect, y fija la IP aprobada en la conexión. Cuando el resolver no declara expiración se aplica TTL de 60 minutos. Sigue pendiente que proveedores futuros aporten expiración explícita y comprobar fallos reales de playback/segmentos desde el cliente; esta fase no crea un proxy HLS.
 
 **Cierre 2B:** se retiraron el engine de scraping sin consumidores y el script manual Puppeteer que permitían saltarse la cola. El único import productivo de `ProviderC` queda en `streamResolver`, consumido exclusivamente por `streamProcessor` dentro del worker. Los timeouts son terminales y fuerzan reciclaje del worker para no solapar retries con Chromium no cancelable; 2C debe aportar cancelación/aislamiento real.
+
+**Remediación 2C:** `streamProcessor` consume `ResolverExecutor`; el adapter/ProviderC sólo se carga dentro de `streamResolverChild`. El timeout mata el grupo aislado del child, espera su exit y recién entonces permite retry o un job posterior. Crashes, IPC inválido y canal roto se normalizan sin derribar el worker. En Windows la terminación de árbol depende de `taskkill /T` y tiene fallback al child; la garantía fuerte y probada del árbol corresponde a Linux, plataforma objetivo del VPS.
 
 ### A-05 — Controles de abuso insuficientes para Puppeteer — PARCIALMENTE RESUELTO EN FASE 1D
 

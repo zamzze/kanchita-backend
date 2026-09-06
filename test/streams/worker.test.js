@@ -107,14 +107,18 @@ test(
     } = {}) => {
       let resolverCalls = 0;
       let validatorCalls = 0;
-      const processor = createStreamProcessor({
-        db: pool,
-        resolver: async (context) => {
+      const resolverExecutor = {
+        resolve: async (context) => {
           resolverCalls += 1;
           return resolver
             ? resolver(context)
             : { url: `${baseUrl}/valid?token=worker-secret`, provider: 'fixture' };
         },
+        shutdown: async () => {},
+      };
+      const processor = createStreamProcessor({
+        db: pool,
+        resolverExecutor,
         validator: validator || (async (url) => {
           validatorCalls += 1;
           return createHlsValidator({ allowPrivateNetworks: true })(url);
@@ -122,7 +126,6 @@ test(
         logger,
         cacheTtlMinutes: 60,
         verifyIntervalMinutes: 10,
-        resolutionTimeoutMs,
       });
       const worker = createStreamWorker({
         queue,
@@ -291,14 +294,18 @@ test(
       assert.equal(state.rows[0].status, 'completed');
     });
 
-    await t.test('resolution timeout is terminal and requests worker recycling', async () => {
+    await t.test('contained resolution timeout retries and worker remains usable', async () => {
       await reset();
       const movie = await createContent('movie');
       const queue = createResolutionQueue(pool);
       const job = await queue.enqueue('movie', movie.id);
       const setup = makeWorker({
         queue,
-        resolver: async () => new Promise(() => {}),
+        resolver: async () => {
+          const error = new Error('fixture timeout');
+          error.code = 'RESOLUTION_TIMEOUT';
+          throw error;
+        },
         resolutionTimeoutMs: 25,
       });
       await setup.worker.runOnce();
@@ -306,11 +313,10 @@ test(
         'SELECT status, locked_by, last_error_code FROM stream_resolution_jobs WHERE id = $1',
         [job.id]
       );
-      assert.equal(stored.rows[0].status, 'failed');
+      assert.equal(stored.rows[0].status, 'pending');
       assert.equal(stored.rows[0].locked_by, null);
       assert.equal(stored.rows[0].last_error_code, 'RESOLUTION_TIMEOUT');
-      assert.equal(setup.worker.shouldRecycle(), true);
-      assert.equal(setup.worker.isStopping(), true);
+      assert.equal(setup.worker.isStopping(), false);
       const stream = await pool.query(
         `SELECT status, failure_count, last_error_code, next_retry_at
          FROM streams WHERE content_type = 'movie' AND content_id = $1`,
@@ -381,6 +387,6 @@ test('unsafe lease configuration is rejected before the worker starts', () => {
       leaseSeconds: 100,
       resolutionTimeoutMs: 90_000,
     }),
-    /at least 30 seconds/
+    /timeout \+ kill grace by at least 30 seconds/
   );
 });

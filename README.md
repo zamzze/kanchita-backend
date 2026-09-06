@@ -37,7 +37,7 @@ El registro público está cerrado por defecto. `ALLOW_PUBLIC_REGISTRATION` sól
 
 El caché de streams directos usa por defecto TTL de 60 minutos, reverificación cada 10 minutos, timeout remoto de 5 segundos y manifests de hasta 256 KiB. Se configuran con `STREAM_CACHE_TTL_MINUTES`, `STREAM_VERIFY_INTERVAL_MINUTES`, `STREAM_VERIFY_TIMEOUT_MS` y `STREAM_MAX_MANIFEST_BYTES`.
 
-La resolución pesada se ejecuta en un proceso separado. La cola usa por defecto polling cada segundo, lease de 180 segundos, tres intentos y timeout de resolución de 90 segundos. `STREAM_PENDING_RETRY_SECONDS=2` controla el `Retry-After` sugerido por el API.
+La resolución pesada se ejecuta en un child process aislado por cada job. La cola usa por defecto polling cada segundo, lease de 180 segundos, tres intentos y timeout de resolución de 90 segundos. `STREAM_RESOLVER_KILL_GRACE_MS=2000` controla el margen entre terminación limpia y kill forzado; `STREAM_PENDING_RETRY_SECONDS=2` controla el `Retry-After` sugerido por el API.
 
 ## Instalación reproducible
 
@@ -141,6 +141,8 @@ Para ejecutar la cola y el worker por separado:
 ```bash
 TEST_DB_URL=postgresql://user:password@localhost:5432/test_db npm run test:queue
 TEST_DB_URL=postgresql://user:password@localhost:5432/test_db npm run test:worker
+npm run test:resolver-process
+npm run test:boundary
 ```
 
 La resolución mediante `/api/subtitles` requiere Bearer JWT. Los `.vtt` ya generados continúan disponibles en `/subtitles` para el reproductor; CORS y `Cross-Origin-Resource-Policy: cross-origin` limitan/permiten su consumo desde los orígenes configurados.
@@ -188,13 +190,15 @@ El cliente consulta de nuevo el mismo endpoint. Obtiene `200` cuando `streams` c
 
 `stream_resolution_jobs` admite `pending`, `processing`, `completed` y `failed`. Un índice único parcial garantiza un solo job `pending|processing` por `(content_type, content_id)`. Cada worker reclama una fila mediante `FOR UPDATE SKIP LOCKED`, asigna `locked_by`/`locked_at` y confirma la transacción antes de llamar al resolver. La red y Chromium nunca se ejecutan dentro de una transacción o lock PostgreSQL.
 
-`attempt_count` aumenta únicamente cuando un worker reclama trabajo real, nunca por enqueue, polling o recuperación de lease, y no puede superar `max_attempts`. Los fallos recuperables reintentan con backoff de 30 segundos, 2 minutos y 5 minutos. Los jobs cuyo lease expiró vuelven a `pending`, o terminan `failed` si agotaron intentos. El lease debe superar el timeout de resolución por al menos 30 segundos (defaults: 180 s frente a 90 s); una configuración insegura impide iniciar el worker. Tras `SIGINT`/`SIGTERM`, deja de iniciar claims y termina el claim que ya estaba en curso antes de cerrar PostgreSQL. Películas y episodios comparten cola, procesador, validator y lifecycle.
+`attempt_count` aumenta únicamente cuando un worker reclama trabajo real, nunca por enqueue, polling o recuperación de lease, y no puede superar `max_attempts`. Los fallos recuperables reintentan con backoff de 30 segundos, 2 minutos y 5 minutos. Los jobs cuyo lease expiró vuelven a `pending`, o terminan `failed` si agotaron intentos. El lease debe superar timeout + kill grace por al menos 30 segundos (defaults: 180 s frente a 90 s + 2 s); una configuración insegura impide iniciar el worker. Tras `SIGINT`/`SIGTERM`, deja de iniciar claims, termina el árbol resolver activo y espera que quede recolectado antes de cerrar PostgreSQL. Películas y episodios comparten cola, procesador, validator y lifecycle.
 
 El antiguo advisory lock de resolución síncrona fue retirado: single-flight pertenece ahora al índice parcial y al claim atómico. La tabla de jobs no almacena URLs, manifests, tokens, payloads externos ni mensajes arbitrarios.
 
 La fijación de la IP elimina la ventana habitual entre pre-resolución y conexión, pero no convierte al destino público en confiable: un servidor público aprobado todavía podría actuar como proxy hacia redes internas o cambiar su comportamiento. La política de redirects sólo controla destinos visibles en la respuesta HTTP.
 
-El adapter actual no acepta `AbortSignal`. Por ello, un `RESOLUTION_TIMEOUT` es terminal para el job, no se reencola, y el proceso worker se recicla con salida no-cero después de cerrar PostgreSQL. Así no se programa deliberadamente otro intento mientras el Chromium anterior podría seguir vivo. La cancelación cooperativa y el aislamiento/terminación controlada del navegador quedan para la Fase 2C.
+El `ResolverExecutor` crea un único child mediante IPC por worker. Sólo transmite metadata validada; el child devuelve `SUCCESS` con el resultado mínimo o `FAILURE` con un código estable. No recibe `DB_URL`, secretos JWT ni credenciales en argv. En Linux el child es líder de un process group aislado: timeout o shutdown envían `SIGTERM` al PGID, esperan el grace y aplican `SIGKILL` residual al mismo grupo; después de un crash también se limpia el PGID antes de resolver la operación. Así el worker no inicia el siguiente job hasta que el child quedó recolectado; un timeout vuelve a ser reintentable y ya no exige reciclar el worker.
+
+En Windows se intenta `taskkill /T` sobre el PID exacto y existe fallback al child directo. La garantía fuerte de cierre del árbol corresponde al process group POSIX validado en Linux CI, que es el objetivo de despliegue. No se usan patrones globales ni se matan procesos Chromium ajenos.
 
 ## Integración continua
 

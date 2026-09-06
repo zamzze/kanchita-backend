@@ -2,10 +2,9 @@
 
 const { createStreamStore } = require('../../db/streams.queries');
 
-const processingError = (code, { terminal = false } = {}) => {
+const processingError = (code) => {
   const error = new Error('Stream processing failed');
   error.code = code;
-  error.terminal = terminal;
   return error;
 };
 
@@ -84,8 +83,7 @@ const createStreamLifecycle = ({
     contentType,
     contentId,
     candidate,
-    errorCode,
-    { terminal = false } = {}
+    errorCode
   ) => {
     await store.recordFailure({
       streamId: candidate?.id || null,
@@ -94,7 +92,7 @@ const createStreamLifecycle = ({
       serverName: candidate ? candidate.server_name : 'HD',
       errorCode,
     });
-    throw processingError(errorCode, { terminal });
+    throw processingError(errorCode);
   };
 
   const resolveAndPersist = async (contentType, contentId, content, resolver) => {
@@ -118,11 +116,7 @@ const createStreamLifecycle = ({
         ? 'RESOLUTION_TIMEOUT'
         : 'RESOLUTION_FAILED';
       logger.warn(`[Streams] resolution failed: ${code}`);
-      return recordFailure(contentType, contentId, candidate, code, {
-        // The current resolver adapter cannot cancel Chromium deeply. A logical
-        // timeout must therefore never schedule another overlapping attempt.
-        terminal: code === 'RESOLUTION_TIMEOUT',
-      });
+      return recordFailure(contentType, contentId, candidate, code);
     }
 
     if (!resolved?.url) {

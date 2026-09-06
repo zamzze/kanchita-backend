@@ -137,9 +137,12 @@ test(
     await t.test('worker resolves once and the same GET then returns 200', async () => {
       const processor = createStreamProcessor({
         db: pool,
-        resolver: async () => {
-          workerResolverCalls += 1;
-          return { url: `${baseUrl}/movie.m3u8`, provider: 'fixture' };
+        resolverExecutor: {
+          resolve: async () => {
+            workerResolverCalls += 1;
+            return { url: `${baseUrl}/movie.m3u8`, provider: 'fixture' };
+          },
+          shutdown: async () => {},
         },
         validator: createHlsValidator({ allowPrivateNetworks: true }),
         logger: { log() {}, warn() {} },
