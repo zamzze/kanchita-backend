@@ -66,6 +66,8 @@ Busca hasta cinco resultados en TMDB y comprueba uno por uno si ya están en el 
 
 Películas y episodios entran en un único flujo de lifecycle. Una fila `ready`, no expirada y verificada recientemente sale de caché. Filas `unknown`/`stale` se comprueban con un GET limitado que sólo lee el manifest y exige `#EXTM3U`; expiradas o inválidas pasan al adapter del resolver existente. El adapter puede devolver URL, proveedor y expiración opcional; si falta expiración se aplica TTL configurable.
 
+El validador aplica una frontera SSRF fail-closed antes de la URL inicial y de cada redirect. Resuelve todas las IP, rechaza rangos no públicos IPv4/IPv6 y entrega al socket una resolución fijada a las direcciones aprobadas. Los fixtures localhost sólo se habilitan mediante una opción inyectada explícitamente en tests; producción la deniega por defecto.
+
 Los estados persistentes son `unknown`, `ready`, `stale` y `failed`. Éxitos actualizan resolución/verificación y reinician fallos. Fallos incrementan una vez por operación, guardan únicamente un código estable y aplican backoff 30 s/2 min/5 min/15 min. Un advisory lock PostgreSQL por contenido evita resoluciones duplicadas y obliga a releer caché tras esperar. El backend no descarga segmentos ni hace proxy de playback.
 
 ### Subtítulos

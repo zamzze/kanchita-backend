@@ -147,9 +147,13 @@ La migración `003_auth_sessions.sql` borra todos los valores legacy de `users.r
 
 `streams.status` utiliza `unknown`, `ready`, `stale` y `failed`. Una fila `ready`, no expirada y verificada dentro del intervalo configurado es un cache hit sin tráfico remoto. Una fila antigua se valida mediante un GET acotado del manifest: sólo HTTP/HTTPS, redirects limitados, timeout, límite de bytes y cabecera `#EXTM3U`; nunca se descargan segmentos ni se actúa como proxy HLS.
 
+Antes de cada conexión —incluidos todos los redirects— el validador resuelve todas las direcciones DNS y rechaza destinos loopback, privados, link-local, CGNAT, multicast, reservados o no globales. La conexión usa una resolución fijada a una IP ya aprobada y desactiva reutilización del agente para evitar una segunda consulta DNS independiente. `allowPrivateNetworks` existe únicamente como dependencia explícita de pruebas para fixtures localhost; no es una variable operativa ni está habilitada en producción.
+
 Las filas legacy se conservan como `unknown` y se validan al primer acceso. Una validación correcta las promueve a `ready` y aplica el TTL si no tenían expiración. Una URL expirada no se valida ni se devuelve: se intenta resolver de nuevo mediante el adapter existente. Una resolución correcta reinicia fallos y tiempos; un fallo usa códigos internos estables y backoff de 30 segundos, 2, 5 y hasta 15 minutos.
 
 La resolución se serializa con un advisory lock PostgreSQL por `(content_type, content_id)`. El lock utiliza un cliente dedicado, adquisición no bloqueante con timeout, liberación en `finally` y relectura de caché después de obtenerlo. Películas y episodios comparten exactamente el mismo algoritmo. La API continúa devolviendo la URL directa y no expone estado, proveedor, fallos ni locks.
+
+La fijación de la IP elimina la ventana habitual entre pre-resolución y conexión, pero no convierte al destino público en confiable: un servidor público aprobado todavía podría actuar como proxy hacia redes internas o cambiar su comportamiento. La política de redirects sólo controla destinos visibles en la respuesta HTTP.
 
 ## Integración continua
 

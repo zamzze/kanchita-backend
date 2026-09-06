@@ -86,8 +86,149 @@ after(async () => {
   }
 });
 
+test('HLS validator blocks unsafe destinations by default', async (t) => {
+  const neverRequest = async () => {
+    throw new Error('unsafe destination reached transport');
+  };
+  const validate = createHlsValidator({ requestImpl: neverRequest });
+
+  await t.test('rejects non-public IPv4 ranges', async () => {
+    for (const address of [
+      '127.0.0.1',
+      '10.1.2.3',
+      '172.16.10.20',
+      '192.168.1.25',
+      '169.254.169.254',
+      '100.64.0.1',
+      '0.0.0.0',
+      '224.0.0.1',
+      '240.0.0.1',
+    ]) {
+      assert.equal(
+        (await validate(`http://${address}/manifest.m3u8`)).code,
+        'HLS_UNSAFE_DESTINATION'
+      );
+    }
+  });
+
+  await t.test('rejects localhost names before transport', async () => {
+    assert.equal(
+      (await validate('http://localhost/manifest.m3u8')).code,
+      'HLS_UNSAFE_DESTINATION'
+    );
+    assert.equal(
+      (await validate('http://media.localhost/manifest.m3u8')).code,
+      'HLS_UNSAFE_DESTINATION'
+    );
+  });
+
+  await t.test('rejects non-public and mapped-private IPv6', async () => {
+    for (const address of [
+      '::',
+      '::1',
+      'fc00::1',
+      'fd12:3456::1',
+      'fe80::1',
+      'ff02::1',
+      '::ffff:192.168.1.1',
+    ]) {
+      assert.equal(
+        (await validate(`http://[${address}]/manifest.m3u8`)).code,
+        'HLS_UNSAFE_DESTINATION'
+      );
+    }
+  });
+
+  await t.test('rejects hostname if any DNS answer is private and fails closed', async () => {
+    let requests = 0;
+    const mixedDnsValidator = createHlsValidator({
+      dnsLookup: async () => [
+        { address: '8.8.8.8', family: 4 },
+        { address: '10.0.0.8', family: 4 },
+      ],
+      requestImpl: async () => { requests += 1; },
+    });
+    assert.equal(
+      (await mixedDnsValidator('https://mixed.example/manifest.m3u8')).code,
+      'HLS_UNSAFE_DESTINATION'
+    );
+    assert.equal(requests, 0);
+
+    const dnsFailureValidator = createHlsValidator({
+      dnsLookup: async () => { throw new Error('fixture DNS failure'); },
+      requestImpl: neverRequest,
+    });
+    assert.equal(
+      (await dnsFailureValidator('https://missing.example/manifest.m3u8')).code,
+      'HLS_UNSAFE_DESTINATION'
+    );
+
+    const dnsTimeoutValidator = createHlsValidator({
+      timeoutMs: 20,
+      dnsLookup: async () => new Promise(() => {}),
+      requestImpl: neverRequest,
+    });
+    assert.equal(
+      (await dnsTimeoutValidator('https://slow-dns.example/manifest.m3u8')).code,
+      'HLS_TIMEOUT'
+    );
+  });
+
+  await t.test('validates every redirect target before a second request', async () => {
+    let requests = 0;
+    const redirectValidator = createHlsValidator({
+      dnsLookup: async (hostname) => hostname === 'public.example'
+        ? [{ address: '8.8.8.8', family: 4 }]
+        : [{ address: '127.0.0.1', family: 4 }],
+      requestImpl: async () => {
+        requests += 1;
+        return {
+          status: 302,
+          location: 'http://private.example/manifest.m3u8',
+          body: null,
+        };
+      },
+    });
+    assert.equal(
+      (await redirectValidator('https://public.example/manifest.m3u8')).code,
+      'HLS_UNSAFE_DESTINATION'
+    );
+    assert.equal(requests, 1);
+  });
+
+  await t.test('a fully public DNS policy reaches the pinned request transport', async () => {
+    let requestOptions;
+    const publicValidator = createHlsValidator({
+      dnsLookup: async () => [
+        { address: '8.8.8.8', family: 4 },
+        { address: '2606:4700:4700::1111', family: 6 },
+      ],
+      requestImpl: async (url, options) => {
+        requestOptions = { url: url.toString(), ...options };
+        return { status: 200, location: null, body: Buffer.from(mediaManifest) };
+      },
+    });
+    assert.deepEqual(
+      await publicValidator('https://public.example/manifest.m3u8'),
+      { valid: true, code: null }
+    );
+    assert.equal(requestOptions.addresses[0].address, '8.8.8.8');
+  });
+});
+
 test('HLS validator accepts only bounded, valid manifests', async (t) => {
-  const validate = createHlsValidator({ timeoutMs: 75, maxBytes: 1024, maxRedirects: 2 });
+  const denied = createHlsValidator();
+  assert.equal(
+    (await denied(`${baseUrl}/master`)).code,
+    'HLS_UNSAFE_DESTINATION'
+  );
+
+  const validate = createHlsValidator({
+    timeoutMs: 75,
+    maxBytes: 1024,
+    maxRedirects: 2,
+    allowPrivateNetworks: true,
+  });
 
   await t.test('accepts master and media playlists', async () => {
     assert.deepEqual(await validate(`${baseUrl}/master`), { valid: true, code: null });
@@ -214,7 +355,11 @@ test(
                 expiresAt: null,
               };
         },
-        validator: validator || createHlsValidator({ timeoutMs: 200, maxBytes: 2048 }),
+        validator: validator || createHlsValidator({
+          timeoutMs: 200,
+          maxBytes: 2048,
+          allowPrivateNetworks: true,
+        }),
         subtitleFetcher: async () => null,
         subscriptionFetcher: async () => null,
         logger,

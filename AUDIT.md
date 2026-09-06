@@ -58,7 +58,7 @@ La tabla no tiene `expires_at`, `last_verified_at`, estado de fallo ni origen/ve
 
 **Impacto:** reproducción que deja de funcionar de manera permanente hasta intervención manual; exposición prolongada de URLs firmadas.
 
-**Remediación parcial:** `004_stream_lifecycle.sql` incorpora proveedor, estado restringido, expiración, resolución, verificación, contador de fallos y backoff. El servicio ya no confía sólo en `is_active`, valida manifests antiguos, no devuelve expirados y serializa la resolución por contenido mediante PostgreSQL. Cuando el resolver no declara expiración se aplica TTL de 60 minutos. Sigue pendiente que proveedores futuros aporten expiración explícita y comprobar fallos reales de playback/segmentos desde el cliente; esta fase no crea un proxy HLS.
+**Remediación parcial:** `004_stream_lifecycle.sql` incorpora proveedor, estado restringido, expiración, resolución, verificación, contador de fallos y backoff. El servicio ya no confía sólo en `is_active`, valida manifests antiguos, no devuelve expirados y serializa la resolución por contenido mediante PostgreSQL. La validación bloquea destinos no públicos, revisa todas las respuestas DNS y cada redirect, y fija la IP aprobada en la conexión. Cuando el resolver no declara expiración se aplica TTL de 60 minutos. Sigue pendiente que proveedores futuros aporten expiración explícita y comprobar fallos reales de playback/segmentos desde el cliente; esta fase no crea un proxy HLS.
 
 ### A-05 — Controles de abuso insuficientes para Puppeteer — PARCIALMENTE RESUELTO EN FASE 1D
 

@@ -22,6 +22,7 @@ ALTER TABLE streams
         'HLS_TOO_LARGE',
         'HLS_INVALID_MANIFEST',
         'HLS_CONNECTION_ERROR',
+        'HLS_UNSAFE_DESTINATION',
         'RESOLUTION_FAILED'
       )
     );
