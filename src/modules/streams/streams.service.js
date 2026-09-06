@@ -1,183 +1,282 @@
-const { getStreamFromCineby } = require('../../ingestion/scraper/providers/providerC');
-const { upsertStream }        = require('../../db/streams.queries');
-const { getSubtitle }         = require('../subtitles/subtitles.service');
-const { redactSensitive }     = require('../../utils/redact');
-const pool                    = require('../../config/db');
-const moviesDb                = require('../../db/movies.queries');
+'use strict';
+
+const pool = require('../../config/db');
+const { getSubtitle } = require('../subtitles/subtitles.service');
 const { getActiveSubscription } = require('../../db/auth.queries');
+const { createStreamStore } = require('../../db/streams.queries');
+const { createHlsValidator } = require('./hlsValidator');
+const { resolveStream } = require('./streamResolver');
+const {
+  STREAM_CACHE_TTL_MINUTES,
+  STREAM_VERIFY_INTERVAL_MINUTES,
+  STREAM_VERIFY_TIMEOUT_MS,
+  STREAM_MAX_MANIFEST_BYTES,
+  STREAM_LOCK_TIMEOUT_MS,
+} = require('../../config/env');
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-
-const getCachedStreams = async (contentType, contentId) => {
-  const { rows } = await pool.query(
-    `SELECT server_name, quality, language,
-            stream_url, embed_url, stream_type, priority
-     FROM streams
-     WHERE content_type = $1
-       AND content_id   = $2
-       AND stream_type  = 'direct'
-       AND is_active    = TRUE
-     ORDER BY priority ASC`,
-    [contentType, contentId]
-  );
-  return rows;
+const unavailableError = () => {
+  const error = new Error('Stream temporarily unavailable');
+  error.statusCode = 503;
+  error.code = 'STREAM_TEMPORARILY_UNAVAILABLE';
+  error.safeToExpose = true;
+  return error;
 };
 
-const formatResponse = (streams, contentId, contentType, subscription, subtitleUrl = null) => ({
-  content_id:   contentId,
+const notFoundError = (contentType) => {
+  const error = new Error(contentType === 'movie'
+    ? 'Película no encontrada'
+    : 'Episodio no encontrado');
+  error.statusCode = 404;
+  return error;
+};
+
+const defaultFindContent = async (contentType, contentId, db = pool) => {
+  if (contentType === 'movie') {
+    const { rows } = await db.query(
+      `SELECT id, tmdb_id, title
+       FROM movies
+       WHERE id = $1 AND is_published = TRUE`,
+      [contentId]
+    );
+    return rows[0] || null;
+  }
+
+  const { rows } = await db.query(
+    `SELECT e.id, e.season_number, e.episode_number, e.title,
+            s.tmdb_id, s.title AS series_title
+     FROM episodes e
+     JOIN series s ON s.id = e.series_id
+     WHERE e.id = $1
+       AND e.is_published = TRUE
+       AND s.is_published = TRUE`,
+    [contentId]
+  );
+  return rows[0] || null;
+};
+
+const formatResponse = (streams, contentId, contentType, subtitleUrl = null) => ({
+  content_id: contentId,
   content_type: contentType,
-  show_ads:     false,
+  show_ads: false,
   subtitle_url: subtitleUrl,
-  streams:      streams.map(s => ({
-    server_name: s.server_name,
-    quality:     s.quality     || 'auto',
-    language:    s.language,
-    stream_url:  s.stream_url  || null,
-    embed_url:   s.embed_url   || null,
-    stream_type: s.stream_type,
-    priority:    s.priority,
+  streams: streams.map((stream) => ({
+    server_name: stream.server_name,
+    quality: stream.quality || 'auto',
+    language: stream.language,
+    stream_url: stream.stream_url || null,
+    embed_url: stream.embed_url || null,
+    stream_type: stream.stream_type,
+    priority: stream.priority,
   })),
 });
 
-const fetchSubtitle = async (tmdbId, contentType, contentId, season = null, episode = null) => {
-  try {
-    const subtitle = await getSubtitle(tmdbId, contentType, contentId, season, episode);
-    return subtitle?.subtitle_url || null;
-  } catch (err) {
-    console.warn('[Streams] Subtítulo no encontrado:', redactSensitive(err.message));
-    return null;
-  }
-};
+const createStreamsService = ({
+  db = pool,
+  resolver = resolveStream,
+  validator = createHlsValidator({
+    timeoutMs: STREAM_VERIFY_TIMEOUT_MS,
+    maxBytes: STREAM_MAX_MANIFEST_BYTES,
+  }),
+  findContent = (contentType, contentId) => defaultFindContent(contentType, contentId, db),
+  subtitleFetcher = getSubtitle,
+  subscriptionFetcher = (userId) => getActiveSubscription(userId, db),
+  logger = console,
+  cacheTtlMinutes = STREAM_CACHE_TTL_MINUTES,
+  verifyIntervalMinutes = STREAM_VERIFY_INTERVAL_MINUTES,
+  lockTimeoutMs = STREAM_LOCK_TIMEOUT_MS,
+} = {}) => {
+  const store = createStreamStore(db);
+  const ttlMs = cacheTtlMinutes * 60 * 1000;
+  const verifyIntervalMs = verifyIntervalMinutes * 60 * 1000;
 
-// ─── Movie streams ────────────────────────────────────────────────────────────
+  const fallbackExpiry = () => new Date(Date.now() + ttlMs);
 
-const getMovieStreams = async (movieId, userId) => {
-  const movie = await moviesDb.findById(movieId);
-  if (!movie) {
-    const err = new Error('Película no encontrada');
-    err.statusCode = 404;
-    throw err;
-  }
-
-  console.log(`[Streams] Buscando streams para "${movie.title}"`);
-
-  // 1. Verificar caché — solo streams directos
-  const cached = await getCachedStreams('movie', movieId);
-
-  if (cached.length > 0) {
-    console.log(`[Streams] Stream en caché para "${movie.title}"`);
-    const subtitleUrl  = await fetchSubtitle(movie.tmdb_id, 'movie', movieId);
-    const subscription = userId ? await getActiveSubscription(userId) : null;
-    return formatResponse(cached, movieId, 'movie', subscription, subtitleUrl);
-  }
-
-  // 2. Sin caché → scrapear ProviderC una sola vez
-  console.log(`[Streams] Scrapeando ProviderC para "${movie.title}"`);
-  const m3u8Url = await getStreamFromCineby(movie.tmdb_id, 'movie')
-    .catch(err => {
-      console.warn('[Streams] ProviderC falló:', redactSensitive(err.message));
-      return null;
-    });
-
-  if (!m3u8Url) {
-    const err = new Error('Este contenido aún no está disponible. ¡Muy pronto habrá más contenido!');
-    err.statusCode = 404;
-    throw err;
-  }
-
-  // 3. Cachear en BD
-  const directStream = {
-    content_type: 'movie',
-    content_id:   movieId,
-    server_name:  'HD',
-    quality:      'auto',
-    language:     'en-sub',
-    stream_url:   m3u8Url,
-    embed_url:    null,
-    stream_type:  'direct',
-    priority:     1,
-  };
-  await upsertStream(directStream);
-
-  const subtitleUrl  = await fetchSubtitle(movie.tmdb_id, 'movie', movieId);
-  const subscription = userId ? await getActiveSubscription(userId) : null;
-  return formatResponse([directStream], movieId, 'movie', subscription, subtitleUrl);
-};
-
-// ─── Episode streams ──────────────────────────────────────────────────────────
-
-const getEpisodeStreams = async (episodeId, userId) => {
-  const { rows } = await pool.query(
-    `SELECT e.id, e.series_id, e.season_number, e.episode_number,
-            e.title, e.is_published, s.is_published AS series_published,
-            s.tmdb_id, s.title AS series_title,
-            s.original_title AS series_original_title,
-            s.release_year
-     FROM episodes e
-     JOIN series s ON s.id = e.series_id
-     WHERE e.id = $1`,
-    [episodeId]
-  );
-
-  const episode = rows[0];
-  if (!episode || !episode.is_published || !episode.series_published) {
-    const err = new Error('Episodio no encontrado');
-    err.statusCode = 404;
-    throw err;
-  }
-
-  console.log(`[Streams] Buscando S${episode.season_number}E${episode.episode_number} de "${episode.series_title}"`);
-
-  // 1. Verificar caché
-  const cached = await getCachedStreams('episode', episodeId);
-
-  if (cached.length > 0) {
-    console.log(`[Streams] Stream en caché para episodio ${episodeId}`);
-    const subtitleUrl = await fetchSubtitle(
-      episode.tmdb_id, 'episode', episodeId,
-      episode.season_number, episode.episode_number
+  const freshReadyStreams = (streams) => {
+    const now = Date.now();
+    return streams.filter((stream) =>
+      stream.status === 'ready' &&
+      stream.stream_url &&
+      stream.expires_at &&
+      new Date(stream.expires_at).getTime() > now &&
+      stream.last_verified_at &&
+      new Date(stream.last_verified_at).getTime() > now - verifyIntervalMs
     );
-    const subscription = userId ? await getActiveSubscription(userId) : null;
-    return formatResponse(cached, episodeId, 'episode', subscription, subtitleUrl);
-  }
-
-  // 2. Sin caché → scrapear ProviderC
-  console.log(`[Streams] Scrapeando ProviderC para episodio`);
-  const m3u8Url = await getStreamFromCineby(
-    episode.tmdb_id, 'tv',
-    episode.season_number,
-    episode.episode_number
-  ).catch(err => {
-    console.warn('[Streams] ProviderC episodio falló:', redactSensitive(err.message));
-    return null;
-  });
-
-  if (!m3u8Url) {
-    const err = new Error('Este episodio aún no está disponible. ¡Muy pronto habrá más contenido!');
-    err.statusCode = 404;
-    throw err;
-  }
-
-  // 3. Cachear en BD
-  const directStream = {
-    content_type: 'episode',
-    content_id:   episodeId,
-    server_name:  'HD',
-    quality:      'auto',
-    language:     'en-sub',
-    stream_url:   m3u8Url,
-    embed_url:    null,
-    stream_type:  'direct',
-    priority:     1,
   };
-  await upsertStream(directStream);
 
-  const subtitleUrl = await fetchSubtitle(
-    episode.tmdb_id, 'episode', episodeId,
-    episode.season_number, episode.episode_number
+  const activeBackoff = (streams) => streams.length > 0 && streams.every((stream) =>
+    stream.status === 'failed' &&
+    stream.next_retry_at &&
+    new Date(stream.next_retry_at).getTime() > Date.now()
   );
-  const subscription = userId ? await getActiveSubscription(userId) : null;
-  return formatResponse([directStream], episodeId, 'episode', subscription, subtitleUrl);
+
+  const validateCandidate = async (stream) => {
+    if (!stream.stream_url) return null;
+    if (stream.expires_at && new Date(stream.expires_at).getTime() <= Date.now()) {
+      logger.log('[Streams] cache expired');
+      await store.markStale(stream.id);
+      return null;
+    }
+
+    const validation = await validator(stream.stream_url);
+    if (!validation.valid) {
+      logger.warn(`[Streams] validation failed: ${validation.code}`);
+      await store.markStale(stream.id);
+      return null;
+    }
+
+    logger.log('[Streams] cache validated');
+    return store.markVerified(stream.id, fallbackExpiry());
+  };
+
+  const readUsableCache = async (contentType, contentId, { validate = false } = {}) => {
+    const streams = await store.findDirectStreams(contentType, contentId);
+    const fresh = freshReadyStreams(streams);
+    if (fresh.length > 0) {
+      logger.log('[Streams] cache hit');
+      return { streams: fresh, all: streams };
+    }
+
+    if (activeBackoff(streams)) {
+      return { streams: null, all: streams, backoff: true };
+    }
+
+    if (validate) {
+      for (const stream of streams) {
+        if (stream.status !== 'failed') {
+          const valid = await validateCandidate(stream);
+          if (valid) return { streams: [valid], all: streams };
+        }
+      }
+    }
+    return { streams: null, all: streams, backoff: false };
+  };
+
+  const persistFailure = async (contentType, contentId, candidate, errorCode) => {
+    await store.recordFailure({
+      streamId: candidate?.id || null,
+      contentType,
+      contentId,
+      serverName: candidate ? candidate.server_name : 'HD',
+      errorCode,
+    });
+    throw unavailableError();
+  };
+
+  const resolveAndValidate = async (contentType, contentId, content, cached) => {
+    const candidate = cached.find((stream) => stream.stream_url) || cached[0] || null;
+    if (candidate) await store.markStale(candidate.id);
+    logger.log('[Streams] resolving content');
+
+    let resolved;
+    try {
+      resolved = await resolver({
+        contentType,
+        contentId,
+        tmdbId: content.tmdb_id,
+        title: content.title || content.series_title,
+        season: content.season_number,
+        episode: content.episode_number,
+      });
+    } catch {
+      logger.warn('[Streams] resolution failed: RESOLUTION_FAILED');
+      return persistFailure(contentType, contentId, candidate, 'RESOLUTION_FAILED');
+    }
+
+    if (!resolved?.url) {
+      logger.warn('[Streams] resolution failed: RESOLUTION_FAILED');
+      return persistFailure(contentType, contentId, candidate, 'RESOLUTION_FAILED');
+    }
+
+    const validation = await validator(resolved.url);
+    if (!validation.valid) {
+      logger.warn(`[Streams] validation failed: ${validation.code}`);
+      return persistFailure(contentType, contentId, candidate, validation.code);
+    }
+
+    const now = new Date();
+    const explicitExpiry = resolved.expiresAt ? new Date(resolved.expiresAt) : null;
+    if (explicitExpiry && (!Number.isFinite(explicitExpiry.getTime()) || explicitExpiry <= now)) {
+      return persistFailure(contentType, contentId, candidate, 'RESOLUTION_FAILED');
+    }
+
+    const directStream = await store.upsertStream({
+      content_type: contentType,
+      content_id: contentId,
+      server_name: candidate ? candidate.server_name : (resolved.serverName || 'HD'),
+      quality: resolved.quality || 'auto',
+      language: resolved.language || 'en-sub',
+      stream_url: resolved.url,
+      embed_url: null,
+      stream_type: 'direct',
+      priority: 1,
+      provider: resolved.provider || null,
+      status: 'ready',
+      expires_at: explicitExpiry || fallbackExpiry(),
+      resolved_at: now,
+      last_verified_at: now,
+      failure_count: 0,
+      last_failure_at: null,
+      next_retry_at: null,
+      last_error_code: null,
+    });
+    return [directStream];
+  };
+
+  const getLifecycleStreams = async (contentType, contentId, content) => {
+    const initial = await readUsableCache(contentType, contentId);
+    if (initial.streams) return initial.streams;
+    if (initial.backoff) throw unavailableError();
+
+    const locked = await store.withContentLock(
+      contentType,
+      contentId,
+      lockTimeoutMs,
+      async () => {
+        const afterLock = await readUsableCache(contentType, contentId, { validate: true });
+        if (afterLock.streams) return afterLock.streams;
+        if (afterLock.backoff) throw unavailableError();
+        return resolveAndValidate(contentType, contentId, content, afterLock.all);
+      }
+    );
+
+    if (!locked.acquired) throw unavailableError();
+    return locked.value;
+  };
+
+  const fetchSubtitle = async (contentType, contentId, content) => {
+    try {
+      const subtitle = await subtitleFetcher(
+        content.tmdb_id,
+        contentType,
+        contentId,
+        content.season_number || null,
+        content.episode_number || null
+      );
+      return subtitle?.subtitle_url || null;
+    } catch {
+      logger.warn('[Streams] subtitle unavailable');
+      return null;
+    }
+  };
+
+  const getStreams = async (contentType, contentId, userId) => {
+    const content = await findContent(contentType, contentId);
+    if (!content) throw notFoundError(contentType);
+
+    const streams = await getLifecycleStreams(contentType, contentId, content);
+    const subtitleUrl = await fetchSubtitle(contentType, contentId, content);
+    if (userId) await subscriptionFetcher(userId);
+    return formatResponse(streams, contentId, contentType, subtitleUrl);
+  };
+
+  return {
+    getMovieStreams: (movieId, userId) => getStreams('movie', movieId, userId),
+    getEpisodeStreams: (episodeId, userId) => getStreams('episode', episodeId, userId),
+  };
 };
 
-module.exports = { getMovieStreams, getEpisodeStreams };
+module.exports = {
+  ...createStreamsService(),
+  createStreamsService,
+  formatResponse,
+};

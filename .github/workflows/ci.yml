@@ -73,6 +73,9 @@ jobs:
       - name: Run auth session integration tests explicitly
         run: npm run test:auth
 
+      - name: Run stream lifecycle integration tests explicitly
+        run: npm run test:streams
+
       - name: Check changed whitespace
         run: git diff --check HEAD^ HEAD
 

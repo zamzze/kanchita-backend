@@ -7,4 +7,5 @@ BEGIN;
 \ir migrations/001_legacy_baseline.sql
 \ir migrations/002_phase_1b_schema_alignment.sql
 \ir migrations/003_auth_sessions.sql
+\ir migrations/004_stream_lifecycle.sql
 COMMIT;

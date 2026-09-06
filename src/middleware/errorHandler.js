@@ -7,12 +7,14 @@ module.exports = (err, req, res, next) => {
     ? requestedStatus
     : 500;
   const isServerError = statusCode >= 500;
-  const code = !isServerError && /^[A-Z0-9_]+$/.test(err.code || '')
+  const safeServerError = isServerError && err.safeToExpose === true &&
+    err.code === 'STREAM_TEMPORARILY_UNAVAILABLE';
+  const code = (!isServerError || safeServerError) && /^[A-Z0-9_]+$/.test(err.code || '')
     ? err.code
     : isServerError
       ? 'INTERNAL_ERROR'
       : codeForStatus(statusCode);
-  const message = isServerError
+  const message = isServerError && !safeServerError
     ? 'Internal server error'
     : err.message || 'Request failed';
 

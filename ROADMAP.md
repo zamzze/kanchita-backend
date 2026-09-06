@@ -63,9 +63,9 @@
 
 ## Fase 2 — Estabilización de reproducción
 
-1. Modelar ciclo de vida de stream: `resolved_at`, `expires_at`, `last_verified_at`, fallos, proveedor y estado.
-2. Verificar/re-resolver URLs caducadas sin exponerlas en logs ni cachearlas en intermediarios.
-3. Lock por contenido, límites de concurrencia, timeout, backoff, circuit breaker y cola persistente para Chromium.
+1. ✅ Fase 2A modela `resolved_at`, `expires_at`, `last_verified_at`, fallos, proveedor y estado.
+2. ✅ Fase 2A verifica/re-resuelve manifests caducados sin registrar URLs sensibles; señales de fallo del playback cliente quedan pendientes.
+3. 🟡 Fase 2A añade lock PostgreSQL por contenido, timeout y backoff; circuit breaker, límites globales y cola persistente siguen pendientes.
 4. Separar el worker de scraping del proceso HTTP cuando el comportamiento esté cubierto por pruebas.
 5. Definir interfaz de proveedor y eliminar código muerto tras probar equivalencia.
 6. Endurecer descargas de subtítulos: límites de bytes/entradas/ratio, timeout, MIME, redirects y limpieza; almacenamiento persistente u objeto compatible con múltiples réplicas.
@@ -106,6 +106,6 @@
 
 ## Estado de las primeras fases
 
-La Fase 1A completó higiene y ejecución reproducible. La Fase 1B alinea el contrato mínimo PostgreSQL, la Fase 1C lo valida en CI, la Fase 1D añade seguridad HTTP básica y la Fase 1E incorpora sesiones/JWT rotativos. Permanecen como PRs separadas: validación de entradas, proxy/healthchecks, integridad adicional, vulnerabilidades de dependencias y el procedimiento operativo de secretos/historial.
+La Fase 1 está cerrada. La Fase 2A incorpora lifecycle, validación y single-flight para streams directos manteniendo el resolver como adapter. Permanecen separadas la limitación global/worker, endurecimiento de subtítulos, señales de fallo de playback, validación de entradas, proxy/healthchecks, dependencias y el procedimiento operativo de secretos/historial.
 
 
