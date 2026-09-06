@@ -2,8 +2,6 @@
 
 const pool = require('../config/db');
 
-const sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
-
 const streamColumns = `
   id, server_name, quality, language, stream_url, embed_url,
   stream_type, priority, is_active, provider, status, expires_at,
@@ -165,41 +163,6 @@ const createStreamStore = (db = pool) => {
 
   const upsertStream = (stream) => upsertStreamWithClient(db, stream);
 
-  const withContentLock = async (contentType, contentId, timeoutMs, handler) => {
-    const client = await db.connect();
-    const key = `stream:${contentType}:${contentId}`;
-    const startedAt = Date.now();
-    let acquired = false;
-    let releaseError = null;
-    try {
-      while (Date.now() - startedAt < timeoutMs) {
-        const result = await client.query(
-          'SELECT pg_try_advisory_lock(hashtextextended($1, 0)) AS acquired',
-          [key]
-        );
-        acquired = result.rows[0].acquired;
-        if (acquired) return { acquired: true, value: await handler() };
-        await sleep(25);
-      }
-      return { acquired: false, value: null };
-    } finally {
-      if (acquired) {
-        try {
-          const unlocked = await client.query(
-            'SELECT pg_advisory_unlock(hashtextextended($1, 0)) AS unlocked',
-            [key]
-          );
-          if (!unlocked.rows[0].unlocked) {
-            releaseError = new Error('Stream lifecycle advisory lock was not held');
-          }
-        } catch (error) {
-          releaseError = error;
-        }
-      }
-      client.release(releaseError || undefined);
-    }
-  };
-
   return {
     findStreams,
     findDirectStreams,
@@ -208,7 +171,6 @@ const createStreamStore = (db = pool) => {
     recordFailure,
     upsertStream,
     upsertStreamWithClient,
-    withContentLock,
   };
 };
 

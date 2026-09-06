@@ -14,6 +14,7 @@ Alcance: rama `main`, commit `6844ef4`, 5.087 archivos versionados; 5.024 perten
 - **Fase 1D:** corrige el orden del rate limiter, restringe CORS, cierra el registro por defecto, protege la resolución de subtítulos, evita detalles internos en respuestas 5xx y redacta logging sensible básico. Los límites de red/archivo y el rediseño JWT siguen pendientes.
 - **Fase 1E:** resuelve A-06 con sesiones múltiples, hash de refresh tokens, rotación transaccional, revocación por sesión, detección básica de reutilización y JWT tipados con parámetros explícitos.
 - **Fase 2A:** remedia el núcleo de A-04 con estados, TTL, validación HLS acotada, expiración, fallos/backoff y single-flight PostgreSQL.
+- **Fase 2B:** desacopla la resolución pesada del request mediante cola PostgreSQL, worker independiente, lease, claim atómico y retries limitados.
 - La rotación de secretos, reescritura del historial y los demás hallazgos continúan pendientes.
 
 ## CRÍTICO
@@ -52,13 +53,15 @@ SubDL registra la URL que contiene `api_key`. ProviderC registra URLs completas 
 
 **Remediación parcial:** ya no se registran URLs SubDL con clave, playlists HLS, URLs de frames, rutas del VTT ni contenido del subtítulo. Una utilidad mínima redacta Bearer tokens, parámetros sensibles, credenciales PostgreSQL y URLs `.m3u8` en mensajes de error. Queda pendiente logging estructurado.
 
-### A-04 — Caché de streams incorrecta para URLs temporales — PARCIALMENTE RESUELTO EN FASE 2A
+### A-04 — Caché de streams incorrecta para URLs temporales — PARCIALMENTE RESUELTO EN FASES 2A–2B
 
 La tabla no tiene `expires_at`, `last_verified_at`, estado de fallo ni origen/versionado. Todo stream directo activo se considera válido para siempre. Un 403/404 aguas arriba no causa refresh y el API devuelve URLs potencialmente caducadas. El scraper puede iniciar varias resoluciones iguales en paralelo y escribir duplicados.
 
 **Impacto:** reproducción que deja de funcionar de manera permanente hasta intervención manual; exposición prolongada de URLs firmadas.
 
-**Remediación parcial:** `004_stream_lifecycle.sql` incorpora proveedor, estado restringido, expiración, resolución, verificación, contador de fallos y backoff. El servicio ya no confía sólo en `is_active`, valida manifests antiguos, no devuelve expirados y serializa la resolución por contenido mediante PostgreSQL. La validación bloquea destinos no públicos, revisa todas las respuestas DNS y cada redirect, y fija la IP aprobada en la conexión. Cuando el resolver no declara expiración se aplica TTL de 60 minutos. Sigue pendiente que proveedores futuros aporten expiración explícita y comprobar fallos reales de playback/segmentos desde el cliente; esta fase no crea un proxy HLS.
+**Remediación parcial:** `004_stream_lifecycle.sql` incorpora proveedor, estado restringido, expiración, resolución, verificación, contador de fallos y backoff. `005_stream_resolution_jobs.sql` desacopla la resolución mediante un job persistente deduplicado; el API responde `202` y el worker reclama con `SKIP LOCKED`, lease y retries limitados. La validación bloquea destinos no públicos, revisa todas las respuestas DNS y cada redirect, y fija la IP aprobada en la conexión. Cuando el resolver no declara expiración se aplica TTL de 60 minutos. Sigue pendiente que proveedores futuros aporten expiración explícita y comprobar fallos reales de playback/segmentos desde el cliente; esta fase no crea un proxy HLS.
+
+**Cierre 2B:** se retiraron el engine de scraping sin consumidores y el script manual Puppeteer que permitían saltarse la cola. El único import productivo de `ProviderC` queda en `streamResolver`, consumido exclusivamente por `streamProcessor` dentro del worker. Los timeouts son terminales y fuerzan reciclaje del worker para no solapar retries con Chromium no cancelable; 2C debe aportar cancelación/aislamiento real.
 
 ### A-05 — Controles de abuso insuficientes para Puppeteer — PARCIALMENTE RESUELTO EN FASE 1D
 
@@ -66,7 +69,7 @@ El limitador global está montado después de las rutas. Registro de usuario est
 
 **Impacto:** agotamiento rápido de CPU/RAM/PIDs en un VPS y llamadas masivas a terceros.
 
-**Remediación parcial:** el limitador general ya precede a `/api`, auth mantiene un límite más estricto y el registro queda deshabilitado salvo flag explícito. Persisten los límites en memoria y la falta de locks/colas para trabajo pesado.
+**Remediación parcial:** el limitador general ya precede a `/api`, auth mantiene un límite más estricto y el registro queda deshabilitado salvo flag explícito. La resolución de streams ya no ocurre en el request y se coordina con una cola PostgreSQL persistente. Persisten límites de rate limiting en memoria y otros trabajos externos de ingesta/subtítulos fuera de esta cola.
 
 ### A-06 — Refresh token débilmente gestionado — RESUELTO EN FASE 1E
 

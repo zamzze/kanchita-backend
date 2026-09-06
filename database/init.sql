@@ -8,4 +8,5 @@ BEGIN;
 \ir migrations/002_phase_1b_schema_alignment.sql
 \ir migrations/003_auth_sessions.sql
 \ir migrations/004_stream_lifecycle.sql
+\ir migrations/005_stream_resolution_jobs.sql
 COMMIT;

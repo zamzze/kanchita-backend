@@ -23,6 +23,7 @@ const pool = TEST_DB_URL ? new Pool({
 
 const { runMigrations } = require('../../database/migrate');
 const { createHlsValidator } = require('../../src/modules/streams/hlsValidator');
+const { createResolutionQueue } = require('../../src/modules/streams/resolutionQueue');
 const { createStreamsService } = require('../../src/modules/streams/streams.service');
 const configuredPool = require('../../src/config/db');
 
@@ -341,19 +342,16 @@ test(
       };
     };
 
-    const makeService = ({ resolver, validator, logger = makeLogger() } = {}) => {
-      let resolverCalls = 0;
+    const makeService = ({ validator, logger = makeLogger() } = {}) => {
+      const persistentQueue = createResolutionQueue(pool);
+      let enqueueCalls = 0;
       const service = createStreamsService({
         db: pool,
-        resolver: async (context) => {
-          resolverCalls += 1;
-          return resolver
-            ? resolver(context, resolverCalls)
-            : {
-                url: `${baseUrl}/media`,
-                provider: 'fixture',
-                expiresAt: null,
-              };
+        queue: {
+          enqueue: async (...args) => {
+            enqueueCalls += 1;
+            return persistentQueue.enqueue(...args);
+          },
         },
         validator: validator || createHlsValidator({
           timeoutMs: 200,
@@ -365,9 +363,9 @@ test(
         logger,
         cacheTtlMinutes: 60,
         verifyIntervalMinutes: 10,
-        lockTimeoutMs: 1000,
+        pendingRetrySeconds: 2,
       });
-      return { service, logger, resolverCalls: () => resolverCalls };
+      return { service, logger, enqueueCalls: () => enqueueCalls };
     };
 
     const getForType = (service, contentType, contentId) => contentType === 'movie'
@@ -386,7 +384,7 @@ test(
       });
       const response = await setup.service.getMovieStreams(movie.id, null);
 
-      assert.equal(setup.resolverCalls(), 0);
+      assert.equal(setup.enqueueCalls(), 0);
       assert.equal(validatorCalls, 0);
       assert.equal(response.content_id, movie.id);
       assert.equal(response.content_type, 'movie');
@@ -414,7 +412,7 @@ test(
         [legacy.id]
       );
 
-      assert.equal(setup.resolverCalls(), 0);
+      assert.equal(setup.enqueueCalls(), 0);
       assert.equal(response.streams[0].stream_url, `${baseUrl}/media`);
       assert.equal(stored.rows[0].status, 'ready');
       assert.ok(stored.rows[0].expires_at);
@@ -435,10 +433,10 @@ test(
       });
       await setup.service.getMovieStreams(movie.id, null);
       assert.equal(validatorCalls, 1);
-      assert.equal(setup.resolverCalls(), 0);
+      assert.equal(setup.enqueueCalls(), 0);
     });
 
-    await t.test('expired stream is not returned directly and is resolved again', async () => {
+    await t.test('expired stream is not returned or validated and is queued', async () => {
       const movie = await createContent('movie');
       const oldUrl = `${baseUrl}/media?token=old-sensitive-token`;
       await insertStream('movie', movie.id, {
@@ -451,114 +449,71 @@ test(
           validatedUrls.push(url);
           return { valid: true, code: null };
         },
-        resolver: async () => ({
-          url: `${baseUrl}/media?token=new-sensitive-token`,
-          provider: 'fixture',
-          expiresAt: null,
-        }),
       });
       const response = await setup.service.getMovieStreams(movie.id, null);
 
-      assert.equal(setup.resolverCalls(), 1);
+      assert.equal(response.code, 'STREAM_RESOLUTION_PENDING');
+      assert.equal(setup.enqueueCalls(), 1);
       assert.ok(!validatedUrls.includes(oldUrl));
-      assert.match(response.streams[0].stream_url, /new-sensitive-token/);
     });
 
-    await t.test('successful resolution writes lifecycle and resets failures', async () => {
+    await t.test('no stream returns pending and creates a persistent job', async () => {
       const movie = await createContent('movie');
-      const failed = await insertStream('movie', movie.id, {
+      const setup = makeService();
+      const result = await setup.service.getMovieStreams(movie.id, null);
+      assert.equal(result.status, 'pending');
+      assert.equal(result.retry_after_ms, 2000);
+      const jobs = await pool.query(
+        `SELECT status FROM stream_resolution_jobs
+         WHERE content_type = 'movie' AND content_id = $1`,
+        [movie.id]
+      );
+      assert.equal(jobs.rowCount, 1);
+      assert.equal(jobs.rows[0].status, 'pending');
+    });
+
+    await t.test('invalid cached manifest becomes stale and queues replacement', async () => {
+      const movie = await createContent('movie');
+      const stream = await insertStream('movie', movie.id, {
+        url: `${baseUrl}/html?token=not-logged`,
+        status: 'unknown',
+        expiresAt: null,
+        verifiedAt: null,
+      });
+      const setup = makeService({
+        validator: createHlsValidator({ allowPrivateNetworks: true }),
+      });
+      const response = await setup.service.getMovieStreams(movie.id, null);
+      const stored = await pool.query(
+        'SELECT status, failure_count FROM streams WHERE id = $1',
+        [stream.id]
+      );
+      assert.equal(response.status, 'pending');
+      assert.equal(stored.rows[0].status, 'stale');
+      assert.equal(stored.rows[0].failure_count, 0);
+      assert.ok(!setup.logger.messages.join('\n').includes('not-logged'));
+    });
+
+    await t.test('active stream backoff returns 503 and suppresses enqueue', async () => {
+      const movie = await createContent('movie');
+      await insertStream('movie', movie.id, {
         url: null,
         status: 'failed',
         expiresAt: null,
         resolvedAt: null,
         verifiedAt: null,
-        failureCount: 3,
-        nextRetryAt: new Date(Date.now() - 1000),
+        failureCount: 1,
+        nextRetryAt: new Date(Date.now() + 60_000),
         errorCode: 'RESOLUTION_FAILED',
       });
       const setup = makeService();
-      await setup.service.getMovieStreams(movie.id, null);
-      const stored = await pool.query('SELECT * FROM streams WHERE id = $1', [failed.id]);
-
-      assert.equal(stored.rows[0].status, 'ready');
-      assert.equal(stored.rows[0].provider, 'fixture');
-      assert.equal(stored.rows[0].failure_count, 0);
-      assert.equal(stored.rows[0].last_failure_at, null);
-      assert.equal(stored.rows[0].next_retry_at, null);
-      assert.equal(stored.rows[0].last_error_code, null);
-      assert.ok(stored.rows[0].resolved_at);
-      assert.ok(stored.rows[0].last_verified_at);
-      assert.ok(stored.rows[0].expires_at);
-    });
-
-    await t.test('invalid newly resolved manifest records one stable validation failure', async () => {
-      const movie = await createContent('movie');
-      const setup = makeService({
-        resolver: async () => ({
-          url: `${baseUrl}/html?token=not-logged`,
-          provider: 'fixture',
-          expiresAt: null,
-        }),
-      });
-      await assert.rejects(
-        setup.service.getMovieStreams(movie.id, null),
-        (error) => error.statusCode === 503
-      );
-      const stored = await pool.query(
-        `SELECT status, failure_count, last_error_code, next_retry_at
-         FROM streams WHERE content_type = 'movie' AND content_id = $1`,
-        [movie.id]
-      );
-      assert.equal(stored.rowCount, 1);
-      assert.equal(stored.rows[0].status, 'failed');
-      assert.equal(stored.rows[0].failure_count, 1);
-      assert.equal(stored.rows[0].last_error_code, 'HLS_INVALID_MANIFEST');
-      assert.ok(stored.rows[0].next_retry_at);
-      assert.ok(!setup.logger.messages.join('\n').includes('not-logged'));
-    });
-
-    await t.test('one failed operation increments once, sets backoff and suppresses retries', async () => {
-      const movie = await createContent('movie');
-      await insertStream('movie', movie.id, {
-        url: `${baseUrl}/html`,
-        status: 'unknown',
-        expiresAt: null,
-        resolvedAt: null,
-        verifiedAt: null,
-      });
-      const setup = makeService({ resolver: async () => null });
 
       await assert.rejects(
         setup.service.getMovieStreams(movie.id, null),
         (error) => error.statusCode === 503 &&
           error.code === 'STREAM_TEMPORARILY_UNAVAILABLE'
       );
-      assert.equal(setup.resolverCalls(), 1);
-      let stored = await pool.query(
-        `SELECT status, failure_count, last_failure_at, next_retry_at, last_error_code
-         FROM streams WHERE content_type = 'movie' AND content_id = $1`,
-        [movie.id]
-      );
-      assert.equal(stored.rows[0].status, 'failed');
-      assert.equal(stored.rows[0].failure_count, 1);
-      assert.ok(stored.rows[0].last_failure_at);
-      assert.ok(stored.rows[0].next_retry_at);
-      assert.equal(stored.rows[0].last_error_code, 'RESOLUTION_FAILED');
-
-      await assert.rejects(
-        setup.service.getMovieStreams(movie.id, null),
-        (error) => error.statusCode === 503
-      );
-      assert.equal(setup.resolverCalls(), 1);
-
-      await pool.query(
-        `UPDATE streams SET next_retry_at = NOW() - INTERVAL '1 second'
-         WHERE content_type = 'movie' AND content_id = $1`,
-        [movie.id]
-      );
-      const recovery = makeService();
-      await recovery.service.getMovieStreams(movie.id, null);
-      assert.equal(recovery.resolverCalls(), 1);
+      assert.equal(setup.enqueueCalls(), 0);
     });
 
     await t.test('movie and episode use the same lifecycle policy', async () => {
@@ -573,83 +528,61 @@ test(
         const setup = makeService();
         const response = await getForType(setup.service, contentType, content.id);
         assert.equal(response.content_type, contentType);
-        assert.equal(setup.resolverCalls(), 0);
+        assert.equal(setup.enqueueCalls(), 0);
       }
     });
 
-    await t.test('logs never contain signed URL query tokens', async () => {
+    await t.test('validation logs never contain signed URL query tokens', async () => {
       const movie = await createContent('movie');
       const secretMarker = 'do-not-log-this-token';
+      await insertStream('movie', movie.id, {
+        url: `${baseUrl}/html?token=${secretMarker}`,
+        status: 'unknown',
+        expiresAt: null,
+        verifiedAt: null,
+      });
       const setup = makeService({
-        resolver: async () => ({
-          url: `${baseUrl}/media?token=${secretMarker}`,
-          provider: 'fixture',
-          expiresAt: null,
-        }),
+        validator: createHlsValidator({ allowPrivateNetworks: true }),
       });
       await setup.service.getMovieStreams(movie.id, null);
       assert.ok(!setup.logger.messages.join('\n').includes(secretMarker));
       assert.ok(!setup.logger.messages.join('\n').includes('.m3u8?'));
     });
 
-    await t.test('same-content concurrency resolves once and rechecks after lock', async () => {
+    await t.test('same-content concurrency creates one active persistent job', async () => {
       const movie = await createContent('movie');
-      const setup = makeService({
-        resolver: async () => {
-          await new Promise((resolve) => setTimeout(resolve, 100));
-          return { url: `${baseUrl}/media`, provider: 'fixture', expiresAt: null };
-        },
-      });
+      const setup = makeService();
       const [first, second] = await Promise.all([
         setup.service.getMovieStreams(movie.id, null),
         setup.service.getMovieStreams(movie.id, null),
       ]);
 
-      assert.equal(setup.resolverCalls(), 1);
-      assert.equal(first.streams[0].stream_url, second.streams[0].stream_url);
-      assert.ok(setup.logger.messages.includes('[Streams] cache hit'));
+      assert.equal(first.status, 'pending');
+      assert.equal(second.status, 'pending');
+      const jobs = await pool.query(
+        `SELECT id FROM stream_resolution_jobs
+         WHERE content_type = 'movie' AND content_id = $1
+           AND status IN ('pending', 'processing')`,
+        [movie.id]
+      );
+      assert.equal(jobs.rowCount, 1);
     });
 
-    await t.test('different content keys do not block one another', async () => {
+    await t.test('different content keys enqueue independently', async () => {
       const first = await createContent('movie');
       const second = await createContent('movie');
-      let active = 0;
-      let maxActive = 0;
-      const setup = makeService({
-        resolver: async () => {
-          active += 1;
-          maxActive = Math.max(maxActive, active);
-          await new Promise((resolve) => setTimeout(resolve, 100));
-          active -= 1;
-          return { url: `${baseUrl}/media`, provider: 'fixture', expiresAt: null };
-        },
-      });
+      const setup = makeService();
 
       await Promise.all([
         setup.service.getMovieStreams(first.id, null),
         setup.service.getMovieStreams(second.id, null),
       ]);
-      assert.equal(setup.resolverCalls(), 2);
-      assert.equal(maxActive, 2);
-    });
-
-    await t.test('resolver error releases advisory lock for a later attempt', async () => {
-      const movie = await createContent('movie');
-      const broken = makeService({ resolver: async () => { throw new Error('fixture failure'); } });
-      await assert.rejects(
-        broken.service.getMovieStreams(movie.id, null),
-        (error) => error.statusCode === 503
+      const jobs = await pool.query(
+        `SELECT id FROM stream_resolution_jobs
+         WHERE content_id = ANY($1::uuid[])`,
+        [[first.id, second.id]]
       );
-      await pool.query(
-        `UPDATE streams SET next_retry_at = NOW() - INTERVAL '1 second'
-         WHERE content_type = 'movie' AND content_id = $1`,
-        [movie.id]
-      );
-
-      const recovered = makeService();
-      const response = await recovered.service.getMovieStreams(movie.id, null);
-      assert.equal(response.streams.length, 1);
-      assert.equal(recovered.resolverCalls(), 1);
+      assert.equal(jobs.rowCount, 2);
     });
 
     await t.test('missing content remains 404 rather than transient 503', async () => {
@@ -658,7 +591,7 @@ test(
         setup.service.getMovieStreams(crypto.randomUUID(), null),
         (error) => error.statusCode === 404
       );
-      assert.equal(setup.resolverCalls(), 0);
+      assert.equal(setup.enqueueCalls(), 0);
     });
   }
 );

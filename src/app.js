@@ -6,6 +6,7 @@ const authRoutes    = require('./modules/auth/auth.routes');
 const moviesRoutes  = require('./modules/movies/movies.routes');
 const seriesRoutes  = require('./modules/series/series.routes');
 const streamsRoutes = require('./modules/streams/streams.routes');
+const { createStreamsRouter } = streamsRoutes;
 const historyRoutes = require('./modules/history/history.routes');
 const contentRoutes = require('./modules/content/content.routes');  // nuevo
 const subtitlesRoutes = require('./modules/subtitles/subtitles.routes');
@@ -26,6 +27,7 @@ const createApp = ({
   allowPublicRegistration = ALLOW_PUBLIC_REGISTRATION,
   subtitlesDir = DEFAULT_SUBTITLES_DIR,
   apiLimiter = createDefaultLimiter(),
+  streamsService,
 } = {}) => {
   const app = express();
   app.locals.allowPublicRegistration = allowPublicRegistration === true;
@@ -42,7 +44,9 @@ const createApp = ({
   app.use('/api/auth',      authRoutes);
   app.use('/api/movies',    moviesRoutes);
   app.use('/api/series',    seriesRoutes);
-  app.use('/api/streams',   streamsRoutes);
+  app.use('/api/streams', streamsService
+    ? createStreamsRouter(streamsService)
+    : streamsRoutes);
   app.use('/api/history',   historyRoutes);
   app.use('/api/content',   contentRoutes);
   app.use('/api/subtitles', subtitlesRoutes);

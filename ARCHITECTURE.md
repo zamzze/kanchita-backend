@@ -2,9 +2,9 @@
 
 ## Alcance y estado observado
 
-Auditoría de `zamzze/kanchita-backend`, actualizada desde `main` en `fa9bb75` el 5 de septiembre de 2026. La Fase 1 cerró ejecución reproducible, migraciones, CI PostgreSQL, seguridad HTTP básica y sesiones rotativas. La Fase 2A añade lifecycle confiable para streams directos sin cambiar el resolver existente.
+Auditoría de `zamzze/kanchita-backend`, actualizada desde `main` en `aadbd6e` el 5 de septiembre de 2026. La Fase 1 cerró ejecución reproducible, migraciones, CI PostgreSQL, seguridad HTTP básica y sesiones rotativas. Las Fases 2A–2B añaden lifecycle confiable y resolución asíncrona persistente para streams directos sin cambiar el proveedor existente.
 
-El sistema es un monolito Node.js/CommonJS con Express 4 y acceso directo a PostgreSQL mediante `pg`. No hay ORM. La API, el planificador de ingesta, el scraping con Chromium y el almacenamiento local de subtítulos viven en el mismo proceso/contenedor.
+El sistema usa Node.js/CommonJS con Express 4 y acceso directo a PostgreSQL mediante `pg`. No hay ORM. API y worker de streams son procesos separados que comparten código y PostgreSQL; el planificador de ingesta y el almacenamiento local de subtítulos todavía pertenecen al proceso API.
 
 ## Vista general
 
@@ -14,15 +14,19 @@ flowchart LR
   API --> Auth[Auth]
   API --> Catalog[Movies / Series / History]
   API --> Content[Search / On-demand ingestion]
-  API --> Streams[Stream resolver]
+  API --> Streams[Stream lifecycle]
   API --> Subs[Subtitle resolver]
   Auth --> PG[(PostgreSQL)]
   Catalog --> PG
   Content --> TMDB[TMDB API]
   Content --> PG
   Content --> Scraper[Puppeteer + Chromium]
-  Streams --> PG
-  Streams --> Scraper
+  Streams -->|enqueue / poll| PG
+  PG --> Queue[Persistent stream jobs]
+  Queue --> Worker[Stream resolution worker]
+  Worker --> Scraper
+  Worker --> Validator[SSRF-safe HLS validator]
+  Worker --> PG
   Scraper --> Provider[Cineby / Vidfast chain]
   Subs --> SubDL[SubDL API]
   Subs --> Files[public/subtitles/*.vtt]
@@ -60,15 +64,15 @@ Upsert por `(user_id, content_type, content_id)`, listado cronológico y consult
 
 ### Búsqueda e ingesta bajo demanda
 
-Busca hasta cinco resultados en TMDB y comprueba uno por uno si ya están en el catálogo. Un detalle no existente se normaliza, se inserta y dispara en segundo plano `processMovie` o `processSeries`. Las películas intentan resolver un stream durante la ingesta; las series sólo importan temporadas/episodios.
+Busca hasta cinco resultados en TMDB y comprueba uno por uno si ya están en el catálogo. Un detalle no existente se normaliza e inserta. Las películas crean/reutilizan un job de resolución sin invocar el proveedor desde el API; las series importan temporadas/episodios y cada episodio se encola posteriormente cuando su stream se solicita.
 
 ### Streams
 
-Películas y episodios entran en un único flujo de lifecycle. Una fila `ready`, no expirada y verificada recientemente sale de caché. Filas `unknown`/`stale` se comprueban con un GET limitado que sólo lee el manifest y exige `#EXTM3U`; expiradas o inválidas pasan al adapter del resolver existente. El adapter puede devolver URL, proveedor y expiración opcional; si falta expiración se aplica TTL configurable.
+Películas y episodios entran en un único flujo de lifecycle. Una fila `ready`, no expirada y verificada recientemente sale de caché. Filas `unknown`/`stale` se comprueban con un GET limitado que sólo lee el manifest y exige `#EXTM3U`; si hace falta una URL nueva, el API crea/reutiliza un job y responde `202`. El adapter del resolver sólo se invoca desde el worker y puede devolver URL, proveedor y expiración opcional; si falta expiración se aplica TTL configurable.
 
 El validador aplica una frontera SSRF fail-closed antes de la URL inicial y de cada redirect. Resuelve todas las IP, rechaza rangos no públicos IPv4/IPv6 y entrega al socket una resolución fijada a las direcciones aprobadas. Los fixtures localhost sólo se habilitan mediante una opción inyectada explícitamente en tests; producción la deniega por defecto.
 
-Los estados persistentes son `unknown`, `ready`, `stale` y `failed`. Éxitos actualizan resolución/verificación y reinician fallos. Fallos incrementan una vez por operación, guardan únicamente un código estable y aplican backoff 30 s/2 min/5 min/15 min. Un advisory lock PostgreSQL por contenido evita resoluciones duplicadas y obliga a releer caché tras esperar. El backend no descarga segmentos ni hace proxy de playback.
+Los estados persistentes del stream son `unknown`, `ready`, `stale` y `failed`. Éxitos actualizan resolución/verificación y reinician fallos. Fallos incrementan una vez por intento y aplican backoff 30 s/2 min/5 min/15 min. Los jobs usan `pending`, `processing`, `completed` y `failed`, deduplicación mediante índice parcial, claim `FOR UPDATE SKIP LOCKED`, lease y retries 30 s/2 min/5 min. `attempt_count` sólo aumenta al claim y tiene constraint `attempt_count <= max_attempts`; recuperar un lease no cuenta como ejecución nueva. La lease mínima es timeout + 30 s. Un timeout es terminal para el job y solicita reciclar el worker porque el adapter Chromium aún no permite cancelación cooperativa. No hay una transacción abierta durante Chromium/red. El backend no descarga segmentos ni hace proxy de playback.
 
 ### Subtítulos
 
@@ -97,8 +101,8 @@ Consulta el caché en `subtitles`, busca en SubDL, descarga ZIP/RAR en memoria, 
 | GET | `/api/history/:content_type/:content_id` | Sí | Consultar progreso |
 | GET | `/api/content/search?q=&type=` | Sí | Buscar en TMDB |
 | GET | `/api/content/:tmdb_id?type=` | Sí | Obtener/importar contenido |
-| GET | `/api/streams/movie/:id` | Sí | Resolver stream de película |
-| GET | `/api/streams/episode/:id` | Sí | Resolver stream de episodio |
+| GET | `/api/streams/movie/:id` | Sí | Devolver stream o `202` mientras se resuelve |
+| GET | `/api/streams/episode/:id` | Sí | Devolver stream o `202` mientras se resuelve |
 | GET | `/api/subtitles/:tmdbId?type=&id=&season=&episode=` | Sí | Buscar/crear subtítulo |
 | GET | `/subtitles/:file.vtt` | No | Servir WebVTT estático |
 
@@ -115,6 +119,7 @@ Consulta el caché en `subtitles`, busca en SubDL, descarga ZIP/RAR en memoria, 
 | `episodes` | Episodios | FK a serie; temporada/episodio único por serie |
 | `content_genres` | Relación polimórfica | Sin FK para `content_id` |
 | `streams` | URLs directas/embed y lifecycle | Única `(content_type, content_id, server_name) NULLS NOT DISTINCT`; estado, proveedor, expiración, verificación y backoff |
+| `stream_resolution_jobs` | Cola persistente movie/episode | Un job activo por contenido; estado, intentos, scheduling, lease y ownership |
 | `subtitles` | Caché de URLs VTT por idioma | Única `(content_type, content_id, language)` |
 | `watch_history` | Progreso por usuario | FK sólo a usuario; contenido polimórfico sin FK |
 | `scraper_log` | Resultado de ingesta | Sin FK |
@@ -123,7 +128,7 @@ Consulta el caché en `subtitles`, busca en SubDL, descarga ZIP/RAR en memoria, 
 
 `database/migrations/` es la fuente de verdad. El runner `database/migrate.js` aplica archivos en orden, registra checksum y fecha en `schema_migrations`, usa un advisory lock y envuelve cada migración pendiente en una transacción. `database/init.sql` incluye los mismos archivos para inicializaciones de PostgreSQL mediante Docker.
 
-La restricción de streams usa `UNIQUE NULLS NOT DISTINCT` de PostgreSQL 15 y mantiene su semántica. La migración 003 crea `auth_sessions`; la 004 añade lifecycle con constraints e índices. Streams anteriores no se eliminan ni se declaran válidos: quedan `unknown`, sin verificación/expiración, para evaluación perezosa en el primer acceso.
+La restricción de streams usa `UNIQUE NULLS NOT DISTINCT` de PostgreSQL 15 y mantiene su semántica. La migración 003 crea `auth_sessions`; la 004 añade lifecycle; la 005 crea la cola persistente y su índice único parcial. Streams anteriores no se eliminan ni se declaran válidos: quedan `unknown`, sin verificación/expiración, para evaluación perezosa en el primer acceso.
 
 ## Integraciones externas
 

@@ -65,11 +65,12 @@
 
 1. ✅ Fase 2A modela `resolved_at`, `expires_at`, `last_verified_at`, fallos, proveedor y estado.
 2. ✅ Fase 2A verifica/re-resuelve manifests caducados sin registrar URLs sensibles; señales de fallo del playback cliente quedan pendientes.
-3. 🟡 Fase 2A añade lock PostgreSQL por contenido, timeout y backoff; circuit breaker, límites globales y cola persistente siguen pendientes.
-4. Separar el worker de scraping del proceso HTTP cuando el comportamiento esté cubierto por pruebas.
-5. Definir interfaz de proveedor y eliminar código muerto tras probar equivalencia.
-6. Endurecer descargas de subtítulos: límites de bytes/entradas/ratio, timeout, MIME, redirects y limpieza; almacenamiento persistente u objeto compatible con múltiples réplicas.
-7. Añadir pruebas de reproducción HLS autorizada, selección de calidad, CORS de segmentos y sincronía de VTT.
+3. ✅ Fase 2B reemplaza el single-flight síncrono por cola PostgreSQL persistente, deduplicación, lease, retries y timeout del job.
+4. ✅ Fase 2B separa la resolución de streams en un worker independiente y deja el API en `200/202/503`, cubierto por pruebas E2E.
+5. ✅ Cierre 2B elimina vías heredadas directas, fija `attempt_count` al claim, exige lease con margen y hace terminal el timeout con reciclaje del worker para preservar single-flight.
+6. Definir una interfaz de proveedores múltiples si aparece una segunda implementación real; el adapter único actual ya quedó aislado.
+7. Endurecer descargas de subtítulos: límites de bytes/entradas/ratio, timeout, MIME, redirects y limpieza; almacenamiento persistente u objeto compatible con múltiples réplicas.
+8. Añadir pruebas de reproducción HLS autorizada, selección de calidad, CORS de segmentos y sincronía de VTT.
 
 ## Fase 3 — API preparada para frontend
 
@@ -106,6 +107,6 @@
 
 ## Estado de las primeras fases
 
-La Fase 1 está cerrada. La Fase 2A incorpora lifecycle, validación y single-flight para streams directos manteniendo el resolver como adapter. Permanecen separadas la limitación global/worker, endurecimiento de subtítulos, señales de fallo de playback, validación de entradas, proxy/healthchecks, dependencias y el procedimiento operativo de secretos/historial.
+La Fase 1 está cerrada. Las Fases 2A–2B incorporan lifecycle, validación SSRF-safe y una cola/worker PostgreSQL para streams directos manteniendo el resolver como adapter. Permanecen pendientes límites globales del worker, cancelación real del resolver/Chromium, endurecimiento de subtítulos, señales de fallo de playback, validación de entradas, proxy/healthchecks, dependencias y el procedimiento operativo de secretos/historial.
 
 
