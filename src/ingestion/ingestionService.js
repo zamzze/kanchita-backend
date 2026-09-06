@@ -1,5 +1,4 @@
 const tmdbFetcher   = require('./tmdb/tmdbFetcher');
-const { scrapeContent } = require('./scraper/scraperEngine');
 const {
   normalizeMovie,
   normalizeSeries,
@@ -7,39 +6,31 @@ const {
 } = require('./normalizer/movieNormalizer');
 const db            = require('../db/ingestion.queries');
 const logDb         = require('../db/scraper_log.queries');
-const { upsertStream } = require('../db/streams.queries');
+const { createResolutionQueue } = require('../modules/streams/resolutionQueue');
 const { redactSensitive } = require('../utils/redact');
 
 const delay = (ms) => new Promise(r => setTimeout(r, ms));
 
-const processMovie = async (tmdbMovie) => {
+const processMovie = async (tmdbMovie, {
+  resolutionQueue = createResolutionQueue(),
+} = {}) => {
   try {
     const detail     = await tmdbFetcher.getMovieDetail(tmdbMovie.id);
     const normalized = normalizeMovie(detail);
     const { id: movieId } = await db.upsertMovie(normalized);
     await db.upsertGenres('movie', movieId, normalized.genres);
 
-    const streams = await scrapeContent({
-      tmdbId:      tmdbMovie.id,
-      contentId:   movieId,
-      contentType: 'movie',
-      title:       normalized.title,
-      year:        normalized.release_year,
-    });
-
-    for (const stream of streams) {
-      await upsertStream(stream);
-    }
+    await resolutionQueue.enqueue('movie', movieId);
 
     await logDb.log({
       contentType:  'movie',
       contentId:    movieId,
       tmdbId:       tmdbMovie.id,
-      status:       streams.length ? 'success' : 'no_streams',
-      streamsFound: streams.length,
+      status:       'queued',
+      streamsFound: 0,
     });
 
-    console.log(`[Ingestion] Movie "${normalized.title}" — ${streams.length} streams`);
+    console.log(`[Ingestion] Movie "${normalized.title}" — stream queued`);
   } catch (err) {
     console.error(`[Ingestion] Failed movie tmdb:${tmdbMovie.id}`, redactSensitive(err.message));
   }

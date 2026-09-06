@@ -34,6 +34,7 @@ test('migration files are ordered and checksummed deterministically', async () =
       '002_phase_1b_schema_alignment.sql',
       '003_auth_sessions.sql',
       '004_stream_lifecycle.sql',
+      '005_stream_resolution_jobs.sql',
     ]
   );
   assert.ok(migrations.every(({ checksum }) => /^[a-f0-9]{64}$/.test(checksum)));
@@ -76,6 +77,7 @@ test(
           '002_phase_1b_schema_alignment.sql',
           '003_auth_sessions.sql',
           '004_stream_lifecycle.sql',
+          '005_stream_resolution_jobs.sql',
         ]);
 
         const second = await runMigrations({
@@ -210,6 +212,70 @@ test(
         );
       });
 
+      await t.test('creates the persistent stream job contract and indexes', async () => {
+        const columns = await pools.empty.query(`
+          SELECT column_name
+          FROM information_schema.columns
+          WHERE table_schema = current_schema()
+            AND table_name = 'stream_resolution_jobs'
+          ORDER BY ordinal_position
+        `);
+        assert.deepEqual(columns.rows.map((row) => row.column_name), [
+          'id',
+          'content_type',
+          'content_id',
+          'status',
+          'attempt_count',
+          'max_attempts',
+          'run_after',
+          'locked_at',
+          'locked_by',
+          'last_error_code',
+          'created_at',
+          'updated_at',
+          'started_at',
+          'completed_at',
+        ]);
+
+        const constraints = await pools.empty.query(`
+          SELECT conname
+          FROM pg_constraint
+          WHERE conrelid = 'stream_resolution_jobs'::regclass
+        `);
+        const constraintNames = constraints.rows.map((row) => row.conname);
+        for (const name of [
+          'stream_resolution_jobs_content_type_check',
+          'stream_resolution_jobs_status_check',
+          'stream_resolution_jobs_attempt_count_check',
+          'stream_resolution_jobs_max_attempts_check',
+          'stream_resolution_jobs_lock_check',
+          'stream_resolution_jobs_last_error_code_check',
+        ]) {
+          assert.ok(constraintNames.includes(name));
+        }
+
+        const indexes = await pools.empty.query(`
+          SELECT indexname
+          FROM pg_indexes
+          WHERE schemaname = current_schema()
+            AND tablename = 'stream_resolution_jobs'
+        `);
+        const indexNames = indexes.rows.map((row) => row.indexname);
+        assert.ok(indexNames.includes('stream_resolution_jobs_active_content_idx'));
+        assert.ok(indexNames.includes('stream_resolution_jobs_claim_idx'));
+        assert.ok(indexNames.includes('stream_resolution_jobs_lease_idx'));
+
+        await assert.rejects(
+          pools.empty.query(
+            `INSERT INTO stream_resolution_jobs
+               (content_type, content_id, attempt_count, max_attempts)
+             VALUES ('movie', $1, 2, 1)`,
+            [crypto.randomUUID()]
+          ),
+          (error) => error.code === '23514'
+        );
+      });
+
       await t.test('upserts one logical NULL-named stream predictably', async () => {
         const {
           upsertStreamWithClient,
@@ -319,10 +385,12 @@ test(
                 AND conname = 'streams_content_server_unique'
             ) AS has_stream_constraint,
             to_regclass('auth_sessions') IS NOT NULL AS has_auth_sessions
+            ,to_regclass('stream_resolution_jobs') IS NOT NULL AS has_stream_jobs
         `);
         assert.equal(contract.rows[0].has_subtitles, true);
         assert.equal(contract.rows[0].has_stream_constraint, true);
         assert.equal(contract.rows[0].has_auth_sessions, true);
+        assert.equal(contract.rows[0].has_stream_jobs, true);
       });
 
       await t.test('refuses ambiguous legacy duplicates without deleting them', async () => {

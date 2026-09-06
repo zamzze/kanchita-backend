@@ -4,9 +4,11 @@ const {
   normalizeMovie,
   normalizeSeries,
 } = require('../../ingestion/normalizer/movieNormalizer');
-const { processMovie, processSeries } = require('../../ingestion/ingestionService');
+const { processSeries } = require('../../ingestion/ingestionService');
+const { createResolutionQueue } = require('../streams/resolutionQueue');
 const db = require('../../db/ingestion.queries');
 const { redactSensitive } = require('../../utils/redact');
+const resolutionQueue = createResolutionQueue(pool);
 
 const searchAndFetch = async (query, contentType = 'movie') => {
   const endpoint = contentType === 'movie' ? '/search/movie' : '/search/tv';
@@ -79,10 +81,10 @@ const getOrFetchContent = async (tmdbId, contentType = 'movie') => {
     [contentType, content.id]
   );
 
-  // Disparar scraper si es nuevo O si ya existe pero no tiene streams
-  const needsScraping = justAdded || streams.length === 0;
-  if (needsScraping) {
-    triggerScraping(
+  // Preparar contenido si es nuevo o todavía no tiene streams.
+  const needsPreparation = justAdded || streams.length === 0;
+  if (needsPreparation) {
+    triggerContentPreparation(
       tmdbId,
       content.id,
       contentType,
@@ -98,17 +100,18 @@ const getOrFetchContent = async (tmdbId, contentType = 'movie') => {
   };
 };
 
-// Fire and forget — lanza el scraper sin bloquear la respuesta
-const triggerScraping = (tmdbId, contentId, contentType, title, year) => {
-  console.log(`[OnDemand] Triggering scrape for "${title}" (tmdb:${tmdbId})`);
+// Fire and forget: las películas sólo encolan resolución; las series importan
+// metadata/episodios y dejan el stream de cada episodio para acceso lazy.
+const triggerContentPreparation = (tmdbId, contentId, contentType, title, year) => {
+  console.log(`[OnDemand] Preparing "${title}" (tmdb:${tmdbId})`);
 
   const task = contentType === 'movie'
-    ? processMovie({ id: tmdbId })
+    ? resolutionQueue.enqueue('movie', contentId)
     : processSeries({ id: tmdbId });
 
   task.catch(err => {
     console.error(
-      `[OnDemand] Scrape failed for tmdb:${tmdbId}`,
+      `[OnDemand] Content preparation failed for tmdb:${tmdbId}`,
       redactSensitive(err.message)
     );
   });

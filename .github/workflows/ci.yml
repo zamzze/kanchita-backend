@@ -70,11 +70,23 @@ jobs:
       - name: Run PostgreSQL integration tests explicitly
         run: npm run test:db
 
+      - name: Run HTTP integration tests explicitly
+        run: npm run test:http
+
       - name: Run auth session integration tests explicitly
         run: npm run test:auth
 
       - name: Run stream lifecycle integration tests explicitly
         run: npm run test:streams
+
+      - name: Run persistent queue integration tests explicitly
+        run: npm run test:queue
+
+      - name: Run stream worker integration tests explicitly
+        run: npm run test:worker
+
+      - name: Verify resolver process boundary explicitly
+        run: npm run test:boundary
 
       - name: Check changed whitespace
         run: git diff --check HEAD^ HEAD

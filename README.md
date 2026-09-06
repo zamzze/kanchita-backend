@@ -35,7 +35,9 @@ El registro público está cerrado por defecto. `ALLOW_PUBLIC_REGISTRATION` sól
 
 `JWT_ISSUER`, `JWT_ACCESS_AUDIENCE` y `JWT_REFRESH_AUDIENCE` forman parte del contrato criptográfico. Los valores deben ser coherentes en todas las réplicas y no deben cambiarse sin forzar un nuevo login de los clientes.
 
-El caché de streams directos usa por defecto TTL de 60 minutos, reverificación cada 10 minutos, timeout remoto de 5 segundos y manifests de hasta 256 KiB. Se configuran con `STREAM_CACHE_TTL_MINUTES`, `STREAM_VERIFY_INTERVAL_MINUTES`, `STREAM_VERIFY_TIMEOUT_MS` y `STREAM_MAX_MANIFEST_BYTES`. `STREAM_LOCK_TIMEOUT_MS` limita a 5 segundos la espera del single-flight PostgreSQL.
+El caché de streams directos usa por defecto TTL de 60 minutos, reverificación cada 10 minutos, timeout remoto de 5 segundos y manifests de hasta 256 KiB. Se configuran con `STREAM_CACHE_TTL_MINUTES`, `STREAM_VERIFY_INTERVAL_MINUTES`, `STREAM_VERIFY_TIMEOUT_MS` y `STREAM_MAX_MANIFEST_BYTES`.
+
+La resolución pesada se ejecuta en un proceso separado. La cola usa por defecto polling cada segundo, lease de 180 segundos, tres intentos y timeout de resolución de 90 segundos. `STREAM_PENDING_RETRY_SECONDS=2` controla el `Retry-After` sugerido por el API.
 
 ## Instalación reproducible
 
@@ -84,6 +86,15 @@ El script de desarrollo utiliza el soporte `--env-file` de Node 20 para cargar `
 npm start
 ```
 
+Después de migrar la base, ejecuta el API y el worker en procesos separados:
+
+```bash
+npm start
+npm run worker:streams
+```
+
+El API nunca inicia el worker automáticamente.
+
 ## Docker Compose de desarrollo
 
 ```bash
@@ -119,10 +130,17 @@ Para ejecutar las pruebas de sesiones contra PostgreSQL 15:
 TEST_DB_URL=postgresql://user:password@localhost:5432/test_db npm run test:auth
 ```
 
-Para ejecutar el validador HLS y las pruebas de lifecycle/single-flight:
+Para ejecutar el validador HLS y las pruebas de lifecycle:
 
 ```bash
 TEST_DB_URL=postgresql://user:password@localhost:5432/test_db npm run test:streams
+```
+
+Para ejecutar la cola y el worker por separado:
+
+```bash
+TEST_DB_URL=postgresql://user:password@localhost:5432/test_db npm run test:queue
+TEST_DB_URL=postgresql://user:password@localhost:5432/test_db npm run test:worker
 ```
 
 La resolución mediante `/api/subtitles` requiere Bearer JWT. Los `.vtt` ya generados continúan disponibles en `/subtitles` para el reproductor; CORS y `Cross-Origin-Resource-Policy: cross-origin` limitan/permiten su consumo desde los orígenes configurados.
@@ -149,15 +167,38 @@ La migración `003_auth_sessions.sql` borra todos los valores legacy de `users.r
 
 Antes de cada conexión —incluidos todos los redirects— el validador resuelve todas las direcciones DNS y rechaza destinos loopback, privados, link-local, CGNAT, multicast, reservados o no globales. La conexión usa una resolución fijada a una IP ya aprobada y desactiva reutilización del agente para evitar una segunda consulta DNS independiente. `allowPrivateNetworks` existe únicamente como dependencia explícita de pruebas para fixtures localhost; no es una variable operativa ni está habilitada en producción.
 
-Las filas legacy se conservan como `unknown` y se validan al primer acceso. Una validación correcta las promueve a `ready` y aplica el TTL si no tenían expiración. Una URL expirada no se valida ni se devuelve: se intenta resolver de nuevo mediante el adapter existente. Una resolución correcta reinicia fallos y tiempos; un fallo usa códigos internos estables y backoff de 30 segundos, 2, 5 y hasta 15 minutos.
+Las filas legacy se conservan como `unknown` y se validan al primer acceso. Una validación correcta las promueve a `ready` y aplica el TTL si no tenían expiración. Una URL expirada no se valida ni se devuelve: el API crea o reutiliza un job persistente. Una resolución correcta del worker reinicia fallos y tiempos; un fallo usa códigos internos estables y backoff de 30 segundos, 2, 5 y hasta 15 minutos.
 
-La resolución se serializa con un advisory lock PostgreSQL por `(content_type, content_id)`. El lock utiliza un cliente dedicado, adquisición no bloqueante con timeout, liberación en `finally` y relectura de caché después de obtenerlo. Películas y episodios comparten exactamente el mismo algoritmo. La API continúa devolviendo la URL directa y no expone estado, proveedor, fallos ni locks.
+## Cola y worker de resolución
+
+Si no hay stream usable, `GET /api/streams/movie/:id` y `GET /api/streams/episode/:id` responden `202 Accepted`, cabecera `Retry-After: 2` y:
+
+```json
+{
+  "success": true,
+  "data": {
+    "status": "pending",
+    "code": "STREAM_RESOLUTION_PENDING",
+    "retry_after_ms": 2000
+  }
+}
+```
+
+El cliente consulta de nuevo el mismo endpoint. Obtiene `200` cuando `streams` contiene una fila usable, `202` mientras exista trabajo activo y `503 STREAM_TEMPORARILY_UNAVAILABLE` durante el backoff del lifecycle. Un ID inexistente continúa devolviendo `404` y nunca crea un job.
+
+`stream_resolution_jobs` admite `pending`, `processing`, `completed` y `failed`. Un índice único parcial garantiza un solo job `pending|processing` por `(content_type, content_id)`. Cada worker reclama una fila mediante `FOR UPDATE SKIP LOCKED`, asigna `locked_by`/`locked_at` y confirma la transacción antes de llamar al resolver. La red y Chromium nunca se ejecutan dentro de una transacción o lock PostgreSQL.
+
+`attempt_count` aumenta únicamente cuando un worker reclama trabajo real, nunca por enqueue, polling o recuperación de lease, y no puede superar `max_attempts`. Los fallos recuperables reintentan con backoff de 30 segundos, 2 minutos y 5 minutos. Los jobs cuyo lease expiró vuelven a `pending`, o terminan `failed` si agotaron intentos. El lease debe superar el timeout de resolución por al menos 30 segundos (defaults: 180 s frente a 90 s); una configuración insegura impide iniciar el worker. Tras `SIGINT`/`SIGTERM`, deja de iniciar claims y termina el claim que ya estaba en curso antes de cerrar PostgreSQL. Películas y episodios comparten cola, procesador, validator y lifecycle.
+
+El antiguo advisory lock de resolución síncrona fue retirado: single-flight pertenece ahora al índice parcial y al claim atómico. La tabla de jobs no almacena URLs, manifests, tokens, payloads externos ni mensajes arbitrarios.
 
 La fijación de la IP elimina la ventana habitual entre pre-resolución y conexión, pero no convierte al destino público en confiable: un servidor público aprobado todavía podría actuar como proxy hacia redes internas o cambiar su comportamiento. La política de redirects sólo controla destinos visibles en la respuesta HTTP.
 
+El adapter actual no acepta `AbortSignal`. Por ello, un `RESOLUTION_TIMEOUT` es terminal para el job, no se reencola, y el proceso worker se recicla con salida no-cero después de cerrar PostgreSQL. Así no se programa deliberadamente otro intento mientras el Chromium anterior podría seguir vivo. La cancelación cooperativa y el aislamiento/terminación controlada del navegador quedan para la Fase 2C.
+
 ## Integración continua
 
-GitHub Actions ejecuta `npm ci`, el smoke test, las protecciones HTTP, migraciones, sesiones y lifecycle de streams contra PostgreSQL 15 real. La suite HLS usa exclusivamente un servidor HTTP local controlado y no contacta proveedores externos.
+GitHub Actions ejecuta `npm ci`, smoke, HTTP, migraciones, sesiones, lifecycle, cola y worker contra PostgreSQL 15 real. Las suites de streams usan exclusivamente fixtures/inyecciones locales y no contactan proveedores externos.
 
 `npm audit` también se ejecuta para dar visibilidad, pero permanece informativo mientras se resuelven de forma controlada las vulnerabilidades heredadas.
 
