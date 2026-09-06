@@ -33,6 +33,7 @@ test('migration files are ordered and checksummed deterministically', async () =
       '001_legacy_baseline.sql',
       '002_phase_1b_schema_alignment.sql',
       '003_auth_sessions.sql',
+      '004_stream_lifecycle.sql',
     ]
   );
   assert.ok(migrations.every(({ checksum }) => /^[a-f0-9]{64}$/.test(checksum)));
@@ -74,6 +75,7 @@ test(
           '001_legacy_baseline.sql',
           '002_phase_1b_schema_alignment.sql',
           '003_auth_sessions.sql',
+          '004_stream_lifecycle.sql',
         ]);
 
         const second = await runMigrations({
@@ -157,6 +159,57 @@ test(
         assert.ok(indexNames.includes('auth_sessions_active_user_idx'));
       });
 
+      await t.test('creates the stream lifecycle contract, checks and indexes', async () => {
+        const columns = await pools.empty.query(`
+          SELECT column_name
+          FROM information_schema.columns
+          WHERE table_schema = current_schema()
+            AND table_name = 'streams'
+          ORDER BY ordinal_position
+        `);
+        const columnNames = columns.rows.map((row) => row.column_name);
+        for (const name of [
+          'provider',
+          'status',
+          'expires_at',
+          'resolved_at',
+          'last_verified_at',
+          'failure_count',
+          'last_failure_at',
+          'next_retry_at',
+          'last_error_code',
+        ]) {
+          assert.ok(columnNames.includes(name));
+        }
+
+        const constraints = await pools.empty.query(`
+          SELECT conname
+          FROM pg_constraint
+          WHERE conrelid = 'streams'::regclass
+        `);
+        const constraintNames = constraints.rows.map((row) => row.conname);
+        assert.ok(constraintNames.includes('streams_status_check'));
+        assert.ok(constraintNames.includes('streams_failure_count_check'));
+        assert.ok(constraintNames.includes('streams_last_error_code_check'));
+
+        const indexes = await pools.empty.query(`
+          SELECT indexname
+          FROM pg_indexes
+          WHERE schemaname = current_schema() AND tablename = 'streams'
+        `);
+        const indexNames = indexes.rows.map((row) => row.indexname);
+        assert.ok(indexNames.includes('streams_lifecycle_lookup_idx'));
+        assert.ok(indexNames.includes('streams_retry_idx'));
+
+        await assert.rejects(
+          pools.empty.query(`
+            INSERT INTO streams (content_type, content_id, status)
+            VALUES ('movie', $1, 'arbitrary')
+          `, [crypto.randomUUID()]),
+          (error) => error.code === '23514'
+        );
+      });
+
       await t.test('upserts one logical NULL-named stream predictably', async () => {
         const {
           upsertStreamWithClient,
@@ -235,11 +288,19 @@ test(
           [movie.rows[0].id]
         );
         const preservedStream = await pools.legacy.query(
-          'SELECT id FROM streams WHERE id = $1',
+          `SELECT id, stream_url, status, last_verified_at, expires_at
+           FROM streams WHERE id = $1`,
           [stream.rows[0].id]
         );
         assert.equal(preservedMovie.rowCount, 1);
         assert.equal(preservedStream.rowCount, 1);
+        assert.equal(
+          preservedStream.rows[0].stream_url,
+          'https://example.test/legacy.m3u8'
+        );
+        assert.equal(preservedStream.rows[0].status, 'unknown');
+        assert.equal(preservedStream.rows[0].last_verified_at, null);
+        assert.equal(preservedStream.rows[0].expires_at, null);
 
         const preservedUser = await pools.legacy.query(
           'SELECT id, refresh_token FROM users WHERE id = $1',

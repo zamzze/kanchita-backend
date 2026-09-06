@@ -13,6 +13,7 @@ Alcance: rama `main`, commit `6844ef4`, 5.087 archivos versionados; 5.024 perten
 - **Fase 1C:** valida automáticamente instalación, smoke test y migraciones contra PostgreSQL 15 real mediante GitHub Actions. `npm audit` se informa sin bloquear mientras se corrigen las vulnerabilidades heredadas.
 - **Fase 1D:** corrige el orden del rate limiter, restringe CORS, cierra el registro por defecto, protege la resolución de subtítulos, evita detalles internos en respuestas 5xx y redacta logging sensible básico. Los límites de red/archivo y el rediseño JWT siguen pendientes.
 - **Fase 1E:** resuelve A-06 con sesiones múltiples, hash de refresh tokens, rotación transaccional, revocación por sesión, detección básica de reutilización y JWT tipados con parámetros explícitos.
+- **Fase 2A:** remedia el núcleo de A-04 con estados, TTL, validación HLS acotada, expiración, fallos/backoff y single-flight PostgreSQL.
 - La rotación de secretos, reescritura del historial y los demás hallazgos continúan pendientes.
 
 ## CRÍTICO
@@ -51,11 +52,13 @@ SubDL registra la URL que contiene `api_key`. ProviderC registra URLs completas 
 
 **Remediación parcial:** ya no se registran URLs SubDL con clave, playlists HLS, URLs de frames, rutas del VTT ni contenido del subtítulo. Una utilidad mínima redacta Bearer tokens, parámetros sensibles, credenciales PostgreSQL y URLs `.m3u8` en mensajes de error. Queda pendiente logging estructurado.
 
-### A-04 — Caché de streams incorrecta para URLs temporales
+### A-04 — Caché de streams incorrecta para URLs temporales — PARCIALMENTE RESUELTO EN FASE 2A
 
 La tabla no tiene `expires_at`, `last_verified_at`, estado de fallo ni origen/versionado. Todo stream directo activo se considera válido para siempre. Un 403/404 aguas arriba no causa refresh y el API devuelve URLs potencialmente caducadas. El scraper puede iniciar varias resoluciones iguales en paralelo y escribir duplicados.
 
 **Impacto:** reproducción que deja de funcionar de manera permanente hasta intervención manual; exposición prolongada de URLs firmadas.
+
+**Remediación parcial:** `004_stream_lifecycle.sql` incorpora proveedor, estado restringido, expiración, resolución, verificación, contador de fallos y backoff. El servicio ya no confía sólo en `is_active`, valida manifests antiguos, no devuelve expirados y serializa la resolución por contenido mediante PostgreSQL. Cuando el resolver no declara expiración se aplica TTL de 60 minutos. Sigue pendiente que proveedores futuros aporten expiración explícita y comprobar fallos reales de playback/segmentos desde el cliente; esta fase no crea un proxy HLS.
 
 ### A-05 — Controles de abuso insuficientes para Puppeteer — PARCIALMENTE RESUELTO EN FASE 1D
 

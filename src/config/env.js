@@ -16,6 +16,15 @@ const parseCorsOrigins = (value = '') =>
 
 const isExplicitlyEnabled = (value) => value === 'true';
 
+const positiveInteger = (name, fallback) => {
+  const value = process.env[name];
+  if (value === undefined || value === '') return fallback;
+  if (!/^\d+$/.test(value) || Number(value) < 1) {
+    throw new Error(`${name} must be a positive integer`);
+  }
+  return Number(value);
+};
+
 required.forEach((key) => {
   if (!process.env[key]) {
     throw new Error(`Missing required env var: ${key}`);
@@ -40,6 +49,12 @@ module.exports = {
   ALLOW_PUBLIC_REGISTRATION: isExplicitlyEnabled(
     process.env.ALLOW_PUBLIC_REGISTRATION
   ),
+  STREAM_CACHE_TTL_MINUTES: positiveInteger('STREAM_CACHE_TTL_MINUTES', 60),
+  STREAM_VERIFY_INTERVAL_MINUTES: positiveInteger('STREAM_VERIFY_INTERVAL_MINUTES', 10),
+  STREAM_VERIFY_TIMEOUT_MS: positiveInteger('STREAM_VERIFY_TIMEOUT_MS', 5000),
+  STREAM_MAX_MANIFEST_BYTES: positiveInteger('STREAM_MAX_MANIFEST_BYTES', 256 * 1024),
+  STREAM_LOCK_TIMEOUT_MS: positiveInteger('STREAM_LOCK_TIMEOUT_MS', 5000),
   parseCorsOrigins,
   isExplicitlyEnabled,
+  positiveInteger,
 };

@@ -170,6 +170,23 @@ test('does not expose internal error details in HTTP 500 responses', async () =>
   }
 });
 
+test('exposes only the allowlisted stream-unavailable 503 contract', async () => {
+  const app = express();
+  app.get('/stream', (req, res, next) => {
+    const failure = new Error('Stream temporarily unavailable');
+    failure.statusCode = 503;
+    failure.code = 'STREAM_TEMPORARILY_UNAVAILABLE';
+    failure.safeToExpose = true;
+    next(failure);
+  });
+  app.use(errorHandler);
+
+  const response = await request(app).get('/stream');
+  assert.equal(response.status, 503);
+  assert.equal(response.body.code, 'STREAM_TEMPORARILY_UNAVAILABLE');
+  assert.equal(response.body.message, 'Stream temporarily unavailable');
+});
+
 test('redacts common secret-bearing log values', () => {
   const value = redactSensitive(
     'Bearer access-token postgresql://admin:password@db/app ' +
