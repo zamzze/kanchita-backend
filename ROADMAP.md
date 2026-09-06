@@ -76,13 +76,20 @@
 
 ## Fase 3 — API preparada para frontend
 
-1. Fase 3A: observabilidad y production readiness local: health/readiness separados para API/worker/DB, logs estructurados sin secretos, métricas básicas de cola/latencia/fallos, graceful degradation y runbook de operación; sin desplegar todavía el VPS.
+1. ✅ Fase 3A Fast Stream Engine: ProviderManager direct-first, prepare/prewarm priorizado, refresh stale-while-valid, presupuesto browser PostgreSQL, circuit breaker, métricas y health/readiness; sin desplegar todavía el VPS.
 2. Especificación OpenAPI versionada y contrato uniforme de errores/paginación.
 3. Separar IDs locales/TMDB explícitamente y validar tipos de contenido.
 4. Endpoints de home, continue-watching, búsqueda unificada, detalle de episodio y estados asíncronos de resolución.
 5. ETags/cache-control para metadatos; `no-store` para tokens y URLs temporales.
 6. Sesiones/dispositivos, perfil privado y administración mínima.
 7. Corregir certificaciones, temporadas especiales, fechas de emisión y localización de TMDB.
+
+### Fase 3B recomendada
+
+1. Añadir detalle `GET` de episodio por UUID para recargar `/watch/episode/:id` sin contexto previo de serie.
+2. Ejecutar integración real frontend/backend de contratos `prepare`, polling `200/202/503`, health y errores.
+3. Integrar refresh/logout remoto en clientes sin cambiar prematuramente a cookies.
+4. Decidir y alinear el umbral de finalización: backend 90% frente a frontend 95%.
 
 ## Fase 4 — Nueva PWA/web
 
@@ -110,6 +117,6 @@
 
 ## Estado de las primeras fases
 
-La Fase 1 está cerrada. Las Fases 2A–2C incorporan lifecycle, validación SSRF-safe, cola/worker PostgreSQL y aislamiento del resolver en un process group controlado. Permanecen pendientes hardening de dependencias, observabilidad, límites globales del host, endurecimiento de subtítulos, señales de fallo de playback, validación de entradas, proxy/healthchecks y el procedimiento operativo de secretos/historial.
+La Fase 1 está cerrada. Las Fases 2A–2C incorporan lifecycle, validación SSRF-safe, cola/worker PostgreSQL y aislamiento del resolver. Fase 3A añade el camino rápido compartido, prioridad y límite global browser. Permanecen pendientes hardening de dependencias, límites de descarga de subtítulos, señales de fallo de playback, validación de entradas, Docker/VPS y el procedimiento operativo de secretos/historial.
 
 

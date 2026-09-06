@@ -16,6 +16,7 @@ Alcance: rama `main`, commit `6844ef4`, 5.087 archivos versionados; 5.024 perten
 - **Fase 2A:** remedia el núcleo de A-04 con estados, TTL, validación HLS acotada, expiración, fallos/backoff y single-flight PostgreSQL.
 - **Fase 2B:** desacopla la resolución pesada del request mediante cola PostgreSQL, worker independiente, lease, claim atómico y retries limitados.
 - **Fase 2C:** aísla ProviderC/Chromium en un child process con IPC validado y terminación acotada del process group Linux.
+- **Fase 3A:** añade ProviderManager, prepare/prewarm priorizado, semáforo browser global, refresh anticipado, clasificación pasiva, métricas y health.
 - La rotación de secretos, reescritura del historial y los demás hallazgos continúan pendientes.
 
 ## CRÍTICO
@@ -66,13 +67,15 @@ La tabla no tiene `expires_at`, `last_verified_at`, estado de fallo ni origen/ve
 
 **Remediación 2C:** `streamProcessor` consume `ResolverExecutor`; el adapter/ProviderC sólo se carga dentro de `streamResolverChild`. El timeout mata el grupo aislado del child, espera su exit y recién entonces permite retry o un job posterior. Crashes, IPC inválido y canal roto se normalizan sin derribar el worker. En Windows la terminación de árbol depende de `taskkill /T` y tiene fallback al child; la garantía fuerte y probada del árbol corresponde a Linux, plataforma objetivo del VPS.
 
+**Remediación 3A:** el stream vigente se entrega mientras un refresh anticipado se ejecuta en background; los jobs priorizados siguen deduplicados por contenido. ProviderManager valida candidatos y reserva ProviderC como fallback browser. PostgreSQL impone el presupuesto browser global con lease renovable. Persisten como riesgos reales la expiración implícita por TTL cuando el origen no la declara y la ausencia de señal de fallo del playback del cliente.
+
 ### A-05 — Controles de abuso insuficientes para Puppeteer — PARCIALMENTE RESUELTO EN FASE 1D
 
 El limitador global está montado después de las rutas. Registro de usuario está abierto aunque la aplicación será privada. Cualquier cuenta puede disparar búsquedas/ingestas y resoluciones que crean procesos Chromium. Sólo existe un mutex en memoria para el cron, no para scraping por contenido ni entre réplicas.
 
 **Impacto:** agotamiento rápido de CPU/RAM/PIDs en un VPS y llamadas masivas a terceros.
 
-**Remediación parcial:** el limitador general ya precede a `/api`, auth mantiene un límite más estricto y el registro queda deshabilitado salvo flag explícito. La resolución de streams ya no ocurre en el request y se coordina con una cola PostgreSQL persistente. Persisten límites de rate limiting en memoria y otros trabajos externos de ingesta/subtítulos fuera de esta cola.
+**Remediación parcial:** el limitador general ya precede a `/api`, auth mantiene un límite más estricto y el registro queda deshabilitado salvo flag explícito. La resolución de streams ya no ocurre en el request, se deduplica en PostgreSQL y todos los workers comparten un máximo global de browser (1 por defecto). Persisten límites de rate limiting en memoria y otros trabajos externos de ingesta/subtítulos fuera de esta cola.
 
 ### A-06 — Refresh token débilmente gestionado — RESUELTO EN FASE 1E
 

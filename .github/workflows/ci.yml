@@ -85,6 +85,15 @@ jobs:
       - name: Run stream worker integration tests explicitly
         run: npm run test:worker
 
+      - name: Run provider manager tests explicitly
+        run: npm run test:providers
+
+      - name: Run fast stream engine integration tests explicitly
+        run: npm run test:fast-stream
+
+      - name: Run subtitle selection tests explicitly
+        run: npm run test:subtitles
+
       - name: Verify resolver process boundary explicitly
         run: npm run test:boundary
 

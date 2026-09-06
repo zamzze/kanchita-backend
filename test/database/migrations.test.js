@@ -35,6 +35,7 @@ test('migration files are ordered and checksummed deterministically', async () =
       '003_auth_sessions.sql',
       '004_stream_lifecycle.sql',
       '005_stream_resolution_jobs.sql',
+      '006_fast_stream_engine.sql',
     ]
   );
   assert.ok(migrations.every(({ checksum }) => /^[a-f0-9]{64}$/.test(checksum)));
@@ -78,6 +79,7 @@ test(
           '003_auth_sessions.sql',
           '004_stream_lifecycle.sql',
           '005_stream_resolution_jobs.sql',
+          '006_fast_stream_engine.sql',
         ]);
 
         const second = await runMigrations({
@@ -235,6 +237,8 @@ test(
           'updated_at',
           'started_at',
           'completed_at',
+          'priority',
+          'job_type',
         ]);
 
         const constraints = await pools.empty.query(`
@@ -264,6 +268,8 @@ test(
         assert.ok(indexNames.includes('stream_resolution_jobs_active_content_idx'));
         assert.ok(indexNames.includes('stream_resolution_jobs_claim_idx'));
         assert.ok(indexNames.includes('stream_resolution_jobs_lease_idx'));
+        assert.ok(constraintNames.includes('stream_resolution_jobs_priority_check'));
+        assert.ok(constraintNames.includes('stream_resolution_jobs_job_type_check'));
 
         await assert.rejects(
           pools.empty.query(
@@ -271,6 +277,50 @@ test(
                (content_type, content_id, attempt_count, max_attempts)
              VALUES ('movie', $1, 2, 1)`,
             [crypto.randomUUID()]
+          ),
+          (error) => error.code === '23514'
+        );
+      });
+
+      await t.test('creates the fast stream engine contracts', async () => {
+        const streamColumns = await pools.empty.query(`
+          SELECT column_name
+          FROM information_schema.columns
+          WHERE table_schema = current_schema() AND table_name = 'streams'
+        `);
+        const names = streamColumns.rows.map((row) => row.column_name);
+        for (const name of ['audio_language', 'subtitle_language', 'cleanliness']) {
+          assert.ok(names.includes(name));
+        }
+
+        const relations = await pools.empty.query(`
+          SELECT to_regclass(name) IS NOT NULL AS present
+          FROM unnest(ARRAY[
+            'stream_content_stats',
+            'stream_provider_health',
+            'stream_browser_slots',
+            'stream_worker_heartbeats',
+            'stream_metrics'
+          ]) AS name
+        `);
+        assert.ok(relations.rows.every(({ present }) => present));
+
+        const constraints = await pools.empty.query(`
+          SELECT conname FROM pg_constraint
+          WHERE conname IN (
+            'streams_cleanliness_check',
+            'stream_content_stats_type_check',
+            'stream_browser_slots_lease_check',
+            'stream_worker_heartbeats_type_check'
+          )
+        `);
+        assert.equal(constraints.rowCount, 4);
+
+        await assert.rejects(
+          pools.empty.query(
+            `INSERT INTO stream_browser_slots
+               (slot_number, owner, acquired_at, lease_expires_at)
+             VALUES (9, 'worker', NULL, NULL)`
           ),
           (error) => error.code === '23514'
         );
@@ -354,7 +404,8 @@ test(
           [movie.rows[0].id]
         );
         const preservedStream = await pools.legacy.query(
-          `SELECT id, stream_url, status, last_verified_at, expires_at
+          `SELECT id, stream_url, status, last_verified_at, expires_at,
+                  audio_language, subtitle_language, cleanliness
            FROM streams WHERE id = $1`,
           [stream.rows[0].id]
         );
@@ -367,6 +418,9 @@ test(
         assert.equal(preservedStream.rows[0].status, 'unknown');
         assert.equal(preservedStream.rows[0].last_verified_at, null);
         assert.equal(preservedStream.rows[0].expires_at, null);
+        assert.equal(preservedStream.rows[0].audio_language, null);
+        assert.equal(preservedStream.rows[0].subtitle_language, null);
+        assert.equal(preservedStream.rows[0].cleanliness, 'unknown');
 
         const preservedUser = await pools.legacy.query(
           'SELECT id, refresh_token FROM users WHERE id = $1',
@@ -386,11 +440,15 @@ test(
             ) AS has_stream_constraint,
             to_regclass('auth_sessions') IS NOT NULL AS has_auth_sessions
             ,to_regclass('stream_resolution_jobs') IS NOT NULL AS has_stream_jobs
+            ,to_regclass('stream_provider_health') IS NOT NULL AS has_provider_health
+            ,to_regclass('stream_browser_slots') IS NOT NULL AS has_browser_slots
         `);
         assert.equal(contract.rows[0].has_subtitles, true);
         assert.equal(contract.rows[0].has_stream_constraint, true);
         assert.equal(contract.rows[0].has_auth_sessions, true);
         assert.equal(contract.rows[0].has_stream_jobs, true);
+        assert.equal(contract.rows[0].has_provider_health, true);
+        assert.equal(contract.rows[0].has_browser_slots, true);
       });
 
       await t.test('refuses ambiguous legacy duplicates without deleting them', async () => {
