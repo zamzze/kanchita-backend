@@ -28,7 +28,16 @@ process.once('message', (message) => {
       stdio: 'ignore',
       windowsHide: true,
     });
-    setTimeout(() => process.exit(23), 75);
+    const startedAt = Date.now();
+    const waitForGrandchild = setInterval(() => {
+      try {
+        if (fs.statSync(heartbeatPath).size > 0) {
+          clearInterval(waitForGrandchild);
+          process.exit(23);
+        }
+      } catch {}
+      if (Date.now() - startedAt > 1000) process.exit(24);
+    }, 10);
     return;
   }
   if (mode.startsWith('hang-tree:')) {

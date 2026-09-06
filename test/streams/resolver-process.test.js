@@ -132,7 +132,7 @@ test('resolver subprocess isolation and IPC contract', async (t) => {
     async () => {
       const temporaryDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'kanchita-crash-'));
       const heartbeatPath = path.join(temporaryDirectory, 'heartbeat.txt');
-      const executor = createResolverExecutor({ childPath, timeoutMs: 1000, killGraceMs: 25 });
+      const executor = createResolverExecutor({ childPath, timeoutMs: 3000, killGraceMs: 25 });
       await assert.rejects(
         executor.resolve(context(`crash-tree:${heartbeatPath}`)),
         (error) => error.code === 'RESOLUTION_FAILED'
