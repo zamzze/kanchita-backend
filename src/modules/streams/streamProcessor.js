@@ -2,7 +2,7 @@
 
 const pool = require('../../config/db');
 const { createHlsValidator } = require('./hlsValidator');
-const { resolveStream } = require('./streamResolver');
+const { createResolverExecutor } = require('./resolverExecutor');
 const { findStreamContent } = require('./streamContent');
 const { createStreamLifecycle, processingError } = require('./streamLifecycle');
 const {
@@ -10,31 +10,11 @@ const {
   STREAM_VERIFY_INTERVAL_MINUTES,
   STREAM_VERIFY_TIMEOUT_MS,
   STREAM_MAX_MANIFEST_BYTES,
-  STREAM_RESOLUTION_TIMEOUT_MS,
 } = require('../../config/env');
-
-const withResolverTimeout = (resolver, timeoutMs) => (context) =>
-  new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      const error = new Error('Stream resolution timed out');
-      error.code = 'RESOLUTION_TIMEOUT';
-      reject(error);
-    }, timeoutMs);
-    Promise.resolve().then(() => resolver(context)).then(
-      (value) => {
-        clearTimeout(timer);
-        resolve(value);
-      },
-      (error) => {
-        clearTimeout(timer);
-        reject(error);
-      }
-    );
-  });
 
 const createStreamProcessor = ({
   db = pool,
-  resolver = resolveStream,
+  resolverExecutor = createResolverExecutor(),
   validator = createHlsValidator({
     timeoutMs: STREAM_VERIFY_TIMEOUT_MS,
     maxBytes: STREAM_MAX_MANIFEST_BYTES,
@@ -43,7 +23,6 @@ const createStreamProcessor = ({
   logger = console,
   cacheTtlMinutes = STREAM_CACHE_TTL_MINUTES,
   verifyIntervalMinutes = STREAM_VERIFY_INTERVAL_MINUTES,
-  resolutionTimeoutMs = STREAM_RESOLUTION_TIMEOUT_MS,
 } = {}) => {
   const lifecycle = createStreamLifecycle({
     db,
@@ -53,7 +32,7 @@ const createStreamProcessor = ({
     verifyIntervalMinutes,
   });
 
-  return async (job) => {
+  const processJob = async (job) => {
     const content = await findContent(job.content_type, job.content_id);
     if (!content) throw processingError('INTERNAL_JOB_ERROR');
 
@@ -66,9 +45,12 @@ const createStreamProcessor = ({
       job.content_type,
       job.content_id,
       content,
-      withResolverTimeout(resolver, resolutionTimeoutMs)
+      (context) => resolverExecutor.resolve(context)
     );
   };
+
+  processJob.shutdown = () => resolverExecutor.shutdown?.();
+  return processJob;
 };
 
-module.exports = { createStreamProcessor, withResolverTimeout };
+module.exports = { createStreamProcessor };

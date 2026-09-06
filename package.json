@@ -4,7 +4,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node --env-file=.env ./node_modules/nodemon/bin/nodemon.js server.js",
-    "test": "node test/smoke.js && node --test test/http/security.test.js test/streams/http-worker.test.js test/streams/resolution-boundary.test.js test/database/migrations.test.js test/auth/sessions.test.js test/streams/lifecycle.test.js test/streams/queue.test.js test/streams/worker.test.js",
+    "test": "node test/smoke.js && node --test test/http/security.test.js test/streams/http-worker.test.js test/streams/resolution-boundary.test.js test/streams/resolver-process.test.js test/database/migrations.test.js test/auth/sessions.test.js test/streams/lifecycle.test.js test/streams/queue.test.js test/streams/worker.test.js",
     "test:smoke": "node test/smoke.js",
     "test:http": "node --test test/http/security.test.js test/streams/http-worker.test.js",
     "test:db": "node --test test/database/migrations.test.js",
@@ -13,6 +13,7 @@
     "test:queue": "node --test test/streams/queue.test.js",
     "test:worker": "node --test test/streams/worker.test.js",
     "test:boundary": "node --test test/streams/resolution-boundary.test.js",
+    "test:resolver-process": "node --test test/streams/resolver-process.test.js",
     "worker:streams": "node --env-file=.env src/workers/streamResolutionWorker.js",
     "migrate": "node --env-file=.env database/migrate.js",
     "initial-load": "node src/ingestion/scripts/initialLoad.js"

@@ -68,18 +68,21 @@
 3. ✅ Fase 2B reemplaza el single-flight síncrono por cola PostgreSQL persistente, deduplicación, lease, retries y timeout del job.
 4. ✅ Fase 2B separa la resolución de streams en un worker independiente y deja el API en `200/202/503`, cubierto por pruebas E2E.
 5. ✅ Cierre 2B elimina vías heredadas directas, fija `attempt_count` al claim, exige lease con margen y hace terminal el timeout con reciclaje del worker para preservar single-flight.
-6. Definir una interfaz de proveedores múltiples si aparece una segunda implementación real; el adapter único actual ya quedó aislado.
-7. Endurecer descargas de subtítulos: límites de bytes/entradas/ratio, timeout, MIME, redirects y limpieza; almacenamiento persistente u objeto compatible con múltiples réplicas.
-8. Añadir pruebas de reproducción HLS autorizada, selección de calidad, CORS de segmentos y sincronía de VTT.
+6. ✅ Fase 2C encapsula cada resolución en un child process, valida IPC, mata/recolecta el process group en timeout/crash/shutdown y mantiene vivo el worker.
+7. Fase 2D: actualizar dependencias vulnerables por grupos pequeños, empezando por `qs`/Express y continuando con `adm-zip`, `node-cron`/`uuid` y la cadena Puppeteer, con regresión completa entre grupos y sin `audit fix --force`.
+8. Definir una interfaz de proveedores múltiples si aparece una segunda implementación real; el adapter único actual ya quedó aislado.
+9. Endurecer descargas de subtítulos: límites de bytes/entradas/ratio, timeout, MIME, redirects y limpieza; almacenamiento persistente u objeto compatible con múltiples réplicas.
+10. Añadir pruebas de reproducción HLS autorizada, selección de calidad, CORS de segmentos y sincronía de VTT.
 
 ## Fase 3 — API preparada para frontend
 
-1. Especificación OpenAPI versionada y contrato uniforme de errores/paginación.
-2. Separar IDs locales/TMDB explícitamente y validar tipos de contenido.
-3. Endpoints de home, continue-watching, búsqueda unificada, detalle de episodio y estados asíncronos de resolución.
-4. ETags/cache-control para metadatos; `no-store` para tokens y URLs temporales.
-5. Sesiones/dispositivos, perfil privado y administración mínima.
-6. Corregir certificaciones, temporadas especiales, fechas de emisión y localización de TMDB.
+1. Fase 3A: observabilidad y production readiness local: health/readiness separados para API/worker/DB, logs estructurados sin secretos, métricas básicas de cola/latencia/fallos, graceful degradation y runbook de operación; sin desplegar todavía el VPS.
+2. Especificación OpenAPI versionada y contrato uniforme de errores/paginación.
+3. Separar IDs locales/TMDB explícitamente y validar tipos de contenido.
+4. Endpoints de home, continue-watching, búsqueda unificada, detalle de episodio y estados asíncronos de resolución.
+5. ETags/cache-control para metadatos; `no-store` para tokens y URLs temporales.
+6. Sesiones/dispositivos, perfil privado y administración mínima.
+7. Corregir certificaciones, temporadas especiales, fechas de emisión y localización de TMDB.
 
 ## Fase 4 — Nueva PWA/web
 
@@ -107,6 +110,6 @@
 
 ## Estado de las primeras fases
 
-La Fase 1 está cerrada. Las Fases 2A–2B incorporan lifecycle, validación SSRF-safe y una cola/worker PostgreSQL para streams directos manteniendo el resolver como adapter. Permanecen pendientes límites globales del worker, cancelación real del resolver/Chromium, endurecimiento de subtítulos, señales de fallo de playback, validación de entradas, proxy/healthchecks, dependencias y el procedimiento operativo de secretos/historial.
+La Fase 1 está cerrada. Las Fases 2A–2C incorporan lifecycle, validación SSRF-safe, cola/worker PostgreSQL y aislamiento del resolver en un process group controlado. Permanecen pendientes hardening de dependencias, observabilidad, límites globales del host, endurecimiento de subtítulos, señales de fallo de playback, validación de entradas, proxy/healthchecks y el procedimiento operativo de secretos/historial.
 
 

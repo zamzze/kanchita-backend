@@ -88,6 +88,9 @@ jobs:
       - name: Verify resolver process boundary explicitly
         run: npm run test:boundary
 
+      - name: Run resolver subprocess isolation tests explicitly
+        run: npm run test:resolver-process
+
       - name: Check changed whitespace
         run: git diff --check HEAD^ HEAD
 

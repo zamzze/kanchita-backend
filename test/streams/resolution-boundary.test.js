@@ -10,6 +10,8 @@ const forbiddenFromApi = new Set([
   path.join(root, 'src/ingestion/scraper/providers/providerC.js'),
   path.join(root, 'src/modules/streams/streamResolver.js'),
   path.join(root, 'src/modules/streams/streamProcessor.js'),
+  path.join(root, 'src/modules/streams/resolverExecutor.js'),
+  path.join(root, 'src/workers/streamResolverChild.js'),
 ]);
 
 const relativeRequires = (file) => {
@@ -43,11 +45,30 @@ test('API and scheduler dependency graph cannot reach heavy stream resolution', 
   }
 });
 
-test('worker is the only production path to ProviderC', () => {
+test('worker reaches the executor but ProviderC only exists behind the child boundary', () => {
   const workerGraph = dependencyGraph(
     path.join(root, 'src/workers/streamResolutionWorker.js')
   );
-  for (const required of forbiddenFromApi) assert.equal(workerGraph.has(required), true);
+  assert.equal(
+    workerGraph.has(path.join(root, 'src/modules/streams/streamProcessor.js')),
+    true
+  );
+  assert.equal(
+    workerGraph.has(path.join(root, 'src/modules/streams/resolverExecutor.js')),
+    true
+  );
+  assert.equal(workerGraph.has(path.join(root, 'src/modules/streams/streamResolver.js')), false);
+  assert.equal(
+    workerGraph.has(path.join(root, 'src/ingestion/scraper/providers/providerC.js')),
+    false
+  );
+
+  const childGraph = dependencyGraph(path.join(root, 'src/workers/streamResolverChild.js'));
+  assert.equal(childGraph.has(path.join(root, 'src/modules/streams/streamResolver.js')), true);
+  assert.equal(
+    childGraph.has(path.join(root, 'src/ingestion/scraper/providers/providerC.js')),
+    true
+  );
 
   const sourceFiles = [];
   const walk = (directory) => {
