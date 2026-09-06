@@ -24,13 +24,13 @@ const safeErrorCode = (code) => JOB_ERROR_CODES.has(code)
 const jobColumns = `
   id, content_type, content_id, status, attempt_count, max_attempts,
   run_after, locked_at, locked_by, last_error_code, created_at,
-  updated_at, started_at, completed_at`;
+  updated_at, started_at, completed_at, priority, job_type`;
 
 const claimedJobColumns = `
   jobs.id, jobs.content_type, jobs.content_id, jobs.status,
   jobs.attempt_count, jobs.max_attempts, jobs.run_after, jobs.locked_at,
   jobs.locked_by, jobs.last_error_code, jobs.created_at, jobs.updated_at,
-  jobs.started_at, jobs.completed_at`;
+  jobs.started_at, jobs.completed_at, jobs.priority, jobs.job_type`;
 
 const retryDelaySql = `CASE
   WHEN attempt_count <= 1 THEN INTERVAL '30 seconds'
@@ -39,16 +39,26 @@ const retryDelaySql = `CASE
 END`;
 
 const createResolutionQueue = (db = pool, { maxAttempts = 3 } = {}) => {
-  const enqueue = async (contentType, contentId) => {
+  const enqueue = async (contentType, contentId, {
+    priority = 50,
+    jobType = 'resolve',
+  } = {}) => {
     const { rows } = await db.query(
       `INSERT INTO stream_resolution_jobs (
-         content_type, content_id, status, max_attempts, run_after
-       ) VALUES ($1, $2, 'pending', $3, NOW())
+         content_type, content_id, status, max_attempts, run_after, priority, job_type
+       ) VALUES ($1, $2, 'pending', $3, NOW(), $4, $5)
        ON CONFLICT (content_type, content_id)
          WHERE status IN ('pending', 'processing')
-       DO UPDATE SET updated_at = stream_resolution_jobs.updated_at
+       DO UPDATE SET
+         priority = GREATEST(stream_resolution_jobs.priority, EXCLUDED.priority),
+         job_type = CASE
+           WHEN stream_resolution_jobs.job_type = 'refresh' OR EXCLUDED.job_type = 'refresh'
+             THEN 'refresh'
+           ELSE 'resolve'
+         END,
+         updated_at = NOW()
        RETURNING ${jobColumns}`,
-      [contentType, contentId, maxAttempts]
+      [contentType, contentId, maxAttempts, priority, jobType]
     );
     return rows[0];
   };
@@ -73,7 +83,7 @@ const createResolutionQueue = (db = pool, { maxAttempts = 3 } = {}) => {
          WHERE status = 'pending'
            AND run_after <= NOW()
            AND attempt_count < max_attempts
-         ORDER BY run_after ASC, created_at ASC
+         ORDER BY priority DESC, run_after ASC, created_at ASC
          FOR UPDATE SKIP LOCKED
          LIMIT 1
        )

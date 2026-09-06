@@ -9,4 +9,5 @@ BEGIN;
 \ir migrations/003_auth_sessions.sql
 \ir migrations/004_stream_lifecycle.sql
 \ir migrations/005_stream_resolution_jobs.sql
+\ir migrations/006_fast_stream_engine.sql
 COMMIT;
