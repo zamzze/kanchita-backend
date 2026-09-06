@@ -67,9 +67,13 @@ const createProviderManager = ({
     } catch (error) {
       lastErrorCode = typeof error?.code === 'string' ? error.code : 'RESOLUTION_FAILED';
       const duration = Date.now() - startedAt;
-      await health.recordFailure(provider.id, duration);
-      await metrics.increment('provider_failure_total');
-      logger.warn(`[ProviderManager] provider failed: ${provider.id}`);
+      if (lastErrorCode !== 'BROWSER_CAPACITY_UNAVAILABLE') {
+        await health.recordFailure(provider.id, duration);
+        await metrics.increment('provider_failure_total');
+        logger.warn(`[ProviderManager] provider failed: ${provider.id}`);
+      } else {
+        logger.warn(`[ProviderManager] browser capacity unavailable: ${provider.id}`);
+      }
       return null;
     }
   };

@@ -54,10 +54,15 @@ const createStreamPrewarm = ({
          FROM stream_content_stats
          WHERE last_requested_at > NOW() - INTERVAL '7 days'
        )
-       SELECT DISTINCT ON (content_type, content_id)
-         content_type, content_id, priority, job_type
-       FROM candidates
-       ORDER BY content_type, content_id, priority DESC, activity_at DESC
+       , deduplicated AS (
+         SELECT DISTINCT ON (content_type, content_id)
+           content_type, content_id, priority, job_type, activity_at
+         FROM candidates
+         ORDER BY content_type, content_id, priority DESC, activity_at DESC
+       )
+       SELECT content_type, content_id, priority, job_type
+       FROM deduplicated
+       ORDER BY priority DESC, activity_at DESC
        LIMIT $1`,
       [batchSize, refreshAheadMinutes]
     );

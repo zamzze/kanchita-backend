@@ -152,6 +152,19 @@ test(
         'SELECT COUNT(*)::integer AS count FROM stream_browser_slots WHERE owner IS NOT NULL'
       );
       assert.equal(released.rows[0].count, 0);
+
+      const occupied = await slots.acquire('capacity-holder');
+      const impatient = createBrowserSlotManager(pool, {
+        maxConcurrent: 1,
+        leaseSeconds: 2,
+        pollMs: 2,
+        waitTimeoutMs: 15,
+      });
+      await assert.rejects(
+        impatient.acquire('capacity-waiter'),
+        (error) => error.code === 'BROWSER_CAPACITY_UNAVAILABLE'
+      );
+      await slots.release(occupied.slot_number, 'capacity-holder');
     });
 
     await t.test('expired browser lease recovers ownership after a crashed worker', async () => {
@@ -251,6 +264,49 @@ test(
       assert.equal(jobs.rowCount, 1);
       assert.equal(jobs.rows[0].content_id, next.id);
       assert.equal(jobs.rows[0].priority, 90);
+    });
+
+    await t.test('prewarm deduplicates before applying the global priority limit', async () => {
+      await reset();
+      const lowOne = '00000000-0000-4000-8000-000000000001';
+      const lowTwo = '00000000-0000-4000-8000-000000000002';
+      const high = 'ffffffff-ffff-4fff-8fff-ffffffffffff';
+      await pool.query(
+        `INSERT INTO stream_content_stats
+           (content_type, content_id, request_count, last_requested_at)
+         VALUES ('movie', $1, 1, NOW()), ('movie', $2, 1, NOW()),
+                ('movie', $3, 20, NOW())`,
+        [lowOne, lowTwo, high]
+      );
+      await pool.query(
+        `INSERT INTO streams (
+           content_type, content_id, server_name, stream_url, stream_type,
+           status, expires_at, last_verified_at, is_active
+         ) VALUES ('movie', $1, 'HD', 'https://media.example/high.m3u8',
+           'direct', 'ready', NOW() + INTERVAL '5 minutes', NOW(), TRUE)`,
+        [high]
+      );
+      const lifecycle = {
+        readUsableCache: async () => ({ streams: null, backoff: false }),
+      };
+      const prewarm = createStreamPrewarm({
+        db: pool,
+        queue,
+        lifecycle,
+        batchSize: 1,
+        refreshAheadMinutes: 10,
+      });
+
+      await prewarm.runBatch();
+      const jobs = await pool.query(
+        `SELECT content_id, priority, job_type
+         FROM stream_resolution_jobs
+         WHERE status IN ('pending', 'processing')`
+      );
+      assert.equal(jobs.rowCount, 1);
+      assert.equal(jobs.rows[0].content_id, high);
+      assert.equal(jobs.rows[0].priority, 80);
+      assert.equal(jobs.rows[0].job_type, 'refresh');
     });
 
     await t.test('refresh-ahead serves current stream and refresh failure preserves it', async () => {

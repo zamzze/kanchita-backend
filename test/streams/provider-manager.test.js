@@ -128,6 +128,42 @@ test('provider manager prioritizes direct strategies and contains failures', asy
       error.code === 'HLS_UNSAFE_DESTINATION');
     assert.doesNotMatch(messages.join('\n'), /127\.0\.0\.1|token=|\.m3u8/);
   });
+
+  await t.test('browser capacity retries without penalizing provider health', async () => {
+    let providerFailures = 0;
+    let failureMetrics = 0;
+    const manager = createProviderManager({
+      providers: [{
+        id: 'browser_fixture',
+        strategy: 'browser',
+        resolve: async () => ({ url: 'https://media.example/never.m3u8' }),
+      }],
+      validator,
+      health: {
+        ...noHealth,
+        recordFailure: async () => { providerFailures += 1; },
+      },
+      browserSlots: {
+        withSlot: async () => {
+          throw Object.assign(new Error('capacity'), {
+            code: 'BROWSER_CAPACITY_UNAVAILABLE',
+          });
+        },
+      },
+      metrics: {
+        increment: async (name) => {
+          if (name === 'provider_failure_total') failureMetrics += 1;
+        },
+        observe: async () => {},
+      },
+      logger: { warn() {} },
+    });
+
+    await assert.rejects(manager.resolve(context), (error) =>
+      error.code === 'BROWSER_CAPACITY_UNAVAILABLE');
+    assert.equal(providerFailures, 0);
+    assert.equal(failureMetrics, 0);
+  });
 });
 
 test('stream ranking preserves business priority order', () => {
@@ -150,9 +186,15 @@ test('cleanliness inspector only classifies and never rewrites', () => {
   const clean = '#EXTM3U\n#EXTINF:10,\nsegment.ts';
   const cue = '#EXTM3U\n#EXT-X-CUE-OUT:30\n#EXTINF:10,\nad.ts';
   const daterange = '#EXTM3U\n#EXT-X-DATERANGE:ID="ad"';
+  const chapter = '#EXTM3U\n#EXT-X-DATERANGE:ID="chapter-1",START-DATE="2026-01-01T00:00:00Z"';
+  const interstitial = '#EXTM3U\n#EXT-X-DATERANGE:CLASS="com.apple.hls.interstitial"';
+  const scte = '#EXTM3U\n#EXT-X-DATERANGE:SCTE35-OUT=0xFC';
   assert.equal(inspectManifestCleanliness(clean), 'clean');
   assert.equal(inspectManifestCleanliness(cue), 'ad_marked');
   assert.equal(inspectManifestCleanliness(daterange), 'ad_marked');
+  assert.equal(inspectManifestCleanliness(chapter), 'clean');
+  assert.equal(inspectManifestCleanliness(interstitial), 'ad_marked');
+  assert.equal(inspectManifestCleanliness(scte), 'ad_marked');
   assert.equal(inspectManifestCleanliness('<html>'), 'unknown');
   assert.equal(cue.includes('#EXT-X-CUE-OUT'), true);
 });

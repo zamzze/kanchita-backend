@@ -64,6 +64,7 @@ const createStreamWorker = ({
   let nextPrewarmAt = 0;
   let activeJobId = null;
   let heartbeatTimer = null;
+  let jobLeaseTimer = null;
 
   const runPrewarmIfDue = async () => {
     if (!prewarm || Date.now() < nextPrewarmAt) return;
@@ -72,6 +73,11 @@ const createStreamWorker = ({
   };
 
   const processClaimedJob = async (job) => {
+    const renewalMs = Math.max(1000, Math.floor(leaseSeconds * 1000 / 3));
+    jobLeaseTimer = setTimer(() => {
+      queue.renewJobLease(job.id, workerId).catch(() => {});
+    }, renewalMs);
+    jobLeaseTimer.unref?.();
     try {
       await activeProcessor(job);
       await queue.completeJob(job.id, workerId);
@@ -80,6 +86,9 @@ const createStreamWorker = ({
       const code = safeErrorCode(error?.code);
       await queue.failJob(job.id, workerId, code);
       logger.warn(`[StreamWorker] job failed: ${code}`);
+    } finally {
+      clearTimer(jobLeaseTimer);
+      jobLeaseTimer = null;
     }
   };
 

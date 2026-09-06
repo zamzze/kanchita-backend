@@ -86,3 +86,26 @@ CREATE TABLE stream_metrics (
 );
 
 INSERT INTO stream_browser_slots (slot_number) VALUES (1);
+
+ALTER TABLE stream_resolution_jobs
+  DROP CONSTRAINT stream_resolution_jobs_last_error_code_check,
+  ADD CONSTRAINT stream_resolution_jobs_last_error_code_check CHECK (
+    last_error_code IS NULL OR last_error_code IN (
+      'RESOLUTION_FAILED', 'RESOLUTION_TIMEOUT', 'BROWSER_CAPACITY_UNAVAILABLE',
+      'HLS_TIMEOUT', 'HLS_HTTP_ERROR', 'HLS_INVALID_URL',
+      'HLS_TOO_MANY_REDIRECTS', 'HLS_TOO_LARGE', 'HLS_INVALID_MANIFEST',
+      'HLS_CONNECTION_ERROR', 'HLS_UNSAFE_DESTINATION',
+      'JOB_LEASE_EXPIRED', 'INTERNAL_JOB_ERROR'
+    )
+  );
+
+ALTER TABLE streams
+  DROP CONSTRAINT streams_last_error_code_check,
+  ADD CONSTRAINT streams_last_error_code_check CHECK (
+    last_error_code IS NULL OR last_error_code IN (
+      'HLS_TIMEOUT', 'HLS_HTTP_ERROR', 'HLS_INVALID_URL',
+      'HLS_TOO_MANY_REDIRECTS', 'HLS_TOO_LARGE', 'HLS_INVALID_MANIFEST',
+      'HLS_CONNECTION_ERROR', 'HLS_UNSAFE_DESTINATION',
+      'RESOLUTION_FAILED', 'RESOLUTION_TIMEOUT', 'BROWSER_CAPACITY_UNAVAILABLE'
+    )
+  );

@@ -51,7 +51,7 @@ const createBrowserSlotManager = (db = pool, {
       await sleep(pollMs);
     }
     const error = new Error('Browser capacity unavailable');
-    error.code = 'RESOLUTION_FAILED';
+    error.code = 'BROWSER_CAPACITY_UNAVAILABLE';
     throw error;
   };
 

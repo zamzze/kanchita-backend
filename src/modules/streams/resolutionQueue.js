@@ -5,6 +5,7 @@ const pool = require('../../config/db');
 const JOB_ERROR_CODES = new Set([
   'RESOLUTION_FAILED',
   'RESOLUTION_TIMEOUT',
+  'BROWSER_CAPACITY_UNAVAILABLE',
   'HLS_TIMEOUT',
   'HLS_HTTP_ERROR',
   'HLS_INVALID_URL',
@@ -118,6 +119,16 @@ const createResolutionQueue = (db = pool, { maxAttempts = 3 } = {}) => {
     return rows[0] || null;
   };
 
+  const renewJobLease = async (jobId, workerId) => {
+    const { rowCount } = await db.query(
+      `UPDATE stream_resolution_jobs
+       SET locked_at = NOW(), updated_at = NOW()
+       WHERE id = $1 AND status = 'processing' AND locked_by = $2`,
+      [jobId, workerId]
+    );
+    return rowCount === 1;
+  };
+
   const failJob = async (jobId, workerId, errorCode, { terminal = false } = {}) => {
     const { rows } = await db.query(
       `UPDATE stream_resolution_jobs
@@ -175,6 +186,7 @@ const createResolutionQueue = (db = pool, { maxAttempts = 3 } = {}) => {
     enqueue,
     findActiveJob,
     claimNextJob,
+    renewJobLease,
     completeJob,
     failJob,
     recoverStaleJobs,
