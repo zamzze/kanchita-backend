@@ -388,11 +388,16 @@ test(
       assert.equal(validatorCalls, 0);
       assert.equal(response.content_id, movie.id);
       assert.equal(response.content_type, 'movie');
+      assert.equal(response.status, 'ready');
+      assert.equal(response.stream.type, 'hls');
+      assert.equal(response.stream.url, response.streams[0].stream_url);
+      assert.deepEqual(response.subtitles, []);
       assert.equal(response.subtitle_url, null);
       assert.equal(response.streams.length, 1);
       assert.deepEqual(Object.keys(response.streams[0]).sort(), [
-        'embed_url', 'language', 'priority', 'quality', 'server_name',
-        'stream_type', 'stream_url',
+        'audio_language', 'embed_url', 'expires_at', 'language', 'priority',
+        'quality', 'server_name', 'stream_type', 'stream_url',
+        'subtitle_language',
       ]);
       assert.ok(setup.logger.messages.includes('[Streams] cache hit'));
     });

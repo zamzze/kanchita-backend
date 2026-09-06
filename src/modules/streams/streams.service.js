@@ -34,24 +34,45 @@ const notFoundError = (contentType) => {
     ? 'Película no encontrada'
     : 'Episodio no encontrado');
   error.statusCode = 404;
+  error.code = 'STREAM_NOT_AVAILABLE';
   return error;
 };
 
-const formatResponse = (streams, contentId, contentType, subtitleUrl = null) => ({
-  content_id: contentId,
-  content_type: contentType,
-  show_ads: false,
-  subtitle_url: subtitleUrl,
-  streams: streams.map((stream) => ({
+const formatResponse = (streams, contentId, contentType, subtitleUrl = null) => {
+  const serialized = streams.map((stream) => ({
     server_name: stream.server_name,
     quality: stream.quality || 'auto',
     language: stream.language,
+    audio_language: stream.audio_language || null,
+    subtitle_language: stream.subtitle_language || null,
     stream_url: stream.stream_url || null,
     embed_url: stream.embed_url || null,
     stream_type: stream.stream_type,
     priority: stream.priority,
-  })),
-});
+    expires_at: stream.expires_at || null,
+  }));
+  const primary = serialized[0] || null;
+  return {
+  status: 'ready',
+  content_id: contentId,
+  content_type: contentType,
+  show_ads: false,
+  subtitle_url: subtitleUrl,
+  stream: primary ? {
+    url: primary.stream_url,
+    type: primary.stream_type === 'direct' ? 'hls' : primary.stream_type,
+    quality: primary.quality,
+    audio_language: primary.audio_language,
+    subtitle_language: primary.subtitle_language,
+    expires_at: primary.expires_at,
+  } : null,
+  subtitles: subtitleUrl ? [{
+    url: subtitleUrl,
+    language: primary?.subtitle_language || 'es',
+  }] : [],
+  streams: serialized,
+  };
+};
 
 const pendingResponse = (retryAfterSeconds) => ({
   status: 'pending',

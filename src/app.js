@@ -5,6 +5,7 @@ const helmet  = require('helmet');
 const authRoutes    = require('./modules/auth/auth.routes');
 const moviesRoutes  = require('./modules/movies/movies.routes');
 const seriesRoutes  = require('./modules/series/series.routes');
+const { createSeriesRouter } = seriesRoutes;
 const streamsRoutes = require('./modules/streams/streams.routes');
 const { createStreamsRouter } = streamsRoutes;
 const historyRoutes = require('./modules/history/history.routes');
@@ -32,6 +33,7 @@ const createApp = ({
   subtitlesDir = DEFAULT_SUBTITLES_DIR,
   apiLimiter = createDefaultLimiter(),
   streamsService,
+  seriesService,
   healthService,
 } = {}) => {
   const app = express();
@@ -49,7 +51,9 @@ const createApp = ({
   app.use('/api', apiLimiter);
   app.use('/api/auth',      authRoutes);
   app.use('/api/movies',    moviesRoutes);
-  app.use('/api/series',    seriesRoutes);
+  app.use('/api/series', seriesService
+    ? createSeriesRouter(seriesService)
+    : seriesRoutes);
   app.use('/api/streams', streamsService
     ? createStreamsRouter(streamsService)
     : streamsRoutes);
