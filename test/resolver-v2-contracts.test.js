@@ -116,7 +116,7 @@ test('Resolver V2 Phase A remains isolated from network, browser and ProviderC',
   const newFiles = fs.readdirSync(moduleDirectory)
     .filter((name) => name.endsWith('.js')).map((name) => path.join(moduleDirectory, name));
   assert.deepEqual(newFiles.map((file) => path.basename(file)).sort(), [
-    'hlsInspector.js', 'resolverContracts.js', 'resolverRegistry.js',
+    'hlsInspector.js', 'legacyBrowserAdapter.js', 'resolverContracts.js', 'resolverEngine.js', 'resolverErrors.js', 'resolverRegistry.js',
   ]);
 
   for (const file of newFiles) {

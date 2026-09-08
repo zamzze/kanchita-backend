@@ -188,6 +188,9 @@ const normalizeStreamCandidate = (input) => {
   const hlsInfo = input.hlsInfo === undefined || input.hlsInfo === null
     ? null : cloneJsonLike(input.hlsInfo);
   if (input.hlsInfo != null && hlsInfo === undefined) return null;
+  const metadata = input.metadata === undefined || input.metadata === null
+    ? null : cloneJsonLike(input.metadata);
+  if (input.metadata != null && metadata === undefined) return null;
 
   return {
     url,
@@ -202,6 +205,7 @@ const normalizeStreamCandidate = (input) => {
     audioLanguage,
     subtitleLanguage,
     hlsInfo,
+    metadata,
   };
 };
 
