@@ -1,0 +1,10 @@
+{
+  "providerId": "fixture_provider",
+  "url": "https://embed.example.test/watch/fixture",
+  "referer": "https://catalog.example.test/title/fixture",
+  "origin": "https://catalog.example.test",
+  "headers": { "Accept-Language": "es-419,es;q=0.9" },
+  "languageHint": "es-419",
+  "qualityHint": "1080p",
+  "metadata": { "fixture": true, "source": "synthetic" }
+}
