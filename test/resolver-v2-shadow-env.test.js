@@ -15,6 +15,10 @@ delete process.env.STREAM_RESOLVER_V2_HTTP_PROVIDER_ENABLED;
 delete process.env.STREAM_RESOLVER_V2_HTTP_PROVIDER_BASE_URL;
 delete process.env.STREAM_RESOLVER_V2_HTTP_PROVIDER_TIMEOUT_MS;
 delete process.env.STREAM_RESOLVER_V2_HTTP_PROVIDER_MAX_CANDIDATES;
+delete process.env.STREAM_RESOLVER_V2_HTTP_RESOLVER_ENABLED;
+delete process.env.STREAM_RESOLVER_V2_HTTP_RESOLVER_DOMAINS;
+delete process.env.STREAM_RESOLVER_V2_HTTP_RESOLVER_TIMEOUT_MS;
+delete process.env.STREAM_RESOLVER_V2_HTTP_RESOLVER_MAX_STREAMS;
 
 const env = require('../src/config/env');
 
@@ -56,4 +60,22 @@ test('configured HTTP source defaults are disabled and bounded', () => {
   }
   delete process.env.HTTP_TIMEOUT_FIXTURE;
   delete process.env.HTTP_CANDIDATE_FIXTURE;
+});
+
+test('configured HTTP resolver defaults are disabled and bounded', () => {
+  assert.equal(env.STREAM_RESOLVER_V2_HTTP_RESOLVER_ENABLED, false);
+  assert.equal(env.STREAM_RESOLVER_V2_HTTP_RESOLVER_ID, 'resolver_a');
+  assert.equal(env.STREAM_RESOLVER_V2_HTTP_RESOLVER_DOMAINS, '');
+  assert.equal(env.STREAM_RESOLVER_V2_HTTP_RESOLVER_TIMEOUT_MS, 2000);
+  assert.equal(env.STREAM_RESOLVER_V2_HTTP_RESOLVER_MAX_STREAMS, 4);
+  for (const [value, expected] of [['100', 100], ['10000', 10000], ['99', 2000], ['10001', 2000]]) {
+    process.env.RESOLVER_TIMEOUT_FIXTURE = value;
+    assert.equal(env.boundedPositiveInteger('RESOLVER_TIMEOUT_FIXTURE', 2000, 100, 10_000), expected);
+  }
+  for (const [value, expected] of [['1', 1], ['16', 16], ['0', 4], ['17', 4]]) {
+    process.env.RESOLVER_STREAM_FIXTURE = value;
+    assert.equal(env.boundedPositiveInteger('RESOLVER_STREAM_FIXTURE', 4, 1, 16), expected);
+  }
+  delete process.env.RESOLVER_TIMEOUT_FIXTURE;
+  delete process.env.RESOLVER_STREAM_FIXTURE;
 });

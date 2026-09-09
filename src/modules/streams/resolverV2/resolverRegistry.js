@@ -48,6 +48,23 @@ const byPriorityThenId = (left, right) =>
   right.descriptor.priority - left.descriptor.priority ||
   left.descriptor.id.localeCompare(right.descriptor.id);
 
+const hostnameMatches = (hostname, rule) => {
+  const domain = rule.startsWith('*.') ? rule.slice(2) : rule;
+  return hostname === domain || hostname.endsWith(`.${domain}`);
+};
+
+const declarativeMatch = (descriptor, url) => {
+  const hostRules = [...descriptor.domains, ...descriptor.aliases];
+  const hasHostRules = hostRules.length > 0;
+  const hasPatterns = descriptor.urlPatterns.length > 0;
+  if (!hasHostRules && !hasPatterns) return null;
+  const hostMatches = !hasHostRules || hostRules.some((rule) =>
+    hostnameMatches(url.hostname.toLowerCase(), rule));
+  const patternMatches = !hasPatterns || descriptor.urlPatterns.some((pattern) =>
+    url.pathname.startsWith(pattern));
+  return hostMatches && patternMatches;
+};
+
 const createResolverRegistry = (initialResolvers = []) => {
   if (!Array.isArray(initialResolvers)) throw registryError('INVALID_RESOLVER');
   const entries = new Map();
@@ -68,7 +85,19 @@ const createResolverRegistry = (initialResolvers = []) => {
   const detect = (candidate) => {
     const normalized = normalizeEmbedCandidate(candidate);
     if (!normalized) return [];
-    return list().filter((resolver) => resolver.canResolve(normalized) === true);
+    let url;
+    try {
+      url = new URL(normalized.url);
+      if (url.username || url.password) return [];
+    } catch {
+      return [];
+    }
+    const compatible = list().filter((resolver) => resolver.canResolve(normalized) === true);
+    const specific = compatible.filter(({ descriptor }) =>
+      declarativeMatch(descriptor, url) === true);
+    return specific.length > 0
+      ? specific
+      : compatible.filter(({ descriptor }) => declarativeMatch(descriptor, url) === null);
   };
 
   for (const resolver of initialResolvers) register(resolver);
@@ -77,4 +106,6 @@ const createResolverRegistry = (initialResolvers = []) => {
 
 module.exports = {
   createResolverRegistry,
+  declarativeMatch,
+  hostnameMatches,
 };

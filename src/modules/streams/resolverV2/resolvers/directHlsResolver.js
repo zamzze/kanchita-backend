@@ -23,6 +23,7 @@ const descriptor = Object.freeze({
   id: 'direct_hls',
   active: true,
   priority: 1000,
+  strategy: 'direct',
   protocols: Object.freeze(['hls']),
   domains: Object.freeze([]),
   aliases: Object.freeze([]),

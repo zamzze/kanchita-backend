@@ -91,6 +91,7 @@ test('ResolverDescriptor is declarative, bounded and lowercases identifiers', ()
   });
   assert.deepEqual(descriptor, {
     id: 'fixture_direct', active: false, priority: 100,
+    strategy: 'direct',
     protocols: ['hls', 'mp4'], domains: ['media.example.test', '*.cdn.example.test'],
     aliases: ['fixture'], urlPatterns: ['/embed/{id}', '/movie/{tmdbId}'],
     requiresBrowser: false,

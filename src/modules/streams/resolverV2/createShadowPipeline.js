@@ -10,6 +10,8 @@ const { createResolutionPipeline } = require('./resolutionPipeline');
 const { createShadowResolver } = require('./shadowResolver');
 const { createConfiguredHttpSourceProvider } =
   require('./providers/configuredHttpSourceProvider');
+const { createConfiguredHttpResolver } =
+  require('./resolvers/configuredHttpResolver');
 const {
   STREAM_RESOLVER_V2_HTTP_PROVIDER_ENABLED,
   STREAM_RESOLVER_V2_HTTP_PROVIDER_ID,
@@ -17,6 +19,12 @@ const {
   STREAM_RESOLVER_V2_HTTP_PROVIDER_TIMEOUT_MS,
   STREAM_RESOLVER_V2_HTTP_PROVIDER_MAX_CANDIDATES,
   STREAM_RESOLVER_V2_HTTP_PROVIDER_AUTH_TOKEN,
+  STREAM_RESOLVER_V2_HTTP_RESOLVER_ENABLED,
+  STREAM_RESOLVER_V2_HTTP_RESOLVER_ID,
+  STREAM_RESOLVER_V2_HTTP_RESOLVER_DOMAINS,
+  STREAM_RESOLVER_V2_HTTP_RESOLVER_TIMEOUT_MS,
+  STREAM_RESOLVER_V2_HTTP_RESOLVER_MAX_STREAMS,
+  STREAM_RESOLVER_V2_HTTP_RESOLVER_AUTH_TOKEN,
 } = require('../../../config/env');
 
 const createShadowPipeline = ({
@@ -32,6 +40,7 @@ const createShadowPipeline = ({
   resolverEngine,
   pipeline,
   httpProvider = {},
+  httpResolver = {},
 } = {}) => {
   const activeHttpClient = httpClient || createSafeHttpClient({ timeoutMs });
   const providerOptions = {
@@ -60,9 +69,29 @@ const createShadowPipeline = ({
     providerTimeoutMs: timeoutMs,
     globalTimeoutMs: timeoutMs,
   });
-  const activeResolverRegistry = resolverRegistry || createResolverRegistry([
-    createDirectHlsResolver({ httpClient: activeHttpClient, timeoutMs }),
-  ]);
+  const directHlsResolver = createDirectHlsResolver({
+    httpClient: activeHttpClient, timeoutMs,
+  });
+  const configuredResolvers = [directHlsResolver];
+  try {
+    const configuredResolver = createConfiguredHttpResolver({
+      enabled: STREAM_RESOLVER_V2_HTTP_RESOLVER_ENABLED,
+      id: STREAM_RESOLVER_V2_HTTP_RESOLVER_ID,
+      domains: STREAM_RESOLVER_V2_HTTP_RESOLVER_DOMAINS,
+      timeoutMs: STREAM_RESOLVER_V2_HTTP_RESOLVER_TIMEOUT_MS,
+      maxStreams: STREAM_RESOLVER_V2_HTTP_RESOLVER_MAX_STREAMS,
+      headers: STREAM_RESOLVER_V2_HTTP_RESOLVER_AUTH_TOKEN
+        ? { authorization: `Bearer ${STREAM_RESOLVER_V2_HTTP_RESOLVER_AUTH_TOKEN}` } : {},
+      ...httpResolver,
+      http: activeHttpClient,
+      hlsResolver: directHlsResolver,
+    });
+    if (configuredResolver.descriptor.active) configuredResolvers.push(configuredResolver);
+  } catch {
+    // Invalid optional resolver configuration fails closed.
+  }
+  const activeResolverRegistry = resolverRegistry ||
+    createResolverRegistry(configuredResolvers);
   const activeResolverEngine = resolverEngine || createResolverEngine({
     registry: activeResolverRegistry,
     timeoutMs,

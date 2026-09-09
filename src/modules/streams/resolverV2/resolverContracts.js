@@ -12,6 +12,9 @@ const MAX_URL_LENGTH = 16_384;
 const MAX_HEADER_COUNT = 64;
 const MAX_METADATA_DEPTH = 8;
 const MAX_METADATA_ITEMS = 512;
+const RESOLVER_STRATEGIES = Object.freeze(['direct', 'http', 'browser']);
+const resolverStrategies = new Set(RESOLVER_STRATEGIES);
+const UNSAFE_METADATA_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
 
 const isPlainObject = (value) => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
@@ -84,7 +87,7 @@ const cloneJsonLike = (value, state = { depth: 0, items: 0, seen: new Set() }) =
   } else {
     clone = {};
     for (const [key, item] of Object.entries(value)) {
-      if (!normalizeRequiredString(key, 128)) {
+      if (!normalizeRequiredString(key, 128) || UNSAFE_METADATA_KEYS.has(key)) {
         state.seen.delete(value);
         return undefined;
       }
@@ -225,24 +228,39 @@ const normalizeStringList = (value, { lowerCase = false, maxLength = 256 } = {})
   return result;
 };
 
+const isValidDomainRule = (value) => {
+  const domain = value.startsWith('*.') ? value.slice(2) : value;
+  if (!domain || domain.length > 253 || domain.endsWith('.') || domain.includes('..')) return false;
+  return domain.split('.').every((label) =>
+    label.length > 0 && label.length <= 63 && /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/i.test(label));
+};
+
+const isValidPathPrefix = (value) =>
+  value.startsWith('/') && !value.includes('?') && !value.includes('#');
+
 const normalizeResolverDescriptor = (input) => {
   if (!isPlainObject(input)) return null;
   const id = normalizeRequiredString(input.id, MAX_ID_LENGTH);
   if (!id || !/^[a-z0-9][a-z0-9_-]*$/i.test(id) || typeof input.active !== 'boolean' ||
       typeof input.requiresBrowser !== 'boolean' || !Number.isInteger(input.priority)) return null;
 
+  const strategy = input.strategy === undefined
+    ? (input.requiresBrowser ? 'browser' : 'direct') : input.strategy;
   const protocols = normalizeStringList(input.protocols, { lowerCase: true, maxLength: 16 });
   const domains = normalizeStringList(input.domains, { lowerCase: true, maxLength: 253 });
   const aliases = normalizeStringList(input.aliases, { lowerCase: true, maxLength: MAX_ID_LENGTH });
   const urlPatterns = normalizeStringList(input.urlPatterns, { maxLength: 512 });
-  if (!protocols || !domains || !aliases || !urlPatterns ||
+  if (!resolverStrategies.has(strategy) || !protocols || !domains || !aliases || !urlPatterns ||
       protocols.some((protocol) => !streamProtocols.has(protocol)) ||
-      domains.some((domain) => !/^(?:\*\.)?[a-z0-9.-]+$/i.test(domain))) return null;
+      domains.some((domain) => !isValidDomainRule(domain)) ||
+      aliases.some((alias) => !isValidDomainRule(alias)) ||
+      urlPatterns.some((pattern) => !isValidPathPrefix(pattern))) return null;
 
   return {
     id: id.toLowerCase(),
     active: input.active,
     priority: input.priority,
+    strategy,
     protocols,
     domains,
     aliases,
@@ -259,6 +277,7 @@ const isValidResolverDescriptor = (input) => normalizeResolverDescriptor(input) 
 module.exports = {
   CONTENT_TYPES,
   STREAM_PROTOCOLS,
+  RESOLVER_STRATEGIES,
   normalizeMediaContext,
   normalizeEmbedCandidate,
   normalizeStreamCandidate,
