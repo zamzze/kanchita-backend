@@ -71,8 +71,32 @@ test('zero sources skip the resolver and preserve a coherent empty trace', async
   assert.deepEqual(result.resolverTrace, {
     attempts: [], usedLegacyFallback: false, durationMs: 0,
   });
+  assert.equal(result.selection, null);
 });
 
+test('optional ranker orders streams and exposes its internal selection', async () => {
+  const second = { ...stream, url: 'https://media.example.test/second.m3u8' };
+  const selected = { selected: second, ranked: [second, stream], reason: {
+    languageTier: 'latino', qualityTier: '1080p', protocolTier: 'hls', validated: true,
+  } };
+  let rankerCalls = 0;
+  const pipeline = createResolutionPipeline({
+    sourceProviderManager: { getSources: async () => ({
+      candidates: [candidate()], trace: { providersAttempted: 1, candidateCount: 1 },
+    }) },
+    resolverEngine: { resolve: async () => ({ streams: [stream, second], attempts: [],
+      usedLegacyFallback: false, durationMs: 0 }) },
+    ranker: { selectBest: (streams) => {
+      rankerCalls += 1;
+      assert.deepEqual(streams, [stream, second]);
+      return selected;
+    } },
+  });
+  const result = await pipeline.resolve(mediaContext);
+  assert.equal(rankerCalls, 1);
+  assert.deepEqual(result.streams, [second, stream]);
+  assert.equal(result.selection, selected);
+});
 
 test('a failed source provider does not prevent another provider reaching the engine', async () => {
   const registry = createSourceProviderRegistry([

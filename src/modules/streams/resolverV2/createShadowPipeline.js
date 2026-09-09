@@ -14,6 +14,11 @@ const { createConfiguredHttpResolver } =
   require('./resolvers/configuredHttpResolver');
 const { createV2HealthStore } = require('./health/v2HealthStore');
 const { createV2Observability } = require('./observability/v2Observability');
+const { createStreamRanker } = require('./ranking/streamRanker');
+const { createShadowLegacyComparator } =
+  require('./observability/shadowLegacyComparator');
+const { createShadowComparisonStats } =
+  require('./observability/shadowComparisonStats');
 const {
   STREAM_RESOLVER_V2_HTTP_PROVIDER_ENABLED,
   STREAM_RESOLVER_V2_HTTP_PROVIDER_ID,
@@ -50,9 +55,15 @@ const createShadowPipeline = ({
   healthStore = null,
   observability = null,
   healthEnabled = STREAM_RESOLVER_V2_HEALTH_ENABLED,
+  ranker = null,
+  shadowComparator = null,
+  comparisonStats = null,
 } = {}) => {
   const activeHttpClient = httpClient || createSafeHttpClient({ timeoutMs });
   const activeObservability = observability || createV2Observability({ maxSamples: 256 });
+  const activeRanker = ranker || createStreamRanker();
+  const activeShadowComparator = shadowComparator || createShadowLegacyComparator();
+  const activeComparisonStats = comparisonStats || createShadowComparisonStats();
   const healthEvent = (type, kind) => {
     const suffix = type === 'open' ? 'circuit_open'
       : type === 'skip' ? 'circuit_skip'
@@ -129,6 +140,7 @@ const createShadowPipeline = ({
   const activePipeline = pipeline || createResolutionPipeline({
     sourceProviderManager: activeSourceManager,
     resolverEngine: activeResolverEngine,
+    ranker: activeRanker,
   });
   const shadowResolver = createShadowResolver({
     pipeline: activePipeline,
@@ -148,6 +160,9 @@ const createShadowPipeline = ({
     resolverRegistry: activeResolverRegistry,
     healthStore: activeHealthStore,
     observability: activeObservability,
+    ranker: activeRanker,
+    shadowComparator: activeShadowComparator,
+    comparisonStats: activeComparisonStats,
   });
 };
 

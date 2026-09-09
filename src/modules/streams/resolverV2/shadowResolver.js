@@ -83,15 +83,29 @@ const createShadowResolver = ({
     }
   };
   const safeResult = (status, startedAt, sourceTrace = null, resolverTrace = null,
-    streamCount = 0) => ({
+    streamCount = 0, selected = null) => ({
     status,
     streamCount: count(streamCount),
     candidateCount: count(sourceTrace?.candidateCount),
     durationMs: Math.max(0, now() - startedAt),
     sourceTrace,
     resolverTrace,
+    selected,
   });
 
+  const sanitizeSelected = (selection) => {
+    const reason = selection?.reason;
+    if (!selection?.selected || !reason) return null;
+    return Object.freeze({
+      protocol: ['hls', 'mp4', 'dash', 'unknown'].includes(reason.protocolTier)
+        ? reason.protocolTier : 'unknown',
+      qualityTier: typeof reason.qualityTier === 'string' ? reason.qualityTier : 'unknown',
+      languageTier: typeof reason.languageTier === 'string' ? reason.languageTier : 'unknown',
+      validated: reason.validated === true,
+      resolverStrategy: ['direct', 'http', 'browser'].includes(reason.resolverStrategy)
+        ? reason.resolverStrategy : 'unknown',
+    });
+  };
   const run = async (input, options = {}) => {
     if (!enabled) return safeResult('disabled', now());
     const startedAt = now();
@@ -156,7 +170,8 @@ const createShadowResolver = ({
       status = streamCount > 0 ? 'success'
         : sourceTrace.providersAttempted === 0 ? 'no_providers'
           : sourceTrace.candidateCount === 0 ? 'no_candidates' : 'no_streams';
-      result = safeResult(status, startedAt, sourceTrace, resolverTrace, streamCount);
+      result = safeResult(status, startedAt, sourceTrace, resolverTrace, streamCount,
+        sanitizeSelected(pipelineResult.selection));
     } catch (error) {
       status = externalAbort || ABORT_CODES.has(error?.code) ? 'aborted'
         : timedOut || TIMEOUT_CODES.has(error?.code) ? 'timeout' : 'failed';

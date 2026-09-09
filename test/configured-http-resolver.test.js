@@ -93,14 +93,15 @@ test('GET contract propagates safe candidate headers and maps validated HLS outp
       providerId: 'spoofed', resolverId: 'spoofed', quality: '1080p',
       audioLanguage: 'es-419', subtitleLanguage: 'es',
       headers: { Referer: 'https://player.example.test/', 'X-Fixture': 'yes' },
-      expiresAt: '2030-01-01T00:00:00.000Z', metadata: { server: 'configured' },
+      expiresAt: '2030-01-01T00:00:00.000Z',
+      metadata: { server: 'configured', sourcePriority: 999 },
     }] }, 200, 'application/json; charset=utf-8');
   });
   t.after(() => Promise.all([close(media.server), close(endpoint.server)]));
   const resolver = make(createSafeHttpClient({ allowPrivateNetworks: true }));
   const streams = await resolver.resolve(candidate(`${endpoint.url}/item/1`, {
     referer: 'https://source.example.test/watch', origin: 'https://source.example.test',
-    headers: { 'X-Candidate': 'yes' },
+    headers: { 'X-Candidate': 'yes' }, metadata: { sourcePriority: 17 },
   }));
   assert.equal(resolverHeaders.accept, 'application/json');
   assert.equal(resolverHeaders.referer, 'https://source.example.test/watch');
@@ -115,7 +116,7 @@ test('GET contract propagates safe candidate headers and maps validated HLS outp
   assert.equal(streams[0].audioLanguage, 'es-419');
   assert.equal(streams[0].subtitleLanguage, 'es');
   assert.equal(streams[0].expiresAt, '2030-01-01T00:00:00.000Z');
-  assert.deepEqual(streams[0].metadata, { server: 'configured' });
+  assert.deepEqual(streams[0].metadata, { server: 'configured', sourcePriority: 17 });
   assert.equal(playbackHeaders.referer, 'https://player.example.test/');
   assert.equal(playbackHeaders['x-fixture'], 'yes');
 });

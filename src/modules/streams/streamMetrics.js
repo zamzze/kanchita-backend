@@ -35,6 +35,13 @@ const METRIC_NAMES = new Set([
   'resolver_v2_resolver_circuit_skip_total',
   'resolver_v2_resolver_half_open_probe_total',
   'resolver_v2_resolver_circuit_recovery_total',
+  'resolver_v2_shadow_comparison_total',
+  'resolver_v2_shadow_ready_comparison_total',
+  'resolver_v2_shadow_would_avoid_browser_total',
+  'resolver_v2_legacy_browser_total',
+  'resolver_v2_shadow_better_total',
+  'resolver_v2_shadow_equivalent_total',
+  'resolver_v2_shadow_legacy_better_total',
 ]);
 
 const createMetricsStore = (db = pool) => {

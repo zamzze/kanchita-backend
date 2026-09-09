@@ -101,7 +101,7 @@ test('direct and configured-server candidates coexist without resolver collision
   const resolved = await composition.pipeline.resolve(mediaContext);
   assert.equal(resolved.streams.length, 2);
   assert.deepEqual(resolved.streams.map(({ resolverId }) => resolverId),
-    ['direct_hls', 'resolver_a']);
+    ['resolver_a', 'direct_hls']);
   assert.ok(resolved.streams.every(({ validated }) => validated));
 });
 

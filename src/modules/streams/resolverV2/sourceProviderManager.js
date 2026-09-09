@@ -153,7 +153,11 @@ const createSourceProviderManager = ({
         const identities = new Set();
         let discardedCandidates = 0;
         for (const item of raw) {
-          const candidate = normalizeEmbedCandidate({ ...item, providerId: provider.descriptor.id });
+          const candidate = normalizeEmbedCandidate({
+            ...item,
+            providerId: provider.descriptor.id,
+            metadata: { ...(item?.metadata || {}), sourcePriority: provider.descriptor.priority },
+          });
           if (!candidate) {
             discardedCandidates += 1;
             continue;

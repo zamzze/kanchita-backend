@@ -9,9 +9,10 @@ const emptyResolverTrace = () => ({
   durationMs: 0,
 });
 
-const createResolutionPipeline = ({ sourceProviderManager, resolverEngine } = {}) => {
+const createResolutionPipeline = ({ sourceProviderManager, resolverEngine, ranker = null } = {}) => {
   if (!sourceProviderManager || typeof sourceProviderManager.getSources !== 'function' ||
-      !resolverEngine || typeof resolverEngine.resolve !== 'function') {
+      !resolverEngine || typeof resolverEngine.resolve !== 'function' ||
+      (ranker && typeof ranker.selectBest !== 'function')) {
     throw sourceProviderError(SOURCE_PROVIDER_ERROR_CODES.INVALID_INPUT);
   }
 
@@ -27,6 +28,7 @@ const createResolutionPipeline = ({ sourceProviderManager, resolverEngine } = {}
     if (sourceResult.candidates.length === 0) {
       return {
         streams: [],
+        selection: null,
         sourceTrace: sourceResult.trace,
         resolverTrace: emptyResolverTrace(),
       };
@@ -40,7 +42,13 @@ const createResolutionPipeline = ({ sourceProviderManager, resolverEngine } = {}
       throw sourceProviderError(SOURCE_PROVIDER_ERROR_CODES.INVALID_RESULT);
     }
     const { streams, ...resolverTrace } = resolved;
-    return { streams, sourceTrace: sourceResult.trace, resolverTrace };
+    const selection = ranker ? ranker.selectBest(streams, { mediaContext }) : null;
+    return {
+      streams: selection ? selection.ranked : streams,
+      selection,
+      sourceTrace: sourceResult.trace,
+      resolverTrace,
+    };
   };
 
   return Object.freeze({ resolve });

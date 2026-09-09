@@ -103,7 +103,7 @@ const createResolverEngine = ({
         ...(errorCode ? { errorCode } : {}),
       });
     };
-    const acceptResults = (result) => {
+    const acceptResults = (result, resolver = null) => {
       if (!Array.isArray(result)) {
         throw resolverEngineError(ENGINE_ERROR_CODES.INVALID_RESULT);
       }
@@ -111,8 +111,16 @@ const createResolverEngine = ({
       if (normalized.some((candidate) => candidate === null)) {
         throw resolverEngineError(ENGINE_ERROR_CODES.INVALID_RESULT);
       }
-      streams.push(...normalized.slice(0, maxStreams - streams.length));
-      return normalized.length;
+      const enriched = resolver ? normalized.map((candidate) => normalizeStreamCandidate({
+        ...candidate,
+        metadata: {
+          ...(candidate.metadata || {}),
+          resolverPriority: resolver.descriptor.priority,
+          resolverStrategy: resolver.descriptor.strategy,
+        },
+      })) : normalized;
+      streams.push(...enriched.slice(0, maxStreams - streams.length));
+      return enriched.length;
     };
 
     try {
@@ -143,7 +151,7 @@ const createResolverEngine = ({
           try {
             const result = await resolver.resolve(candidate, context);
             throwIfStopped();
-            const count = acceptResults(result);
+            const count = acceptResults(result, resolver);
             const durationMs = Math.max(0, now() - attemptStartedAt);
             healthCall('recordSuccess', 'resolver', resolverId, { durationMs });
             observe(resolver, durationMs);

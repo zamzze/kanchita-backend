@@ -151,13 +151,16 @@ const createConfiguredHttpResolver = ({
         validated: false,
       });
       if (!proposed) continue;
+      const metadata = Number.isInteger(normalized.metadata?.sourcePriority)
+        ? { ...(proposed.metadata || {}), sourcePriority: normalized.metadata.sourcePriority }
+        : proposed.metadata;
       const validated = await hlsResolver.resolve({
         providerId: normalized.providerId,
         url: proposed.url,
         headers: proposed.headers,
         qualityHint: proposed.quality,
         languageHint: proposed.audioLanguage,
-        metadata: proposed.metadata,
+        metadata,
       }, context);
       for (const checked of validated) {
         const stream = normalizeStreamCandidate({
@@ -168,7 +171,7 @@ const createConfiguredHttpResolver = ({
           audioLanguage: proposed.audioLanguage,
           subtitleLanguage: proposed.subtitleLanguage,
           expiresAt: proposed.expiresAt,
-          metadata: proposed.metadata,
+          metadata,
           latencyMs: Math.max(0, now() - startedAt),
         });
         if (stream) streams.push(stream);

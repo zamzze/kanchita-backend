@@ -37,6 +37,9 @@ test('production composition starts with zero sources and direct HLS resolver on
     ['direct_hls']);
   assert.ok(composition.healthStore);
   assert.ok(composition.observability);
+  assert.equal(typeof composition.ranker.selectBest, 'function');
+  assert.equal(typeof composition.shadowComparator.compare, 'function');
+  assert.equal(typeof composition.comparisonStats.snapshot, 'function');
   const startedAt = Date.now();
   const result = await composition.shadowResolver.run(mediaContext);
   assert.equal(result.status, 'no_providers');
@@ -110,6 +113,13 @@ test('all shadow metric names are accepted by the existing metrics store', async
     'resolver_v2_resolver_circuit_open_total', 'resolver_v2_resolver_circuit_skip_total',
     'resolver_v2_resolver_half_open_probe_total',
     'resolver_v2_resolver_circuit_recovery_total',
+    'resolver_v2_shadow_comparison_total',
+    'resolver_v2_shadow_ready_comparison_total',
+    'resolver_v2_shadow_would_avoid_browser_total',
+    'resolver_v2_legacy_browser_total',
+    'resolver_v2_shadow_better_total',
+    'resolver_v2_shadow_equivalent_total',
+    'resolver_v2_shadow_legacy_better_total',
   ];
   for (const name of names) assert.equal(METRIC_NAMES.has(name), true);
   const calls = [];

@@ -75,6 +75,35 @@ test('success is counted while returned trace strips all sensitive fields', asyn
   assert.ok(recorder.events.some((event) => event[1] === 'resolver_v2_shadow_duration_ms'));
 });
 
+test('selected stream is reduced to a safe ranking summary', async () => {
+  const shadow = createShadowResolver({
+    enabled: true,
+    logger: silentLogger,
+    pipeline: { resolve: async () => ({
+      streams: [{ url: 'https://media.example.test/master.m3u8?token=secret' }],
+      selection: {
+        selected: {
+          url: 'https://media.example.test/master.m3u8?token=secret',
+          headers: { authorization: 'Bearer secret' },
+          providerId: 'dynamic-provider',
+        },
+        reason: {
+          protocolTier: 'hls', qualityTier: '1080p', languageTier: 'latino',
+          validated: true, resolverStrategy: 'direct',
+        },
+      },
+      sourceTrace: { providersAttempted: 1, candidateCount: 1 },
+      resolverTrace: { attempts: [], usedLegacyFallback: false, durationMs: 1 },
+    }) },
+  });
+  const result = await shadow.run(mediaContext);
+  assert.deepEqual(result.selected, {
+    protocol: 'hls', qualityTier: '1080p', languageTier: 'latino',
+    validated: true, resolverStrategy: 'direct',
+  });
+  assert.doesNotMatch(JSON.stringify(result),
+    /https?:|token|authorization|headers|providerId|resolverId|dynamic-provider/i);
+});
 test('empty outcomes distinguish no providers, no candidates and no streams', async () => {
   const fixtures = [
     [{ providersAttempted: 0, candidateCount: 0 }, 'no_providers'],

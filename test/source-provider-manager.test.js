@@ -65,7 +65,7 @@ test('successful providers preserve candidate fields and force provider identity
   assert.equal(first.headers.cookie, 'session=fake-secret');
   assert.equal(first.languageHint, 'es-419');
   assert.equal(first.qualityHint, '1080p');
-  assert.deepEqual(first.metadata, { fixture: true });
+  assert.deepEqual(first.metadata, { fixture: true, sourcePriority: 10 });
   assert.equal(result.trace.providersSucceeded, 1);
   assert.equal(result.trace.candidateCount, 2);
 });

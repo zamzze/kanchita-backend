@@ -9,6 +9,10 @@ const { createBrowserSlotManager } = require('./browserSlots');
 const { createMetricsStore } = require('./streamMetrics');
 const { createStreamStatsStore } = require('./streamStats');
 const { createShadowPipeline } = require('./resolverV2/createShadowPipeline');
+const { createShadowLegacyComparator } =
+  require('./resolverV2/observability/shadowLegacyComparator');
+const { createShadowComparisonStats } =
+  require('./resolverV2/observability/shadowComparisonStats');
 const { findStreamContent } = require('./streamContent');
 const { createStreamLifecycle, processingError } = require('./streamLifecycle');
 const {
@@ -41,16 +45,54 @@ const createStreamProcessor = ({
   workerId = 'stream-worker',
   providerManager,
   shadowResolver,
+  shadowComparator,
+  comparisonStats,
+  comparisonMetrics,
   lifecycle: injectedLifecycle,
   stats: injectedStats,
 } = {}) => {
   const metrics = createMetricsStore(db);
-  const shadow = shadowResolver || createShadowPipeline({
+  const shadowComposition = shadowResolver ? null : createShadowPipeline({
     enabled: STREAM_RESOLVER_V2_SHADOW_ENABLED,
     timeoutMs: STREAM_RESOLVER_V2_SHADOW_TIMEOUT_MS,
     metrics,
     logger,
-  }).shadowResolver;
+  });
+  const shadow = shadowResolver || shadowComposition.shadowResolver;
+  const comparator = shadowComparator || shadowComposition?.shadowComparator ||
+    createShadowLegacyComparator();
+  const comparisons = comparisonStats || shadowComposition?.comparisonStats ||
+    createShadowComparisonStats();
+  const comparisonMetricStore = comparisonMetrics || null;
+  const recordComparisonMetric = (name) => {
+    try {
+      const pending = comparisonMetricStore?.increment?.(name, 1);
+      pending?.catch?.(() => {});
+    } catch {
+      // Comparison telemetry cannot affect authoritative legacy playback.
+    }
+  };
+  const compareSafely = (shadowResult, legacyResult) => {
+    try {
+      const summary = comparator.compare({ shadow: shadowResult, legacy: legacyResult });
+      try { comparisons.record(summary); } catch { /* best effort */ }
+      recordComparisonMetric('resolver_v2_shadow_comparison_total');
+      if (summary.shadowReady) recordComparisonMetric('resolver_v2_shadow_ready_comparison_total');
+      if (summary.wouldAvoidBrowser === true) {
+        recordComparisonMetric('resolver_v2_shadow_would_avoid_browser_total');
+      }
+      if (summary.legacyBrowserUsed === true) recordComparisonMetric('resolver_v2_legacy_browser_total');
+      const qualityMetric = {
+        shadow_better: 'resolver_v2_shadow_better_total',
+        equivalent: 'resolver_v2_shadow_equivalent_total',
+        legacy_better: 'resolver_v2_shadow_legacy_better_total',
+      }[summary.qualityComparison];
+      if (qualityMetric) recordComparisonMetric(qualityMetric);
+      return summary;
+    } catch {
+      return null;
+    }
+  };
   const health = createProviderHealthStore(db, {
     failureThreshold: STREAM_PROVIDER_FAILURE_THRESHOLD,
     cooldownSeconds: STREAM_PROVIDER_COOLDOWN_SECONDS,
@@ -104,14 +146,17 @@ const createStreamProcessor = ({
       job.content_id,
       content,
       async (context) => {
+        let shadowResult = null;
         if (job.job_type !== 'refresh') {
           try {
-            await shadow.run({ ...context });
+            shadowResult = await shadow.run({ ...context });
           } catch {
-            // Shadow is observational; an injected runner cannot stop legacy.
+            shadowResult = { status: 'failed', selected: null };
           }
         }
-        return manager.resolve(context);
+        const legacyResult = await manager.resolve(context);
+        if (job.job_type !== 'refresh') compareSafely(shadowResult, legacyResult);
+        return legacyResult;
       },
       { preserveCurrent: job.job_type === 'refresh' }
     );
