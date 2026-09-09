@@ -11,6 +11,8 @@ process.env.JWT_REFRESH_SECRET ||= 'shadow-test-refresh-secret';
 process.env.TMDB_API_KEY ||= 'shadow-test-tmdb';
 delete process.env.STREAM_RESOLVER_V2_SHADOW_ENABLED;
 delete process.env.STREAM_RESOLVER_V2_SHADOW_TIMEOUT_MS;
+delete process.env.STREAM_RESOLVER_V2_PRIMARY_ENABLED;
+delete process.env.STREAM_RESOLVER_V2_PRIMARY_TIMEOUT_MS;
 delete process.env.STREAM_RESOLVER_V2_HTTP_PROVIDER_ENABLED;
 delete process.env.STREAM_RESOLVER_V2_HTTP_PROVIDER_BASE_URL;
 delete process.env.STREAM_RESOLVER_V2_HTTP_PROVIDER_TIMEOUT_MS;
@@ -32,6 +34,18 @@ test('shadow feature flag is false by default and exact-true only', () => {
     ['1', false], ['true', true]]) {
     assert.equal(env.isExplicitlyEnabled(value), expected);
   }
+});
+
+test('primary feature flag and timeout are strict and independently bounded', () => {
+  assert.equal(env.STREAM_RESOLVER_V2_PRIMARY_ENABLED, false);
+  assert.equal(env.STREAM_RESOLVER_V2_PRIMARY_TIMEOUT_MS, 5000);
+  for (const [value, expected] of [['500', 500], ['15000', 15000], ['499', 5000],
+    ['15001', 5000], ['bad', 5000], ['', 5000]]) {
+    process.env.PRIMARY_TIMEOUT_FIXTURE = value;
+    assert.equal(env.boundedPositiveInteger('PRIMARY_TIMEOUT_FIXTURE', 5000, 500, 15_000),
+      expected);
+  }
+  delete process.env.PRIMARY_TIMEOUT_FIXTURE;
 });
 
 test('shadow timeout has bounded safe defaults', () => {

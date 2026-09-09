@@ -13,6 +13,9 @@ const { createShadowLegacyComparator } =
   require('./resolverV2/observability/shadowLegacyComparator');
 const { createShadowComparisonStats } =
   require('./resolverV2/observability/shadowComparisonStats');
+const { createPrimaryStats } = require('./resolverV2/observability/primaryStats');
+const { adaptV2ToLegacyResult } = require('./resolverV2/v2LegacyResultAdapter');
+const { selectResolutionMode } = require('./resolverV2/resolutionMode');
 const { findStreamContent } = require('./streamContent');
 const { createStreamLifecycle, processingError } = require('./streamLifecycle');
 const {
@@ -28,6 +31,8 @@ const {
   STREAM_REJECT_AD_MARKED,
   STREAM_RESOLVER_V2_SHADOW_ENABLED,
   STREAM_RESOLVER_V2_SHADOW_TIMEOUT_MS,
+  STREAM_RESOLVER_V2_PRIMARY_ENABLED,
+  STREAM_RESOLVER_V2_PRIMARY_TIMEOUT_MS,
 } = require('../../config/env');
 
 const createStreamProcessor = ({
@@ -48,22 +53,45 @@ const createStreamProcessor = ({
   shadowComparator,
   comparisonStats,
   comparisonMetrics,
+  primaryResolver,
+  primaryEnabled,
+  shadowEnabled,
+  primaryTimeoutMs = STREAM_RESOLVER_V2_PRIMARY_TIMEOUT_MS,
+  primaryStats,
+  primaryMetrics,
+  primaryAdapter = adaptV2ToLegacyResult,
   lifecycle: injectedLifecycle,
   stats: injectedStats,
 } = {}) => {
   const metrics = createMetricsStore(db);
-  const shadowComposition = shadowResolver ? null : createShadowPipeline({
-    enabled: STREAM_RESOLVER_V2_SHADOW_ENABLED,
+  const effectivePrimaryEnabled = primaryEnabled ?? STREAM_RESOLVER_V2_PRIMARY_ENABLED;
+  const effectiveShadowEnabled = shadowEnabled ??
+    (shadowResolver ? true : STREAM_RESOLVER_V2_SHADOW_ENABLED);
+  const mode = selectResolutionMode({
+    primaryEnabled: effectivePrimaryEnabled,
+    shadowEnabled: effectiveShadowEnabled,
+  });
+  const primaryMetricStore = primaryMetrics || (mode === 'primary' ? metrics : null);
+  const needsComposition = (mode === 'primary' && !primaryResolver) ||
+    (mode === 'shadow' && !shadowResolver);
+  const v2Composition = needsComposition ? createShadowPipeline({
+    enabled: mode === 'shadow',
     timeoutMs: STREAM_RESOLVER_V2_SHADOW_TIMEOUT_MS,
     metrics,
     logger,
-  });
-  const shadow = shadowResolver || shadowComposition.shadowResolver;
-  const comparator = shadowComparator || shadowComposition?.shadowComparator ||
+    primaryEnabled: mode === 'primary',
+    primaryTimeoutMs,
+    primaryMetrics: primaryMetricStore,
+  }) : null;
+  const shadow = shadowResolver || v2Composition?.shadowResolver || null;
+  const primary = primaryResolver || v2Composition?.primaryResolver || null;
+  const comparator = shadowComparator || v2Composition?.shadowComparator ||
     createShadowLegacyComparator();
-  const comparisons = comparisonStats || shadowComposition?.comparisonStats ||
+  const comparisons = comparisonStats || v2Composition?.comparisonStats ||
     createShadowComparisonStats();
+  const primaryStatistics = primaryStats || v2Composition?.primaryStats || createPrimaryStats();
   const comparisonMetricStore = comparisonMetrics || null;
+
   const recordComparisonMetric = (name) => {
     try {
       const pending = comparisonMetricStore?.increment?.(name, 1);
@@ -92,6 +120,24 @@ const createStreamProcessor = ({
     } catch {
       return null;
     }
+  };
+  const recordPrimaryMetric = (name) => {
+    try {
+      const pending = primaryMetricStore?.increment?.(name, 1);
+      pending?.catch?.(() => {});
+    } catch { /* best effort */ }
+  };
+  const recordPrimaryDecision = (result, { fallback = false, legacyAvoided = false } = {}) => {
+    try {
+      primaryStatistics.record({
+        status: result?.status || 'failed',
+        code: result?.summary?.code,
+        fallback,
+        legacyAvoided,
+      });
+    } catch { /* best effort */ }
+    if (fallback) recordPrimaryMetric('resolver_v2_primary_fallback_total');
+    if (legacyAvoided) recordPrimaryMetric('resolver_v2_primary_legacy_avoided_total');
   };
   const health = createProviderHealthStore(db, {
     failureThreshold: STREAM_PROVIDER_FAILURE_THRESHOLD,
@@ -146,16 +192,47 @@ const createStreamProcessor = ({
       job.content_id,
       content,
       async (context) => {
-        let shadowResult = null;
-        if (job.job_type !== 'refresh') {
+        if (job.job_type === 'refresh') return manager.resolve(context);
+        if (mode === 'primary') {
+          let primaryResult;
           try {
-            shadowResult = await shadow.run({ ...context });
+            primaryResult = await primary.resolve({ ...context }, {
+              signal: context.signal,
+              deadlineAt: context.deadlineAt,
+            });
           } catch {
-            shadowResult = { status: 'failed', selected: null };
+            primaryResult = { status: 'failed', selected: null,
+              summary: { code: 'PRIMARY_UNKNOWN' }, externalAbort: false };
           }
+          if (primaryResult?.status === 'aborted' && primaryResult.externalAbort) {
+            recordPrimaryDecision(primaryResult);
+            throw Object.assign(new Error('Stream processing aborted'), {
+              code: 'RESOLUTION_ABORTED',
+            });
+          }
+          if (primaryResult?.status === 'accepted') {
+            try {
+              const adapted = primaryAdapter(primaryResult.selected);
+              recordPrimaryDecision(primaryResult, { legacyAvoided: true });
+              return adapted;
+            } catch {
+              recordPrimaryDecision({ status: 'rejected',
+                summary: { code: 'PRIMARY_INVALID_STREAM' } }, { fallback: true });
+              return manager.resolve(context);
+            }
+          }
+          recordPrimaryDecision(primaryResult, { fallback: true });
+          return manager.resolve(context);
+        }
+        if (mode === 'legacy') return manager.resolve(context);
+        let shadowResult = null;
+        try {
+          shadowResult = await shadow.run({ ...context });
+        } catch {
+          shadowResult = { status: 'failed', selected: null };
         }
         const legacyResult = await manager.resolve(context);
-        if (job.job_type !== 'refresh') compareSafely(shadowResult, legacyResult);
+        compareSafely(shadowResult, legacyResult);
         return legacyResult;
       },
       { preserveCurrent: job.job_type === 'refresh' }

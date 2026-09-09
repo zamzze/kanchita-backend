@@ -19,6 +19,9 @@ const { createShadowLegacyComparator } =
   require('./observability/shadowLegacyComparator');
 const { createShadowComparisonStats } =
   require('./observability/shadowComparisonStats');
+const { createPrimaryAcceptanceGate } = require('./primaryAcceptanceGate');
+const { createPrimaryResolver } = require('./primaryResolver');
+const { createPrimaryStats } = require('./observability/primaryStats');
 const {
   STREAM_RESOLVER_V2_HTTP_PROVIDER_ENABLED,
   STREAM_RESOLVER_V2_HTTP_PROVIDER_ID,
@@ -36,6 +39,8 @@ const {
   STREAM_RESOLVER_V2_FAILURE_THRESHOLD,
   STREAM_RESOLVER_V2_COOLDOWN_SECONDS,
   STREAM_RESOLVER_V2_HALF_OPEN_SUCCESS_THRESHOLD,
+  STREAM_RESOLVER_V2_PRIMARY_ENABLED,
+  STREAM_RESOLVER_V2_PRIMARY_TIMEOUT_MS,
 } = require('../../../config/env');
 
 const createShadowPipeline = ({
@@ -58,12 +63,20 @@ const createShadowPipeline = ({
   ranker = null,
   shadowComparator = null,
   comparisonStats = null,
+  primaryEnabled = STREAM_RESOLVER_V2_PRIMARY_ENABLED,
+  primaryTimeoutMs = STREAM_RESOLVER_V2_PRIMARY_TIMEOUT_MS,
+  primaryResolver = null,
+  primaryAcceptanceGate = null,
+  primaryStats = null,
+  primaryMetrics = null,
 } = {}) => {
-  const activeHttpClient = httpClient || createSafeHttpClient({ timeoutMs });
+  const runtimeTimeoutMs = primaryEnabled ? Math.max(timeoutMs, primaryTimeoutMs) : timeoutMs;
+  const activeHttpClient = httpClient || createSafeHttpClient({ timeoutMs: runtimeTimeoutMs });
   const activeObservability = observability || createV2Observability({ maxSamples: 256 });
   const activeRanker = ranker || createStreamRanker();
   const activeShadowComparator = shadowComparator || createShadowLegacyComparator();
   const activeComparisonStats = comparisonStats || createShadowComparisonStats();
+  const activePrimaryStats = primaryStats || createPrimaryStats();
   const healthEvent = (type, kind) => {
     const suffix = type === 'open' ? 'circuit_open'
       : type === 'skip' ? 'circuit_skip'
@@ -103,13 +116,13 @@ const createShadowPipeline = ({
   const activeSourceManager = sourceProviderManager || createSourceProviderManager({
     registry: activeSourceRegistry,
     http: activeHttpClient,
-    providerTimeoutMs: timeoutMs,
-    globalTimeoutMs: timeoutMs,
+    providerTimeoutMs: runtimeTimeoutMs,
+    globalTimeoutMs: runtimeTimeoutMs,
     healthStore: activeHealthStore,
     observability: activeObservability,
   });
   const directHlsResolver = createDirectHlsResolver({
-    httpClient: activeHttpClient, timeoutMs,
+    httpClient: activeHttpClient, timeoutMs: runtimeTimeoutMs,
   });
   const configuredResolvers = [directHlsResolver];
   try {
@@ -133,7 +146,7 @@ const createShadowPipeline = ({
     createResolverRegistry(configuredResolvers);
   const activeResolverEngine = resolverEngine || createResolverEngine({
     registry: activeResolverRegistry,
-    timeoutMs,
+    timeoutMs: runtimeTimeoutMs,
     healthStore: activeHealthStore,
     observability: activeObservability,
   });
@@ -150,6 +163,16 @@ const createShadowPipeline = ({
     observability: activeObservability,
     logger,
   });
+  const activePrimaryResolver = primaryResolver || createPrimaryResolver({
+    pipeline: activePipeline,
+    ranker: activeRanker,
+    acceptanceGate: primaryAcceptanceGate || createPrimaryAcceptanceGate(),
+    enabled: primaryEnabled,
+    timeoutMs: primaryTimeoutMs,
+    metrics: primaryMetrics,
+    observability: activeObservability,
+    logger,
+  });
 
   return Object.freeze({
     shadowResolver,
@@ -163,6 +186,8 @@ const createShadowPipeline = ({
     ranker: activeRanker,
     shadowComparator: activeShadowComparator,
     comparisonStats: activeComparisonStats,
+    primaryResolver: activePrimaryResolver,
+    primaryStats: activePrimaryStats,
   });
 };
 

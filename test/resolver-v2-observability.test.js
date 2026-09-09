@@ -17,7 +17,7 @@ test('collector exposes only static latency series and bounded counters', () => 
   assert.equal(snapshot.latency.source_http.count, 3);
   assert.equal(snapshot.counters.source_circuit_open, 1);
   assert.deepEqual(Object.keys(snapshot.latency), [
-    'source_http', 'resolver_http', 'resolver_direct', 'shadow_total',
+    'source_http', 'resolver_http', 'resolver_direct', 'shadow_total', 'primary_total',
   ]);
   assert.doesNotMatch(JSON.stringify(snapshot),
     /https?:|authorization|cookie|token|title|tmdbId|contentId|query/i);

@@ -40,6 +40,8 @@ test('production composition starts with zero sources and direct HLS resolver on
   assert.equal(typeof composition.ranker.selectBest, 'function');
   assert.equal(typeof composition.shadowComparator.compare, 'function');
   assert.equal(typeof composition.comparisonStats.snapshot, 'function');
+  assert.equal(typeof composition.primaryResolver.resolve, 'function');
+  assert.equal(typeof composition.primaryStats.snapshot, 'function');
   const startedAt = Date.now();
   const result = await composition.shadowResolver.run(mediaContext);
   assert.equal(result.status, 'no_providers');
@@ -120,6 +122,14 @@ test('all shadow metric names are accepted by the existing metrics store', async
     'resolver_v2_shadow_better_total',
     'resolver_v2_shadow_equivalent_total',
     'resolver_v2_shadow_legacy_better_total',
+    'resolver_v2_primary_attempt_total',
+    'resolver_v2_primary_success_total',
+    'resolver_v2_primary_fallback_total',
+    'resolver_v2_primary_timeout_total',
+    'resolver_v2_primary_failure_total',
+    'resolver_v2_primary_rejected_total',
+    'resolver_v2_primary_legacy_avoided_total',
+    'resolver_v2_primary_duration_ms',
   ];
   for (const name of names) assert.equal(METRIC_NAMES.has(name), true);
   const calls = [];
@@ -127,6 +137,8 @@ test('all shadow metric names are accepted by the existing metrics store', async
   for (const name of names.filter((name) => !name.endsWith('duration_ms'))) {
     await store.increment(name);
   }
-  await store.observe('resolver_v2_shadow_duration_ms', 12);
+  for (const name of names.filter((name) => name.endsWith('duration_ms'))) {
+    await store.observe(name, 12);
+  }
   assert.equal(calls.length, names.length);
 });

@@ -42,6 +42,14 @@ const METRIC_NAMES = new Set([
   'resolver_v2_shadow_better_total',
   'resolver_v2_shadow_equivalent_total',
   'resolver_v2_shadow_legacy_better_total',
+  'resolver_v2_primary_attempt_total',
+  'resolver_v2_primary_success_total',
+  'resolver_v2_primary_fallback_total',
+  'resolver_v2_primary_timeout_total',
+  'resolver_v2_primary_failure_total',
+  'resolver_v2_primary_rejected_total',
+  'resolver_v2_primary_legacy_avoided_total',
+  'resolver_v2_primary_duration_ms',
 ]);
 
 const createMetricsStore = (db = pool) => {

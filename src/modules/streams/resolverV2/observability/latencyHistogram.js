@@ -1,7 +1,7 @@
 'use strict';
 
 const DEFAULT_SERIES = Object.freeze([
-  'source_http', 'resolver_http', 'resolver_direct', 'shadow_total',
+  'source_http', 'resolver_http', 'resolver_direct', 'shadow_total', 'primary_total',
 ]);
 
 const histogramError = () => Object.assign(new Error('V2_HISTOGRAM_INVALID_INPUT'), {
