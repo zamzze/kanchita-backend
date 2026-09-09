@@ -35,6 +35,8 @@ test('production composition starts with zero sources and direct HLS resolver on
   assert.deepEqual(composition.sourceRegistry.list(), []);
   assert.deepEqual(composition.resolverRegistry.list().map((item) => item.descriptor.id),
     ['direct_hls']);
+  assert.ok(composition.healthStore);
+  assert.ok(composition.observability);
   const startedAt = Date.now();
   const result = await composition.shadowResolver.run(mediaContext);
   assert.equal(result.status, 'no_providers');
@@ -42,6 +44,14 @@ test('production composition starts with zero sources and direct HLS resolver on
   assert.ok(Date.now() - startedAt < 100);
 });
 
+test('health disabled bypasses V2 gating while retaining observability', () => {
+  const composition = createShadowPipeline({
+    healthEnabled: false,
+    httpClient: { get: async () => {}, head: async () => {} },
+  });
+  assert.equal(composition.healthStore, null);
+  assert.ok(composition.observability);
+});
 test('configured HTTP source is registered only when enabled with valid configuration', () => {
   const httpClient = {
     get: async () => { throw new Error('construction must not request'); },
@@ -94,11 +104,19 @@ test('all shadow metric names are accepted by the existing metrics store', async
     'resolver_v2_shadow_attempt_total', 'resolver_v2_shadow_success_total',
     'resolver_v2_shadow_empty_total', 'resolver_v2_shadow_failure_total',
     'resolver_v2_shadow_timeout_total', 'resolver_v2_shadow_duration_ms',
+    'resolver_v2_source_circuit_open_total', 'resolver_v2_source_circuit_skip_total',
+    'resolver_v2_source_half_open_probe_total',
+    'resolver_v2_source_circuit_recovery_total',
+    'resolver_v2_resolver_circuit_open_total', 'resolver_v2_resolver_circuit_skip_total',
+    'resolver_v2_resolver_half_open_probe_total',
+    'resolver_v2_resolver_circuit_recovery_total',
   ];
   for (const name of names) assert.equal(METRIC_NAMES.has(name), true);
   const calls = [];
   const store = createMetricsStore({ query: async (sql, values) => calls.push({ sql, values }) });
-  for (const name of names.slice(0, -1)) await store.increment(name);
-  await store.observe(names.at(-1), 12);
+  for (const name of names.filter((name) => !name.endsWith('duration_ms'))) {
+    await store.increment(name);
+  }
+  await store.observe('resolver_v2_shadow_duration_ms', 12);
   assert.equal(calls.length, names.length);
 });

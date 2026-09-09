@@ -18,6 +18,8 @@ const createSourceProviderManager = ({
   providerTimeoutMs = 5_000,
   globalTimeoutMs = 10_000,
   maxCandidates = 32,
+  healthStore = null,
+  observability = null,
   now = Date.now,
   setTimer = setTimeout,
   clearTimer = clearTimeout,
@@ -28,11 +30,22 @@ const createSourceProviderManager = ({
       !validPositiveInteger(providerTimeoutMs, MAX_TIMEOUT_MS) ||
       !validPositiveInteger(globalTimeoutMs, MAX_TIMEOUT_MS) ||
       !validPositiveInteger(maxCandidates, MAX_TOTAL_CANDIDATES) ||
+      (healthStore && (typeof healthStore.canAttempt !== 'function' ||
+        typeof healthStore.recordSuccess !== 'function' ||
+        typeof healthStore.recordFailure !== 'function')) ||
+      (observability && typeof observability.observe !== 'function') ||
       typeof now !== 'function' || typeof setTimer !== 'function' ||
       typeof clearTimer !== 'function') {
     throw sourceProviderError(SOURCE_PROVIDER_ERROR_CODES.INVALID_INPUT);
   }
 
+  const healthCall = (method, ...args) => {
+    try { return healthStore?.[method]?.(...args); } catch { return method === 'canAttempt'; }
+  };
+  const observe = (provider, durationMs) => {
+    if (provider.descriptor.strategy !== 'http') return;
+    try { observability?.observe('source_http', durationMs); } catch { /* best effort */ }
+  };
   const getSources = async (input, options = {}) => {
     const mediaContext = normalizeMediaContext(input);
     if (!mediaContext || !options || typeof options !== 'object' || Array.isArray(options)) {
@@ -196,8 +209,31 @@ const createSourceProviderManager = ({
           const index = nextIndex;
           nextIndex += 1;
           if (index >= providers.length) return;
-          const result = await executeProvider(providers[index]);
+          const provider = providers[index];
+          if (healthStore && healthCall('canAttempt', 'source', provider.descriptor.id) === false) {
+            results[index] = {
+              outcome: 'circuit_open', candidates: [], discardedCandidates: 0, durationMs: 0,
+            };
+            continue;
+          }
+          let result;
+          try {
+            result = await executeProvider(provider);
+          } catch (error) {
+            healthCall('cancelAttempt', 'source', provider.descriptor.id);
+            throw error;
+          }
           results[index] = result;
+          observe(provider, result.durationMs);
+          if (result.outcome === 'success') {
+            healthCall('recordSuccess', 'source', provider.descriptor.id,
+              { durationMs: result.durationMs });
+          } else {
+            healthCall('recordFailure', 'source', provider.descriptor.id, {
+              durationMs: result.durationMs, errorCode: result.errorCode,
+              timeout: result.outcome === 'timeout',
+            });
+          }
           if (result.outcome === 'success') discoveredCount += result.candidates.length;
         }
       };
@@ -222,7 +258,8 @@ const createSourceProviderManager = ({
         if (candidates.length >= resultLimit) break;
       }
 
-      const attempts = results.map((result, index) => result && ({
+      const attempts = results.map((result, index) =>
+        result && result.outcome !== 'circuit_open' && ({
         providerId: providers[index].descriptor.id,
         outcome: result.outcome,
         durationMs: result.durationMs,
@@ -237,6 +274,8 @@ const createSourceProviderManager = ({
           providersSucceeded: attempts.filter(({ outcome }) => outcome === 'success').length,
           providersFailed: attempts.filter(({ outcome }) => outcome === 'failed').length,
           providersTimedOut: attempts.filter(({ outcome }) => outcome === 'timeout').length,
+          providersCircuitOpen: results.filter(({ outcome } = {}) =>
+            outcome === 'circuit_open').length,
           providersSkipped: Math.max(0, allProviders.length - attempts.length),
           durationMs: Math.max(0, now() - startedAt),
           candidateCount: candidates.length,

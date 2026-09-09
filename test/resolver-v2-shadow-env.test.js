@@ -19,6 +19,10 @@ delete process.env.STREAM_RESOLVER_V2_HTTP_RESOLVER_ENABLED;
 delete process.env.STREAM_RESOLVER_V2_HTTP_RESOLVER_DOMAINS;
 delete process.env.STREAM_RESOLVER_V2_HTTP_RESOLVER_TIMEOUT_MS;
 delete process.env.STREAM_RESOLVER_V2_HTTP_RESOLVER_MAX_STREAMS;
+delete process.env.STREAM_RESOLVER_V2_HEALTH_ENABLED;
+delete process.env.STREAM_RESOLVER_V2_FAILURE_THRESHOLD;
+delete process.env.STREAM_RESOLVER_V2_COOLDOWN_SECONDS;
+delete process.env.STREAM_RESOLVER_V2_HALF_OPEN_SUCCESS_THRESHOLD;
 
 const env = require('../src/config/env');
 
@@ -78,4 +82,26 @@ test('configured HTTP resolver defaults are disabled and bounded', () => {
   }
   delete process.env.RESOLVER_TIMEOUT_FIXTURE;
   delete process.env.RESOLVER_STREAM_FIXTURE;
+});
+
+test('V2 health defaults enabled with independent bounded settings', () => {
+  assert.equal(env.STREAM_RESOLVER_V2_HEALTH_ENABLED, true);
+  assert.equal(env.STREAM_RESOLVER_V2_FAILURE_THRESHOLD, 5);
+  assert.equal(env.STREAM_RESOLVER_V2_COOLDOWN_SECONDS, 300);
+  assert.equal(env.STREAM_RESOLVER_V2_HALF_OPEN_SUCCESS_THRESHOLD, 1);
+  assert.equal(env.isExplicitlyEnabled('false'), false);
+  assert.equal(env.isExplicitlyEnabled('TRUE'), false);
+  for (const [name, fallback, minimum, maximum] of [
+    ['HEALTH_FAILURE_FIXTURE', 5, 1, 20],
+    ['HEALTH_COOLDOWN_FIXTURE', 300, 1, 3600],
+    ['HEALTH_SUCCESS_FIXTURE', 1, 1, 5],
+  ]) {
+    process.env[name] = String(minimum);
+    assert.equal(env.boundedPositiveInteger(name, fallback, minimum, maximum), minimum);
+    process.env[name] = String(maximum);
+    assert.equal(env.boundedPositiveInteger(name, fallback, minimum, maximum), maximum);
+    process.env[name] = String(maximum + 1);
+    assert.equal(env.boundedPositiveInteger(name, fallback, minimum, maximum), fallback);
+    delete process.env[name];
+  }
 });

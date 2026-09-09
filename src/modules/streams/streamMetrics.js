@@ -27,6 +27,14 @@ const METRIC_NAMES = new Set([
   'resolver_v2_shadow_failure_total',
   'resolver_v2_shadow_timeout_total',
   'resolver_v2_shadow_duration_ms',
+  'resolver_v2_source_circuit_open_total',
+  'resolver_v2_source_circuit_skip_total',
+  'resolver_v2_source_half_open_probe_total',
+  'resolver_v2_source_circuit_recovery_total',
+  'resolver_v2_resolver_circuit_open_total',
+  'resolver_v2_resolver_circuit_skip_total',
+  'resolver_v2_resolver_half_open_probe_total',
+  'resolver_v2_resolver_circuit_recovery_total',
 ]);
 
 const createMetricsStore = (db = pool) => {

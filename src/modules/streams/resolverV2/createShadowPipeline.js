@@ -12,6 +12,8 @@ const { createConfiguredHttpSourceProvider } =
   require('./providers/configuredHttpSourceProvider');
 const { createConfiguredHttpResolver } =
   require('./resolvers/configuredHttpResolver');
+const { createV2HealthStore } = require('./health/v2HealthStore');
+const { createV2Observability } = require('./observability/v2Observability');
 const {
   STREAM_RESOLVER_V2_HTTP_PROVIDER_ENABLED,
   STREAM_RESOLVER_V2_HTTP_PROVIDER_ID,
@@ -25,6 +27,10 @@ const {
   STREAM_RESOLVER_V2_HTTP_RESOLVER_TIMEOUT_MS,
   STREAM_RESOLVER_V2_HTTP_RESOLVER_MAX_STREAMS,
   STREAM_RESOLVER_V2_HTTP_RESOLVER_AUTH_TOKEN,
+  STREAM_RESOLVER_V2_HEALTH_ENABLED,
+  STREAM_RESOLVER_V2_FAILURE_THRESHOLD,
+  STREAM_RESOLVER_V2_COOLDOWN_SECONDS,
+  STREAM_RESOLVER_V2_HALF_OPEN_SUCCESS_THRESHOLD,
 } = require('../../../config/env');
 
 const createShadowPipeline = ({
@@ -41,8 +47,28 @@ const createShadowPipeline = ({
   pipeline,
   httpProvider = {},
   httpResolver = {},
+  healthStore = null,
+  observability = null,
+  healthEnabled = STREAM_RESOLVER_V2_HEALTH_ENABLED,
 } = {}) => {
   const activeHttpClient = httpClient || createSafeHttpClient({ timeoutMs });
+  const activeObservability = observability || createV2Observability({ maxSamples: 256 });
+  const healthEvent = (type, kind) => {
+    const suffix = type === 'open' ? 'circuit_open'
+      : type === 'skip' ? 'circuit_skip'
+        : type === 'half_open_probe' ? 'half_open_probe' : 'circuit_recovery';
+    try { activeObservability.increment(`${kind}_${suffix}`); } catch { /* best effort */ }
+    try {
+      const pending = metrics?.increment?.(`resolver_v2_${kind}_${suffix}_total`, 1);
+      pending?.catch?.(() => {});
+    } catch { /* best effort */ }
+  };
+  const activeHealthStore = healthStore || (healthEnabled ? createV2HealthStore({
+    failureThreshold: STREAM_RESOLVER_V2_FAILURE_THRESHOLD,
+    cooldownMs: STREAM_RESOLVER_V2_COOLDOWN_SECONDS * 1000,
+    successThreshold: STREAM_RESOLVER_V2_HALF_OPEN_SUCCESS_THRESHOLD,
+    onEvent: healthEvent,
+  }) : null);
   const providerOptions = {
     enabled: STREAM_RESOLVER_V2_HTTP_PROVIDER_ENABLED,
     id: STREAM_RESOLVER_V2_HTTP_PROVIDER_ID,
@@ -68,6 +94,8 @@ const createShadowPipeline = ({
     http: activeHttpClient,
     providerTimeoutMs: timeoutMs,
     globalTimeoutMs: timeoutMs,
+    healthStore: activeHealthStore,
+    observability: activeObservability,
   });
   const directHlsResolver = createDirectHlsResolver({
     httpClient: activeHttpClient, timeoutMs,
@@ -95,6 +123,8 @@ const createShadowPipeline = ({
   const activeResolverEngine = resolverEngine || createResolverEngine({
     registry: activeResolverRegistry,
     timeoutMs,
+    healthStore: activeHealthStore,
+    observability: activeObservability,
   });
   const activePipeline = pipeline || createResolutionPipeline({
     sourceProviderManager: activeSourceManager,
@@ -105,6 +135,7 @@ const createShadowPipeline = ({
     enabled,
     timeoutMs,
     metrics,
+    observability: activeObservability,
     logger,
   });
 
@@ -115,6 +146,8 @@ const createShadowPipeline = ({
     sourceRegistry: activeSourceRegistry,
     resolverEngine: activeResolverEngine,
     resolverRegistry: activeResolverRegistry,
+    healthStore: activeHealthStore,
+    observability: activeObservability,
   });
 };
 

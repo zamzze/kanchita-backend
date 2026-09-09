@@ -17,15 +17,29 @@ const createResolverEngine = ({
   legacyFallback = null,
   timeoutMs = 10_000,
   maxStreams = 8,
+  healthStore = null,
+  observability = null,
   now = Date.now,
 } = {}) => {
   if (!registry || typeof registry.detect !== 'function' ||
       (legacyFallback && typeof legacyFallback.resolve !== 'function') ||
       !Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 300_000 ||
-      !Number.isInteger(maxStreams) || maxStreams < 1 || maxStreams > 100) {
+      !Number.isInteger(maxStreams) || maxStreams < 1 || maxStreams > 100 ||
+      (healthStore && (typeof healthStore.canAttempt !== 'function' ||
+        typeof healthStore.recordSuccess !== 'function' ||
+        typeof healthStore.recordFailure !== 'function')) ||
+      (observability && typeof observability.observe !== 'function')) {
     throw resolverEngineError(ENGINE_ERROR_CODES.INVALID_INPUT);
   }
 
+  const healthCall = (method, ...args) => {
+    try { return healthStore?.[method]?.(...args); } catch { return method === 'canAttempt'; }
+  };
+  const observe = (resolver, durationMs) => {
+    const series = resolver.descriptor.strategy === 'http' ? 'resolver_http'
+      : resolver.descriptor.strategy === 'direct' ? 'resolver_direct' : null;
+    try { if (series) observability?.observe(series, durationMs); } catch { /* best effort */ }
+  };
   const resolve = async (input) => {
     if (!input || typeof input !== 'object' || Array.isArray(input)) {
       throw resolverEngineError(ENGINE_ERROR_CODES.INVALID_INPUT);
@@ -120,11 +134,20 @@ const createResolverEngine = ({
           if (!resolverId || typeof resolver.resolve !== 'function') {
             throw resolverEngineError(ENGINE_ERROR_CODES.INVALID_RESULT);
           }
+          if (healthStore && healthCall('canAttempt', 'resolver', resolverId) === false) {
+            addAttempt(candidate.providerId, resolverId, 'circuit_open', now());
+            continue;
+          }
           const attemptStartedAt = now();
+          let completed = false;
           try {
             const result = await resolver.resolve(candidate, context);
             throwIfStopped();
             const count = acceptResults(result);
+            const durationMs = Math.max(0, now() - attemptStartedAt);
+            healthCall('recordSuccess', 'resolver', resolverId, { durationMs });
+            observe(resolver, durationMs);
+            completed = true;
             addAttempt(candidate.providerId, resolverId, count ? 'resolved' : 'empty',
               attemptStartedAt);
           } catch (error) {
@@ -133,8 +156,17 @@ const createResolverEngine = ({
                 error?.code === ENGINE_ERROR_CODES.INVALID_RESULT) {
               throw resolverEngineError(ENGINE_ERROR_CODES.INVALID_RESULT);
             }
+            const durationMs = Math.max(0, now() - attemptStartedAt);
+            healthCall('recordFailure', 'resolver', resolverId, {
+              durationMs, errorCode: safeErrorCode(error),
+              timeout: error?.code === 'HTTP_TIMEOUT',
+            });
+            observe(resolver, durationMs);
+            completed = true;
             addAttempt(candidate.providerId, resolverId, 'failed', attemptStartedAt,
               safeErrorCode(error));
+          } finally {
+            if (!completed) healthCall('cancelAttempt', 'resolver', resolverId);
           }
           if (streams.length >= maxStreams) break;
         }

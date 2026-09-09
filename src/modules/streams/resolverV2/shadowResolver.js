@@ -24,6 +24,7 @@ const sanitizeSourceTrace = (trace) => ({
   providersSucceeded: count(trace?.providersSucceeded),
   providersFailed: count(trace?.providersFailed),
   providersTimedOut: count(trace?.providersTimedOut),
+  providersCircuitOpen: count(trace?.providersCircuitOpen),
   providersSkipped: count(trace?.providersSkipped),
   durationMs: duration(trace?.durationMs),
   candidateCount: count(trace?.candidateCount),
@@ -31,7 +32,8 @@ const sanitizeSourceTrace = (trace) => ({
 
 const sanitizeResolverTrace = (trace) => {
   const attempts = Array.isArray(trace?.attempts) ? trace.attempts : [];
-  const outcomes = { resolved: 0, empty: 0, failed: 0, not_applicable: 0 };
+  const outcomes = { resolved: 0, empty: 0, failed: 0, not_applicable: 0,
+    circuit_open: 0 };
   for (const attempt of attempts) {
     if (Object.hasOwn(outcomes, attempt?.outcome)) outcomes[attempt.outcome] += 1;
   }
@@ -48,6 +50,7 @@ const createShadowResolver = ({
   enabled = false,
   timeoutMs = 1_500,
   metrics = { increment: async () => {}, observe: async () => {} },
+  observability = null,
   logger = console,
   now = Date.now,
   setTimer = setTimeout,
@@ -57,6 +60,7 @@ const createShadowResolver = ({
       !Number.isInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > 10_000 ||
       !metrics || typeof metrics.increment !== 'function' ||
       typeof metrics.observe !== 'function' || typeof now !== 'function' ||
+      (observability && typeof observability.observe !== 'function') ||
       typeof setTimer !== 'function' || typeof clearTimer !== 'function') {
     throw new Error('INVALID_SHADOW_RESOLVER');
   }
@@ -173,6 +177,9 @@ const createShadowResolver = ({
       void metric('increment', 'resolver_v2_shadow_empty_total', 1);
     }
     void metric('observe', 'resolver_v2_shadow_duration_ms', result.durationMs);
+    try { observability?.observe('shadow_total', result.durationMs); } catch {
+      // In-memory observability is best-effort.
+    }
     logStatus(status);
     return result;
   };
