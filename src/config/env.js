@@ -33,6 +33,30 @@ const boundedPositiveInteger = (name, fallback, minimum, maximum) => {
   return parsed >= minimum && parsed <= maximum ? parsed : fallback;
 };
 
+const boundedInteger = (name, fallback, minimum, maximum) => {
+  const value = process.env[name];
+  if (value === undefined || value === '') return fallback;
+  if (!/^\d+$/.test(value)) return fallback;
+  const parsed = Number(value);
+  return parsed >= minimum && parsed <= maximum ? parsed : fallback;
+};
+
+const boundedString = (name, fallback, minimum, maximum) => {
+  const value = process.env[name];
+  if (typeof value !== 'string') return fallback;
+  const normalized = value.trim();
+  return normalized.length >= minimum && normalized.length <= maximum ? normalized : fallback;
+};
+
+const primaryGuardMinimumAttempts = boundedPositiveInteger(
+  'STREAM_RESOLVER_V2_PRIMARY_GUARD_MIN_ATTEMPTS', 10, 3, 100
+);
+const configuredPrimaryGuardWindowSize = boundedPositiveInteger(
+  'STREAM_RESOLVER_V2_PRIMARY_GUARD_WINDOW_SIZE', 20, 3, 500
+);
+const primaryGuardWindowSize = configuredPrimaryGuardWindowSize >= primaryGuardMinimumAttempts
+  ? configuredPrimaryGuardWindowSize : Math.max(20, primaryGuardMinimumAttempts);
+
 required.forEach((key) => {
   if (!process.env[key]) {
     throw new Error(`Missing required env var: ${key}`);
@@ -92,6 +116,32 @@ module.exports = {
   STREAM_RESOLVER_V2_PRIMARY_TIMEOUT_MS: boundedPositiveInteger(
     'STREAM_RESOLVER_V2_PRIMARY_TIMEOUT_MS', 5000, 500, 15_000
   ),
+  STREAM_RESOLVER_V2_PRIMARY_ROLLOUT_PERCENT: boundedInteger(
+    'STREAM_RESOLVER_V2_PRIMARY_ROLLOUT_PERCENT', 0, 0, 100
+  ),
+  STREAM_RESOLVER_V2_PRIMARY_ROLLOUT_SEED: boundedString(
+    'STREAM_RESOLVER_V2_PRIMARY_ROLLOUT_SEED', 'kanchita-v2', 1, 128
+  ),
+  STREAM_RESOLVER_V2_PRIMARY_MOVIES_ENABLED: isExplicitlyEnabled(
+    process.env.STREAM_RESOLVER_V2_PRIMARY_MOVIES_ENABLED ?? 'true'
+  ),
+  STREAM_RESOLVER_V2_PRIMARY_EPISODES_ENABLED: isExplicitlyEnabled(
+    process.env.STREAM_RESOLVER_V2_PRIMARY_EPISODES_ENABLED ?? 'true'
+  ),
+  STREAM_RESOLVER_V2_PRIMARY_GUARD_ENABLED: isExplicitlyEnabled(
+    process.env.STREAM_RESOLVER_V2_PRIMARY_GUARD_ENABLED ?? 'true'
+  ),
+  STREAM_RESOLVER_V2_PRIMARY_GUARD_MIN_ATTEMPTS: primaryGuardMinimumAttempts,
+  STREAM_RESOLVER_V2_PRIMARY_GUARD_WINDOW_SIZE: primaryGuardWindowSize,
+  STREAM_RESOLVER_V2_PRIMARY_GUARD_FAILURE_RATE_PERCENT: boundedPositiveInteger(
+    'STREAM_RESOLVER_V2_PRIMARY_GUARD_FAILURE_RATE_PERCENT', 50, 1, 100
+  ),
+  STREAM_RESOLVER_V2_PRIMARY_GUARD_TIMEOUT_RATE_PERCENT: boundedPositiveInteger(
+    'STREAM_RESOLVER_V2_PRIMARY_GUARD_TIMEOUT_RATE_PERCENT', 40, 1, 100
+  ),
+  STREAM_RESOLVER_V2_PRIMARY_GUARD_COOLDOWN_SECONDS: boundedPositiveInteger(
+    'STREAM_RESOLVER_V2_PRIMARY_GUARD_COOLDOWN_SECONDS', 120, 10, 3600
+  ),
   STREAM_RESOLVER_V2_HTTP_PROVIDER_ENABLED: isExplicitlyEnabled(
     process.env.STREAM_RESOLVER_V2_HTTP_PROVIDER_ENABLED
   ),
@@ -143,4 +193,6 @@ module.exports = {
   isExplicitlyEnabled,
   positiveInteger,
   boundedPositiveInteger,
+  boundedInteger,
+  boundedString,
 };

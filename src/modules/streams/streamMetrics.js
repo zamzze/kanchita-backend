@@ -50,6 +50,12 @@ const METRIC_NAMES = new Set([
   'resolver_v2_primary_rejected_total',
   'resolver_v2_primary_legacy_avoided_total',
   'resolver_v2_primary_duration_ms',
+  'resolver_v2_primary_rollout_selected_total',
+  'resolver_v2_primary_rollout_skipped_total',
+  'resolver_v2_primary_guard_open_total',
+  'resolver_v2_primary_guard_skip_total',
+  'resolver_v2_primary_guard_probe_total',
+  'resolver_v2_primary_guard_recovery_total',
 ]);
 
 const createMetricsStore = (db = pool) => {

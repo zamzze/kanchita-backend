@@ -13,6 +13,16 @@ delete process.env.STREAM_RESOLVER_V2_SHADOW_ENABLED;
 delete process.env.STREAM_RESOLVER_V2_SHADOW_TIMEOUT_MS;
 delete process.env.STREAM_RESOLVER_V2_PRIMARY_ENABLED;
 delete process.env.STREAM_RESOLVER_V2_PRIMARY_TIMEOUT_MS;
+delete process.env.STREAM_RESOLVER_V2_PRIMARY_ROLLOUT_PERCENT;
+delete process.env.STREAM_RESOLVER_V2_PRIMARY_ROLLOUT_SEED;
+delete process.env.STREAM_RESOLVER_V2_PRIMARY_MOVIES_ENABLED;
+delete process.env.STREAM_RESOLVER_V2_PRIMARY_EPISODES_ENABLED;
+delete process.env.STREAM_RESOLVER_V2_PRIMARY_GUARD_ENABLED;
+delete process.env.STREAM_RESOLVER_V2_PRIMARY_GUARD_MIN_ATTEMPTS;
+delete process.env.STREAM_RESOLVER_V2_PRIMARY_GUARD_WINDOW_SIZE;
+delete process.env.STREAM_RESOLVER_V2_PRIMARY_GUARD_FAILURE_RATE_PERCENT;
+delete process.env.STREAM_RESOLVER_V2_PRIMARY_GUARD_TIMEOUT_RATE_PERCENT;
+delete process.env.STREAM_RESOLVER_V2_PRIMARY_GUARD_COOLDOWN_SECONDS;
 delete process.env.STREAM_RESOLVER_V2_HTTP_PROVIDER_ENABLED;
 delete process.env.STREAM_RESOLVER_V2_HTTP_PROVIDER_BASE_URL;
 delete process.env.STREAM_RESOLVER_V2_HTTP_PROVIDER_TIMEOUT_MS;
@@ -48,6 +58,49 @@ test('primary feature flag and timeout are strict and independently bounded', ()
   delete process.env.PRIMARY_TIMEOUT_FIXTURE;
 });
 
+test('primary canary defaults and bounded helpers fail closed', () => {
+  assert.equal(env.STREAM_RESOLVER_V2_PRIMARY_ROLLOUT_PERCENT, 0);
+  assert.equal(env.STREAM_RESOLVER_V2_PRIMARY_ROLLOUT_SEED, 'kanchita-v2');
+  assert.equal(env.STREAM_RESOLVER_V2_PRIMARY_MOVIES_ENABLED, true);
+  assert.equal(env.STREAM_RESOLVER_V2_PRIMARY_EPISODES_ENABLED, true);
+  assert.equal(env.STREAM_RESOLVER_V2_PRIMARY_GUARD_ENABLED, true);
+  assert.equal(env.STREAM_RESOLVER_V2_PRIMARY_GUARD_MIN_ATTEMPTS, 10);
+  assert.equal(env.STREAM_RESOLVER_V2_PRIMARY_GUARD_WINDOW_SIZE, 20);
+  assert.equal(env.STREAM_RESOLVER_V2_PRIMARY_GUARD_FAILURE_RATE_PERCENT, 50);
+  assert.equal(env.STREAM_RESOLVER_V2_PRIMARY_GUARD_TIMEOUT_RATE_PERCENT, 40);
+  assert.equal(env.STREAM_RESOLVER_V2_PRIMARY_GUARD_COOLDOWN_SECONDS, 120);
+  for (const [value, expected] of [['0', 0], ['1', 1], ['10', 10], ['100', 100],
+    ['-1', 0], ['101', 0], ['bad', 0]]) {
+    process.env.PRIMARY_PERCENT_FIXTURE = value;
+    assert.equal(env.boundedInteger('PRIMARY_PERCENT_FIXTURE', 0, 0, 100), expected);
+  }
+  process.env.PRIMARY_SEED_FIXTURE = '';
+  assert.equal(env.boundedString('PRIMARY_SEED_FIXTURE', 'kanchita-v2', 1, 128), 'kanchita-v2');
+  process.env.PRIMARY_SEED_FIXTURE = 'x'.repeat(129);
+  assert.equal(env.boundedString('PRIMARY_SEED_FIXTURE', 'kanchita-v2', 1, 128), 'kanchita-v2');
+  process.env.PRIMARY_SEED_FIXTURE = ' stable ';
+  assert.equal(env.boundedString('PRIMARY_SEED_FIXTURE', 'kanchita-v2', 1, 128), 'stable');
+  delete process.env.PRIMARY_PERCENT_FIXTURE;
+  delete process.env.PRIMARY_SEED_FIXTURE;
+});
+
+test('primary guard numeric ranges retain safe defaults', () => {
+  for (const [name, fallback, minimum, maximum] of [
+    ['GUARD_MIN_FIXTURE', 10, 3, 100],
+    ['GUARD_WINDOW_FIXTURE', 20, 3, 500],
+    ['GUARD_FAILURE_FIXTURE', 50, 1, 100],
+    ['GUARD_TIMEOUT_FIXTURE', 40, 1, 100],
+    ['GUARD_COOLDOWN_FIXTURE', 120, 10, 3600],
+  ]) {
+    process.env[name] = String(minimum);
+    assert.equal(env.boundedPositiveInteger(name, fallback, minimum, maximum), minimum);
+    process.env[name] = String(maximum);
+    assert.equal(env.boundedPositiveInteger(name, fallback, minimum, maximum), maximum);
+    process.env[name] = String(maximum + 1);
+    assert.equal(env.boundedPositiveInteger(name, fallback, minimum, maximum), fallback);
+    delete process.env[name];
+  }
+});
 test('shadow timeout has bounded safe defaults', () => {
   assert.equal(env.STREAM_RESOLVER_V2_SHADOW_TIMEOUT_MS, 1500);
   for (const [value, expected] of [['100', 100], ['10000', 10000], ['99', 1500],

@@ -119,6 +119,7 @@ test('Resolver V2 Phase A remains isolated from network, browser and ProviderC',
   assert.deepEqual(newFiles.map((file) => path.basename(file)).sort(), [
     'candidateIdentity.js', 'createShadowPipeline.js', 'hlsInspector.js',
     'legacyBrowserAdapter.js', 'primaryAcceptanceGate.js', 'primaryResolver.js',
+    'primaryRolloutGate.js',
     'resolutionMode.js', 'resolutionPipeline.js', 'resolverContracts.js',
     'resolverEngine.js', 'resolverErrors.js', 'resolverRegistry.js', 'shadowResolver.js',
     'sourceProviderErrors.js', 'sourceProviderManager.js', 'sourceProviderRegistry.js',

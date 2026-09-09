@@ -48,6 +48,7 @@ const processorFor = (runtime, onLegacy = () => {}) => createStreamProcessor({
   validator: async () => ({ valid: true }),
   findContent: async () => ({ tmdb_id: 10, title: 'Fixture' }),
   primaryEnabled: true,
+  primaryRolloutPercent: 100,
   shadowEnabled: true,
   primaryResolver: runtime.primaryResolver,
   primaryStats: runtime.primaryStats,

@@ -16,6 +16,9 @@ const { createShadowComparisonStats } =
 const { createPrimaryStats } = require('./resolverV2/observability/primaryStats');
 const { adaptV2ToLegacyResult } = require('./resolverV2/v2LegacyResultAdapter');
 const { selectResolutionMode } = require('./resolverV2/resolutionMode');
+const { createPrimaryRolloutGate } = require('./resolverV2/primaryRolloutGate');
+const { createPrimaryRuntimeGuard } =
+  require('./resolverV2/health/primaryRuntimeGuard');
 const { findStreamContent } = require('./streamContent');
 const { createStreamLifecycle, processingError } = require('./streamLifecycle');
 const {
@@ -33,6 +36,16 @@ const {
   STREAM_RESOLVER_V2_SHADOW_TIMEOUT_MS,
   STREAM_RESOLVER_V2_PRIMARY_ENABLED,
   STREAM_RESOLVER_V2_PRIMARY_TIMEOUT_MS,
+  STREAM_RESOLVER_V2_PRIMARY_ROLLOUT_PERCENT,
+  STREAM_RESOLVER_V2_PRIMARY_ROLLOUT_SEED,
+  STREAM_RESOLVER_V2_PRIMARY_MOVIES_ENABLED,
+  STREAM_RESOLVER_V2_PRIMARY_EPISODES_ENABLED,
+  STREAM_RESOLVER_V2_PRIMARY_GUARD_ENABLED,
+  STREAM_RESOLVER_V2_PRIMARY_GUARD_MIN_ATTEMPTS,
+  STREAM_RESOLVER_V2_PRIMARY_GUARD_WINDOW_SIZE,
+  STREAM_RESOLVER_V2_PRIMARY_GUARD_FAILURE_RATE_PERCENT,
+  STREAM_RESOLVER_V2_PRIMARY_GUARD_TIMEOUT_RATE_PERCENT,
+  STREAM_RESOLVER_V2_PRIMARY_GUARD_COOLDOWN_SECONDS,
 } = require('../../config/env');
 
 const createStreamProcessor = ({
@@ -59,6 +72,19 @@ const createStreamProcessor = ({
   primaryTimeoutMs = STREAM_RESOLVER_V2_PRIMARY_TIMEOUT_MS,
   primaryStats,
   primaryMetrics,
+  primaryRolloutGate,
+  primaryRuntimeGuard,
+  primaryRolloutPercent = STREAM_RESOLVER_V2_PRIMARY_ROLLOUT_PERCENT,
+  primaryRolloutSeed = STREAM_RESOLVER_V2_PRIMARY_ROLLOUT_SEED,
+  primaryMoviesEnabled = STREAM_RESOLVER_V2_PRIMARY_MOVIES_ENABLED,
+  primaryEpisodesEnabled = STREAM_RESOLVER_V2_PRIMARY_EPISODES_ENABLED,
+  primaryGuardEnabled = STREAM_RESOLVER_V2_PRIMARY_GUARD_ENABLED,
+  primaryGuardMinimumAttempts = STREAM_RESOLVER_V2_PRIMARY_GUARD_MIN_ATTEMPTS,
+  primaryGuardWindowSize = STREAM_RESOLVER_V2_PRIMARY_GUARD_WINDOW_SIZE,
+  primaryGuardFailureRatePercent = STREAM_RESOLVER_V2_PRIMARY_GUARD_FAILURE_RATE_PERCENT,
+  primaryGuardTimeoutRatePercent = STREAM_RESOLVER_V2_PRIMARY_GUARD_TIMEOUT_RATE_PERCENT,
+  primaryGuardCooldownSeconds = STREAM_RESOLVER_V2_PRIMARY_GUARD_COOLDOWN_SECONDS,
+  primaryGuardClock = Date.now,
   primaryAdapter = adaptV2ToLegacyResult,
   lifecycle: injectedLifecycle,
   stats: injectedStats,
@@ -91,6 +117,18 @@ const createStreamProcessor = ({
     createShadowComparisonStats();
   const primaryStatistics = primaryStats || v2Composition?.primaryStats || createPrimaryStats();
   const comparisonMetricStore = comparisonMetrics || null;
+  const rollout = mode === 'primary' ? (primaryRolloutGate || createPrimaryRolloutGate({
+    enabled: effectivePrimaryEnabled, rolloutPercent: primaryRolloutPercent,
+    seed: primaryRolloutSeed, moviesEnabled: primaryMoviesEnabled,
+    episodesEnabled: primaryEpisodesEnabled,
+  })) : null;
+  const runtimeGuard = mode === 'primary' ? (primaryRuntimeGuard || createPrimaryRuntimeGuard({
+    enabled: primaryGuardEnabled, minimumAttempts: primaryGuardMinimumAttempts,
+    windowSize: primaryGuardWindowSize,
+    failureRateThreshold: primaryGuardFailureRatePercent,
+    timeoutRateThreshold: primaryGuardTimeoutRatePercent,
+    cooldownMs: primaryGuardCooldownSeconds * 1000, clock: primaryGuardClock,
+  })) : null;
 
   const recordComparisonMetric = (name) => {
     try {
@@ -138,6 +176,31 @@ const createStreamProcessor = ({
     } catch { /* best effort */ }
     if (fallback) recordPrimaryMetric('resolver_v2_primary_fallback_total');
     if (legacyAvoided) recordPrimaryMetric('resolver_v2_primary_legacy_avoided_total');
+  };
+  const recordRolloutDecision = (reason) => {
+    try { primaryStatistics.recordRollout(reason); } catch { /* best effort */ }
+    recordPrimaryMetric(reason === 'selected'
+      ? 'resolver_v2_primary_rollout_selected_total'
+      : 'resolver_v2_primary_rollout_skipped_total');
+  };
+  const recordGuardEvent = (event) => {
+    if (!event) return;
+    try { primaryStatistics.recordGuard(event); } catch { /* best effort */ }
+    const metric = {
+      open: 'resolver_v2_primary_guard_open_total',
+      skip: 'resolver_v2_primary_guard_skip_total',
+      probe: 'resolver_v2_primary_guard_probe_total',
+      recovery: 'resolver_v2_primary_guard_recovery_total',
+    }[event];
+    if (metric) recordPrimaryMetric(metric);
+  };
+  const observeGuardOutcome = (status) => {
+    const outcome = ['accepted', 'empty', 'rejected', 'timeout', 'failed'].includes(status)
+      ? status : 'failed';
+    try {
+      const observation = runtimeGuard.recordOutcome(outcome);
+      recordGuardEvent(observation?.event);
+    } catch { /* guard observation cannot alter playback */ }
   };
   const health = createProviderHealthStore(db, {
     failureThreshold: STREAM_PROVIDER_FAILURE_THRESHOLD,
@@ -194,6 +257,23 @@ const createStreamProcessor = ({
       async (context) => {
         if (job.job_type === 'refresh') return manager.resolve(context);
         if (mode === 'primary') {
+          let rolloutDecision;
+          try { rolloutDecision = rollout.evaluate(context); } catch {
+            rolloutDecision = { eligible: false, reason: 'invalid_context', bucket: 0 };
+          }
+          recordRolloutDecision(rolloutDecision.reason);
+          if (!rolloutDecision.eligible) return manager.resolve(context);
+
+          let guardDecision;
+          try { guardDecision = runtimeGuard.canAttempt(); } catch {
+            guardDecision = { allowed: false, state: 'open', probe: false };
+          }
+          if (!guardDecision.allowed) {
+            recordGuardEvent('skip');
+            return manager.resolve(context);
+          }
+          if (guardDecision.probe) recordGuardEvent('probe');
+
           let primaryResult;
           try {
             primaryResult = await primary.resolve({ ...context }, {
@@ -205,6 +285,7 @@ const createStreamProcessor = ({
               summary: { code: 'PRIMARY_UNKNOWN' }, externalAbort: false };
           }
           if (primaryResult?.status === 'aborted' && primaryResult.externalAbort) {
+            try { runtimeGuard.cancelAttempt(); } catch { /* best effort */ }
             recordPrimaryDecision(primaryResult);
             throw Object.assign(new Error('Stream processing aborted'), {
               code: 'RESOLUTION_ABORTED',
@@ -213,14 +294,17 @@ const createStreamProcessor = ({
           if (primaryResult?.status === 'accepted') {
             try {
               const adapted = primaryAdapter(primaryResult.selected);
+              observeGuardOutcome('accepted');
               recordPrimaryDecision(primaryResult, { legacyAvoided: true });
               return adapted;
             } catch {
+              observeGuardOutcome('failed');
               recordPrimaryDecision({ status: 'rejected',
                 summary: { code: 'PRIMARY_INVALID_STREAM' } }, { fallback: true });
               return manager.resolve(context);
             }
           }
+          observeGuardOutcome(primaryResult?.status);
           recordPrimaryDecision(primaryResult, { fallback: true });
           return manager.resolve(context);
         }

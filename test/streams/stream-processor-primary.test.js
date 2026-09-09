@@ -38,6 +38,7 @@ const dependencies = (overrides = {}) => ({
   },
   stats: { recordReady: async () => {} },
   logger: { log: () => {}, warn: () => {} },
+  primaryRolloutPercent: 100,
   ...overrides,
 });
 
