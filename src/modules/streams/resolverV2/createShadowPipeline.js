@@ -8,6 +8,16 @@ const { createDirectHlsResolver } = require('./resolvers/directHlsResolver');
 const { createResolverEngine } = require('./resolverEngine');
 const { createResolutionPipeline } = require('./resolutionPipeline');
 const { createShadowResolver } = require('./shadowResolver');
+const { createConfiguredHttpSourceProvider } =
+  require('./providers/configuredHttpSourceProvider');
+const {
+  STREAM_RESOLVER_V2_HTTP_PROVIDER_ENABLED,
+  STREAM_RESOLVER_V2_HTTP_PROVIDER_ID,
+  STREAM_RESOLVER_V2_HTTP_PROVIDER_BASE_URL,
+  STREAM_RESOLVER_V2_HTTP_PROVIDER_TIMEOUT_MS,
+  STREAM_RESOLVER_V2_HTTP_PROVIDER_MAX_CANDIDATES,
+  STREAM_RESOLVER_V2_HTTP_PROVIDER_AUTH_TOKEN,
+} = require('../../../config/env');
 
 const createShadowPipeline = ({
   enabled = false,
@@ -21,9 +31,29 @@ const createShadowPipeline = ({
   resolverRegistry,
   resolverEngine,
   pipeline,
+  httpProvider = {},
 } = {}) => {
   const activeHttpClient = httpClient || createSafeHttpClient({ timeoutMs });
-  const activeSourceRegistry = sourceRegistry || createSourceProviderRegistry(sourceProviders);
+  const providerOptions = {
+    enabled: STREAM_RESOLVER_V2_HTTP_PROVIDER_ENABLED,
+    id: STREAM_RESOLVER_V2_HTTP_PROVIDER_ID,
+    baseUrl: STREAM_RESOLVER_V2_HTTP_PROVIDER_BASE_URL,
+    timeoutMs: STREAM_RESOLVER_V2_HTTP_PROVIDER_TIMEOUT_MS,
+    maxCandidates: STREAM_RESOLVER_V2_HTTP_PROVIDER_MAX_CANDIDATES,
+    headers: STREAM_RESOLVER_V2_HTTP_PROVIDER_AUTH_TOKEN
+      ? { authorization: `Bearer ${STREAM_RESOLVER_V2_HTTP_PROVIDER_AUTH_TOKEN}` } : {},
+    ...httpProvider,
+    http: activeHttpClient,
+  };
+  const configuredProviders = [...sourceProviders];
+  try {
+    const configuredProvider = createConfiguredHttpSourceProvider(providerOptions);
+    if (configuredProvider.descriptor.active) configuredProviders.push(configuredProvider);
+  } catch {
+    // Invalid optional provider configuration fails closed without blocking startup.
+  }
+  const activeSourceRegistry = sourceRegistry ||
+    createSourceProviderRegistry(configuredProviders);
   const activeSourceManager = sourceProviderManager || createSourceProviderManager({
     registry: activeSourceRegistry,
     http: activeHttpClient,
