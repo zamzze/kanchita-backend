@@ -36,6 +36,8 @@ const createConfiguredHttpSourceProvider = ({
   priority = 100,
   timeoutMs = 2_000,
   maxCandidates = 8,
+  supportsMovies = true,
+  supportsEpisodes = true,
   headers = {},
   maxBytes = DEFAULT_MAX_BYTES,
   maxRedirects = 3,
@@ -46,6 +48,7 @@ const createConfiguredHttpSourceProvider = ({
       typeof enabled !== 'boolean' || !Number.isInteger(priority) ||
       !Number.isInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > 10_000 ||
       !Number.isInteger(maxCandidates) || maxCandidates < 1 || maxCandidates > 32 ||
+      typeof supportsMovies !== 'boolean' || typeof supportsEpisodes !== 'boolean' ||
       !Number.isInteger(maxBytes) || maxBytes < 1 ||
       !Number.isInteger(maxRedirects) || maxRedirects < 0 || maxRedirects > 10 ||
       !headers || typeof headers !== 'object' || Array.isArray(headers)) {
@@ -127,8 +130,8 @@ const createConfiguredHttpSourceProvider = ({
       id,
       active,
       priority,
-      supportsMovies: true,
-      supportsEpisodes: true,
+      supportsMovies,
+      supportsEpisodes,
       languages: Object.freeze([]),
       strategy: 'http',
       timeoutMs,

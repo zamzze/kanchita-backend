@@ -22,6 +22,8 @@ const { createShadowComparisonStats } =
 const { createPrimaryAcceptanceGate } = require('./primaryAcceptanceGate');
 const { createPrimaryResolver } = require('./primaryResolver');
 const { createPrimaryStats } = require('./observability/primaryStats');
+const { loadResolverV2Catalog } = require('./catalog/catalogLoader');
+const { buildResolverV2CatalogRuntime } = require('./catalog/catalogRuntimeBuilder');
 const {
   STREAM_RESOLVER_V2_HTTP_PROVIDER_ENABLED,
   STREAM_RESOLVER_V2_HTTP_PROVIDER_ID,
@@ -41,6 +43,8 @@ const {
   STREAM_RESOLVER_V2_HALF_OPEN_SUCCESS_THRESHOLD,
   STREAM_RESOLVER_V2_PRIMARY_ENABLED,
   STREAM_RESOLVER_V2_PRIMARY_TIMEOUT_MS,
+  STREAM_RESOLVER_V2_CATALOG_ENABLED,
+  STREAM_RESOLVER_V2_CATALOG_PATH,
 } = require('../../../config/env');
 
 const createShadowPipeline = ({
@@ -69,6 +73,14 @@ const createShadowPipeline = ({
   primaryAcceptanceGate = null,
   primaryStats = null,
   primaryMetrics = null,
+  catalogEnabled = STREAM_RESOLVER_V2_CATALOG_ENABLED,
+  catalogPath = STREAM_RESOLVER_V2_CATALOG_PATH,
+  catalogReadFile,
+  catalogEnv = process.env,
+  catalogLimits,
+  catalogMaxBytes,
+  catalogLoader = loadResolverV2Catalog,
+  catalogRuntimeBuilder = buildResolverV2CatalogRuntime,
 } = {}) => {
   const runtimeTimeoutMs = primaryEnabled ? Math.max(timeoutMs, primaryTimeoutMs) : timeoutMs;
   const activeHttpClient = httpClient || createSafeHttpClient({ timeoutMs: runtimeTimeoutMs });
@@ -111,16 +123,6 @@ const createShadowPipeline = ({
   } catch {
     // Invalid optional provider configuration fails closed without blocking startup.
   }
-  const activeSourceRegistry = sourceRegistry ||
-    createSourceProviderRegistry(configuredProviders);
-  const activeSourceManager = sourceProviderManager || createSourceProviderManager({
-    registry: activeSourceRegistry,
-    http: activeHttpClient,
-    providerTimeoutMs: runtimeTimeoutMs,
-    globalTimeoutMs: runtimeTimeoutMs,
-    healthStore: activeHealthStore,
-    observability: activeObservability,
-  });
   const directHlsResolver = createDirectHlsResolver({
     httpClient: activeHttpClient, timeoutMs: runtimeTimeoutMs,
   });
@@ -142,6 +144,48 @@ const createShadowPipeline = ({
   } catch {
     // Invalid optional resolver configuration fails closed.
   }
+
+  let catalogSummary = Object.freeze({ loaded: false, version: null,
+    sourcesRegistered: 0, resolversRegistered: 0, sourcesSkipped: 0,
+    resolversSkipped: 0, errorCodes: Object.freeze([]) });
+  if (catalogEnabled === true && !sourceRegistry && !resolverRegistry) {
+    try {
+      const loadedCatalog = catalogLoader({ enabled: true, filePath: catalogPath,
+        readFile: catalogReadFile, env: catalogEnv, limits: catalogLimits,
+        maxBytes: catalogMaxBytes });
+      if (loadedCatalog?.loaded === true) {
+        const built = catalogRuntimeBuilder({ catalog: loadedCatalog, http: activeHttpClient,
+          hlsResolver: directHlsResolver, env: catalogEnv,
+          existingSourceIds: configuredProviders.map(({ descriptor }) => descriptor.id),
+          existingResolverIds: configuredResolvers.map(({ descriptor }) => descriptor.id) });
+        configuredProviders.push(...built.sources);
+        configuredResolvers.push(...built.resolvers);
+        catalogSummary = Object.freeze({ ...built.summary,
+          sourcesSkipped: loadedCatalog.summary.skippedSources + built.summary.sourcesSkipped,
+          resolversSkipped: loadedCatalog.summary.skippedResolvers + built.summary.resolversSkipped,
+          errorCodes: Object.freeze([
+            ...loadedCatalog.summary.errorCodes, ...built.summary.errorCodes,
+          ]) });
+      } else if (loadedCatalog?.summary) {
+        catalogSummary = Object.freeze({ ...catalogSummary,
+          errorCodes: Object.freeze([...loadedCatalog.summary.errorCodes]) });
+      }
+    } catch {
+      catalogSummary = Object.freeze({ ...catalogSummary,
+        errorCodes: Object.freeze(['CATALOG_READ_FAILED']) });
+    }
+  }
+
+  const activeSourceRegistry = sourceRegistry ||
+    createSourceProviderRegistry(configuredProviders);
+  const activeSourceManager = sourceProviderManager || createSourceProviderManager({
+    registry: activeSourceRegistry,
+    http: activeHttpClient,
+    providerTimeoutMs: runtimeTimeoutMs,
+    globalTimeoutMs: runtimeTimeoutMs,
+    healthStore: activeHealthStore,
+    observability: activeObservability,
+  });
   const activeResolverRegistry = resolverRegistry ||
     createResolverRegistry(configuredResolvers);
   const activeResolverEngine = resolverEngine || createResolverEngine({
@@ -188,6 +232,7 @@ const createShadowPipeline = ({
     comparisonStats: activeComparisonStats,
     primaryResolver: activePrimaryResolver,
     primaryStats: activePrimaryStats,
+    catalogSummary,
   });
 };
 

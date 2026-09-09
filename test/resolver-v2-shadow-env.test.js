@@ -23,6 +23,8 @@ delete process.env.STREAM_RESOLVER_V2_PRIMARY_GUARD_WINDOW_SIZE;
 delete process.env.STREAM_RESOLVER_V2_PRIMARY_GUARD_FAILURE_RATE_PERCENT;
 delete process.env.STREAM_RESOLVER_V2_PRIMARY_GUARD_TIMEOUT_RATE_PERCENT;
 delete process.env.STREAM_RESOLVER_V2_PRIMARY_GUARD_COOLDOWN_SECONDS;
+delete process.env.STREAM_RESOLVER_V2_CATALOG_ENABLED;
+delete process.env.STREAM_RESOLVER_V2_CATALOG_PATH;
 delete process.env.STREAM_RESOLVER_V2_HTTP_PROVIDER_ENABLED;
 delete process.env.STREAM_RESOLVER_V2_HTTP_PROVIDER_BASE_URL;
 delete process.env.STREAM_RESOLVER_V2_HTTP_PROVIDER_TIMEOUT_MS;
@@ -100,6 +102,12 @@ test('primary guard numeric ranges retain safe defaults', () => {
     assert.equal(env.boundedPositiveInteger(name, fallback, minimum, maximum), fallback);
     delete process.env[name];
   }
+});
+test('resolver catalog is disabled with no implicit path by default', () => {
+  assert.equal(env.STREAM_RESOLVER_V2_CATALOG_ENABLED, false);
+  assert.equal(env.STREAM_RESOLVER_V2_CATALOG_PATH, '');
+  assert.equal(env.isExplicitlyEnabled('true'), true);
+  assert.equal(env.isExplicitlyEnabled('TRUE'), false);
 });
 test('shadow timeout has bounded safe defaults', () => {
   assert.equal(env.STREAM_RESOLVER_V2_SHADOW_TIMEOUT_MS, 1500);

@@ -1,0 +1,172 @@
+'use strict';
+
+const http = require('node:http');
+const fs = require('node:fs');
+const path = require('node:path');
+const assert = require('node:assert/strict');
+const { test } = require('node:test');
+
+process.env.NODE_ENV = 'test';
+process.env.PORT ||= '3000';
+process.env.DB_URL ||= 'postgresql://catalog:catalog@127.0.0.1:5432/catalog';
+process.env.JWT_SECRET ||= 'catalog-test-access-secret';
+process.env.JWT_REFRESH_SECRET ||= 'catalog-test-refresh-secret';
+process.env.TMDB_API_KEY ||= 'catalog-test-tmdb';
+
+const { loadResolverV2Catalog } =
+  require('../src/modules/streams/resolverV2/catalog/catalogLoader');
+const { buildResolverV2CatalogRuntime } =
+  require('../src/modules/streams/resolverV2/catalog/catalogRuntimeBuilder');
+const { createShadowPipeline } =
+  require('../src/modules/streams/resolverV2/createShadowPipeline');
+const { createSafeHttpClient } = require('../src/modules/streams/http/safeHttpClient');
+
+const loaded = (payload, env = {}) => loadResolverV2Catalog({ enabled: true,
+  filePath: 'catalog.json', readFile: () => JSON.stringify(payload), env });
+const source = (id, overrides = {}) => ({ id, type: 'configured_http', enabled: true,
+  baseUrl: `https://${id.replaceAll('_', '-')}.example.test`, ...overrides });
+const resolver = (id, overrides = {}) => ({ id, type: 'configured_http', enabled: true,
+  domains: [`${id.replaceAll('_', '-')}.example.test`], ...overrides });
+const hlsResolver = { resolve: async () => [] };
+const fakeHttp = { get: async () => {}, head: async () => {} };
+
+test('builder maps zero, one and N entries through approved factories', () => {
+  for (const count of [0, 1, 3]) {
+    const catalog = loaded({ version: 1,
+      sources: Array.from({ length: count }, (_, index) => source(`source_${index}`)),
+      resolvers: Array.from({ length: count }, (_, index) => resolver(`resolver_${index}`)),
+    });
+    const runtime = buildResolverV2CatalogRuntime({ catalog,
+      http: fakeHttp, hlsResolver, env: {} });
+    assert.equal(runtime.sources.length, count);
+    assert.equal(runtime.resolvers.length, count);
+  }
+});
+
+test('builder preserves priority, media support and deterministic registry order', () => {
+  const entries = [source('source_c', { priority: 5 }), source('source_a', { priority: 10,
+    supportsMovies: false }), source('source_b', { priority: 10 })];
+  const resolverEntries = [resolver('resolver_c'), resolver('resolver_a'), resolver('resolver_b')];
+  const make = (sources, resolvers) => createShadowPipeline({ catalogEnabled: true,
+    catalogPath: 'catalog.json',
+    catalogReadFile: () => JSON.stringify({ version: 1, sources, resolvers }),
+    httpClient: { get: async () => { throw new Error('no request'); },
+      head: async () => { throw new Error('no request'); } },
+    healthEnabled: false });
+  const first = make(entries, resolverEntries);
+  const second = make([...entries].reverse(), [...resolverEntries].reverse());
+  assert.deepEqual(first.sourceRegistry.list().map((item) => item.descriptor.id),
+    ['source_a', 'source_b', 'source_c']);
+  assert.deepEqual(second.sourceRegistry.list().map((item) => item.descriptor.id),
+    ['source_a', 'source_b', 'source_c']);
+  assert.deepEqual(first.resolverRegistry.list().map((item) => item.descriptor.id),
+    ['resolver_a', 'resolver_b', 'resolver_c', 'direct_hls']);
+  assert.deepEqual(second.resolverRegistry.list().map((item) => item.descriptor.id),
+    ['resolver_a', 'resolver_b', 'resolver_c', 'direct_hls']);
+  assert.deepEqual(first.sourceRegistry.listForMedia({ contentType: 'movie', contentId: 'x',
+    tmdbId: 1, title: 'X' }).map((item) => item.descriptor.id), ['source_b', 'source_c']);
+});
+
+test('existing env IDs and direct_hls cannot be replaced by catalog entries', () => {
+  const runtime = createShadowPipeline({ catalogEnabled: true, catalogPath: 'catalog.json',
+    catalogReadFile: () => JSON.stringify({ version: 1,
+      sources: [source('env_source')],
+      resolvers: [resolver('env_resolver'), resolver('direct_hls')],
+    }),
+    httpProvider: { enabled: true, id: 'env_source', baseUrl: 'https://env.example.test' },
+    httpResolver: { enabled: true, id: 'env_resolver', domains: ['env-resolver.example.test'] },
+    httpClient: { get: async () => { throw new Error('no request'); },
+      head: async () => { throw new Error('no request'); } }, healthEnabled: false });
+  assert.equal(runtime.sourceRegistry.list().filter((entry) =>
+    entry.descriptor.id === 'env_source').length, 1);
+  assert.equal(runtime.resolverRegistry.list().filter((entry) =>
+    entry.descriptor.id === 'env_resolver').length, 1);
+  assert.equal(runtime.resolverRegistry.get('direct_hls').descriptor.strategy, 'direct');
+  assert.deepEqual(runtime.catalogSummary.errorCodes,
+    ['CATALOG_DUPLICATE_SOURCE', 'CATALOG_DUPLICATE_RESOLVER',
+      'CATALOG_DUPLICATE_RESOLVER']);
+});
+
+test('disabled catalog performs no read and failed load preserves built-in runtime', () => {
+  let reads = 0;
+  const disabled = createShadowPipeline({ catalogEnabled: false,
+    catalogReadFile: () => { reads += 1; throw new Error('must not read'); }, healthEnabled: false });
+  assert.equal(reads, 0);
+  assert.equal(disabled.resolverRegistry.get('direct_hls').descriptor.id, 'direct_hls');
+  const failed = createShadowPipeline({ catalogEnabled: true, catalogPath: 'missing.json',
+    catalogReadFile: () => { throw new Error('missing'); }, healthEnabled: false });
+  assert.equal(failed.resolverRegistry.get('direct_hls').descriptor.id, 'direct_hls');
+  assert.deepEqual(failed.catalogSummary.errorCodes, ['CATALOG_READ_FAILED']);
+});
+
+test('allowlisted secret reference becomes same-origin bearer without entering summaries', async () => {
+  let authorization;
+  const env = { STREAM_RESOLVER_V2_SECRET_SOURCE_A: 'super-secret-test' };
+  const catalog = loaded({ version: 1, sources: [source('source_a', {
+    authTokenEnv: 'STREAM_RESOLVER_V2_SECRET_SOURCE_A',
+  })] }, env);
+  const runtime = buildResolverV2CatalogRuntime({ catalog, env, hlsResolver,
+    http: { get: async (_url, options) => { authorization = options.headers.authorization;
+      return { ok: true, headers: { 'content-type': 'application/json' },
+        body: Buffer.from('{"sources":[]}') }; } } });
+  await runtime.sources[0].getSources({ contentType: 'movie', contentId: 'x',
+    tmdbId: 1, title: 'X' });
+  assert.equal(authorization, 'Bearer super-secret-test');
+  assert.doesNotMatch(JSON.stringify(runtime.summary), /super-secret-test|SOURCE_A|https?:/);
+  assert.doesNotMatch(JSON.stringify(runtime), /super-secret-test/);
+});
+
+test('catalog bearer authentication is stripped on a cross-origin redirect', async (t) => {
+  let originAuthorization;
+  let targetAuthorization;
+  const target = http.createServer((request, response) => {
+    targetAuthorization = request.headers.authorization;
+    response.writeHead(200, { 'Content-Type': 'application/json' });
+    response.end('{"sources":[]}');
+  });
+  await new Promise((resolve) => target.listen(0, '127.0.0.1', resolve));
+  const targetUrl = `http://127.0.0.1:${target.address().port}`;
+  const origin = http.createServer((request, response) => {
+    originAuthorization = request.headers.authorization;
+    response.writeHead(302, { Location: targetUrl });
+    response.end();
+  });
+  await new Promise((resolve) => origin.listen(0, '127.0.0.1', resolve));
+  t.after(() => Promise.all([origin, target].map((server) =>
+    new Promise((resolve) => server.close(resolve)))));
+  const env = { STREAM_RESOLVER_V2_SECRET_SOURCE_A: 'super-secret-test' };
+  const catalog = loaded({ version: 1, sources: [source('source_a', {
+    baseUrl: `http://127.0.0.1:${origin.address().port}`,
+    authTokenEnv: 'STREAM_RESOLVER_V2_SECRET_SOURCE_A',
+  })] }, env);
+  const runtime = buildResolverV2CatalogRuntime({ catalog, env, hlsResolver,
+    http: createSafeHttpClient({ allowPrivateNetworks: true }) });
+  await runtime.sources[0].getSources({ contentType: 'movie', contentId: 'x',
+    tmdbId: 1, title: 'X' });
+  assert.equal(originAuthorization, 'Bearer super-secret-test');
+  assert.equal(targetAuthorization, undefined);
+});
+test('missing secret and invalid factory entries skip without blocking valid siblings', () => {
+  const catalog = { loaded: true, version: 1, sources: [
+    { ...source('missing'), priority: 1, timeoutMs: 2000, maxCandidates: 8,
+      supportsMovies: true, supportsEpisodes: true,
+      authTokenEnv: 'STREAM_RESOLVER_V2_SECRET_MISSING' },
+    { ...source('good'), priority: 1, timeoutMs: 2000, maxCandidates: 8,
+      supportsMovies: true, supportsEpisodes: true, authTokenEnv: null },
+  ], resolvers: [] };
+  const runtime = buildResolverV2CatalogRuntime({ catalog, env: {},
+    http: fakeHttp, hlsResolver });
+  assert.deepEqual(runtime.sources.map((item) => item.descriptor.id), ['good']);
+  assert.deepEqual(runtime.summary.errorCodes, ['CATALOG_MISSING_SECRET']);
+});
+
+test('catalog modules cannot load arbitrary code or create transport/browser paths', () => {
+  for (const name of ['catalogSchema.js', 'catalogLoader.js', 'catalogRuntimeBuilder.js']) {
+    const sourceText = fs.readFileSync(path.join(__dirname, '..', 'src', 'modules', 'streams',
+      'resolverV2', 'catalog', name), 'utf8');
+    assert.doesNotMatch(sourceText,
+      /ProviderC|puppeteer|browserSlots|ResolverExecutor|child_process|node:vm|\beval\s*\(|new Function/);
+    assert.doesNotMatch(sourceText, /\bfetch\s*\(|http\.get|https\.get|axios/);
+    assert.doesNotMatch(sourceText, /require\s*\(\s*[a-zA-Z_$]/);
+  }
+});
