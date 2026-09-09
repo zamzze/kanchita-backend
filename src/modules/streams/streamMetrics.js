@@ -21,6 +21,12 @@ const METRIC_NAMES = new Set([
   'ad_marked_stream_total',
   'subtitle_subdl_success_total',
   'subtitle_opensubtitles_success_total',
+  'resolver_v2_shadow_attempt_total',
+  'resolver_v2_shadow_success_total',
+  'resolver_v2_shadow_empty_total',
+  'resolver_v2_shadow_failure_total',
+  'resolver_v2_shadow_timeout_total',
+  'resolver_v2_shadow_duration_ms',
 ]);
 
 const createMetricsStore = (db = pool) => {

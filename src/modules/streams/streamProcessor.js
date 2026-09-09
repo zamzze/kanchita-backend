@@ -8,6 +8,7 @@ const { createProviderHealthStore } = require('./providerHealth');
 const { createBrowserSlotManager } = require('./browserSlots');
 const { createMetricsStore } = require('./streamMetrics');
 const { createStreamStatsStore } = require('./streamStats');
+const { createShadowPipeline } = require('./resolverV2/createShadowPipeline');
 const { findStreamContent } = require('./streamContent');
 const { createStreamLifecycle, processingError } = require('./streamLifecycle');
 const {
@@ -21,6 +22,8 @@ const {
   STREAM_PROVIDER_FAILURE_THRESHOLD,
   STREAM_PROVIDER_COOLDOWN_SECONDS,
   STREAM_REJECT_AD_MARKED,
+  STREAM_RESOLVER_V2_SHADOW_ENABLED,
+  STREAM_RESOLVER_V2_SHADOW_TIMEOUT_MS,
 } = require('../../config/env');
 
 const createStreamProcessor = ({
@@ -37,8 +40,17 @@ const createStreamProcessor = ({
   verifyIntervalMinutes = STREAM_VERIFY_INTERVAL_MINUTES,
   workerId = 'stream-worker',
   providerManager,
+  shadowResolver,
+  lifecycle: injectedLifecycle,
+  stats: injectedStats,
 } = {}) => {
   const metrics = createMetricsStore(db);
+  const shadow = shadowResolver || createShadowPipeline({
+    enabled: STREAM_RESOLVER_V2_SHADOW_ENABLED,
+    timeoutMs: STREAM_RESOLVER_V2_SHADOW_TIMEOUT_MS,
+    metrics,
+    logger,
+  }).shadowResolver;
   const health = createProviderHealthStore(db, {
     failureThreshold: STREAM_PROVIDER_FAILURE_THRESHOLD,
     cooldownSeconds: STREAM_PROVIDER_COOLDOWN_SECONDS,
@@ -69,8 +81,8 @@ const createStreamProcessor = ({
     rejectAdMarked: STREAM_REJECT_AD_MARKED,
     logger,
   });
-  const stats = createStreamStatsStore(db);
-  const lifecycle = createStreamLifecycle({
+  const stats = injectedStats || createStreamStatsStore(db);
+  const lifecycle = injectedLifecycle || createStreamLifecycle({
     db,
     validator,
     logger,
@@ -91,7 +103,16 @@ const createStreamProcessor = ({
       job.content_type,
       job.content_id,
       content,
-      (context) => manager.resolve(context),
+      async (context) => {
+        if (job.job_type !== 'refresh') {
+          try {
+            await shadow.run({ ...context });
+          } catch {
+            // Shadow is observational; an injected runner cannot stop legacy.
+          }
+        }
+        return manager.resolve(context);
+      },
       { preserveCurrent: job.job_type === 'refresh' }
     );
     await stats.recordReady(job.content_type, job.content_id);

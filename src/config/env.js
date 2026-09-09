@@ -25,6 +25,14 @@ const positiveInteger = (name, fallback) => {
   return Number(value);
 };
 
+const boundedPositiveInteger = (name, fallback, minimum, maximum) => {
+  const value = process.env[name];
+  if (value === undefined || value === '') return fallback;
+  if (!/^\d+$/.test(value)) return fallback;
+  const parsed = Number(value);
+  return parsed >= minimum && parsed <= maximum ? parsed : fallback;
+};
+
 required.forEach((key) => {
   if (!process.env[key]) {
     throw new Error(`Missing required env var: ${key}`);
@@ -72,6 +80,12 @@ module.exports = {
   STREAM_PROVIDER_FAILURE_THRESHOLD: positiveInteger('STREAM_PROVIDER_FAILURE_THRESHOLD', 5),
   STREAM_PROVIDER_COOLDOWN_SECONDS: positiveInteger('STREAM_PROVIDER_COOLDOWN_SECONDS', 300),
   STREAM_WORKER_HEARTBEAT_SECONDS: positiveInteger('STREAM_WORKER_HEARTBEAT_SECONDS', 15),
+  STREAM_RESOLVER_V2_SHADOW_ENABLED: isExplicitlyEnabled(
+    process.env.STREAM_RESOLVER_V2_SHADOW_ENABLED
+  ),
+  STREAM_RESOLVER_V2_SHADOW_TIMEOUT_MS: boundedPositiveInteger(
+    'STREAM_RESOLVER_V2_SHADOW_TIMEOUT_MS', 1500, 100, 10_000
+  ),
   SUBDL_ENABLED: process.env.SUBDL_ENABLED !== 'false',
   OPENSUBTITLES_ENABLED: isExplicitlyEnabled(process.env.OPENSUBTITLES_ENABLED),
   OPENSUBTITLES_API_KEY: process.env.OPENSUBTITLES_API_KEY,
@@ -80,4 +94,5 @@ module.exports = {
   parseCorsOrigins,
   isExplicitlyEnabled,
   positiveInteger,
+  boundedPositiveInteger,
 };
