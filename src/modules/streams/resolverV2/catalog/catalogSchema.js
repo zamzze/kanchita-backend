@@ -3,6 +3,9 @@
 const { normalizeBaseUrl } = require('../providers/configuredHttpSourceProvider');
 const { normalizeMediaMap } = require('../providers/peerTubeSourceProvider');
 const { normalizeDomains, normalizePatterns } = require('../resolvers/configuredHttpResolver');
+const { normalizeSelectors } = require('../html/staticHtmlExtractor');
+const { normalizeMediaPathTemplate } = require('../html/mediaPathTemplate');
+const { normalizePublicDomains } = require('../html/htmlConfig');
 const { CATALOG_CODES, catalogError } = require('./catalogErrors');
 
 const DEFAULT_LIMITS = Object.freeze({
@@ -63,6 +66,31 @@ const normalizeSource = (entry) => {
       baseUrl: peerBaseUrl || '', timeoutMs, maxCandidates, supportsMovies,
       supportsEpisodes, mediaMap });
   }
+  if (entry.type === 'configured_html') {
+    const allowed = new Set(['id', 'type', 'enabled', 'priority', 'baseUrl', 'timeoutMs',
+      'maxCandidates', 'supportsMovies', 'supportsEpisodes', 'moviePathTemplate',
+      'episodePathTemplate', 'selectors', 'allowedCandidateDomains', 'authTokenEnv']);
+    if (Object.keys(entry).some((key) => !allowed.has(key))) return null;
+    const authTokenEnv = authReference(entry.authTokenEnv);
+    const baseUrl = typeof entry.baseUrl === 'string' && normalizeBaseUrl(entry.baseUrl)
+      ? normalizeBaseUrl(entry.baseUrl).toString().replace(/\/$/, '') : null;
+    const moviePathTemplate = normalizeMediaPathTemplate(
+      entry.moviePathTemplate ?? '/movie/{tmdbId}');
+    const episodePathTemplate = normalizeMediaPathTemplate(
+      entry.episodePathTemplate ?? '/series/{tmdbId}/{season}/{episode}');
+    const selectors = normalizeSelectors(entry.selectors,
+      ['iframe.src', 'source.src', 'video.src']);
+    const allowedCandidateDomains = normalizePublicDomains(entry.allowedCandidateDomains);
+    if (!id || enabled === null || priority === null || timeoutMs === null ||
+        maxCandidates === null || supportsMovies === null || supportsEpisodes === null ||
+        authTokenEnv === undefined || !selectors || !allowedCandidateDomains ||
+        (supportsMovies && !moviePathTemplate) || (supportsEpisodes && !episodePathTemplate) ||
+        (enabled && !baseUrl)) return null;
+    return Object.freeze({ id, type: 'configured_html', enabled, priority,
+      baseUrl: baseUrl || '', timeoutMs, maxCandidates, supportsMovies, supportsEpisodes,
+      moviePathTemplate, episodePathTemplate, selectors: Object.freeze(selectors),
+      allowedCandidateDomains: Object.freeze(allowedCandidateDomains), authTokenEnv });
+  }
   const authTokenEnv = authReference(entry.authTokenEnv);
   const baseUrl = typeof entry.baseUrl === 'string' && normalizeBaseUrl(entry.baseUrl)
     ? normalizeBaseUrl(entry.baseUrl).toString().replace(/\/$/, '') : null;
@@ -89,6 +117,30 @@ const normalizeResolver = (entry, limits) => {
   );
   const hasRoute = (domains?.length || 0) + (aliases?.length || 0) +
     (pathPrefixes?.length || 0) > 0;
+  if (entry.type === 'configured_html') {
+    const allowed = new Set(['id', 'type', 'enabled', 'priority', 'domains', 'aliases',
+      'pathPrefixes', 'timeoutMs', 'maxStreams', 'selectors', 'allowedMediaDomains',
+      'requestHeaderPolicy', 'playbackHeaderPolicy']);
+    if (Object.keys(entry).some((key) => !allowed.has(key))) return null;
+    const selectors = normalizeSelectors(entry.selectors, ['source.src', 'video.src']);
+    const allowedMediaDomains = normalizePublicDomains(entry.allowedMediaDomains);
+    const htmlDomains = entry.domains === undefined ? [] : normalizePublicDomains(entry.domains);
+    const htmlAliases = entry.aliases === undefined ? [] : normalizePublicDomains(entry.aliases);
+    const requestHeaderPolicy = entry.requestHeaderPolicy ?? 'referer';
+    const playbackHeaderPolicy = entry.playbackHeaderPolicy ?? 'none';
+    const policies = ['none', 'referer', 'referer_origin'];
+    if (!id || enabled === null || priority === null || timeoutMs === null ||
+        maxStreams === null || maxStreams > 8 || htmlDomains === null || htmlAliases === null ||
+        pathPrefixes === null || pathPrefixes?.some((prefix) => prefix.includes('*')) ||
+        !selectors || !allowedMediaDomains || !policies.includes(requestHeaderPolicy) ||
+        !policies.includes(playbackHeaderPolicy) || (enabled &&
+          htmlDomains.length + htmlAliases.length + pathPrefixes.length === 0)) return null;
+    return Object.freeze({ id, type: 'configured_html', enabled, priority,
+      domains: Object.freeze(htmlDomains), aliases: Object.freeze(htmlAliases),
+      pathPrefixes: Object.freeze(pathPrefixes), timeoutMs, maxStreams,
+      selectors: Object.freeze(selectors), allowedMediaDomains: Object.freeze(allowedMediaDomains),
+      requestHeaderPolicy, playbackHeaderPolicy });
+  }
   if (!id || entry.type !== 'configured_http' || enabled === null || priority === null ||
       timeoutMs === null || maxStreams === null || authTokenEnv === undefined ||
       domains === null || aliases === null || pathPrefixes === null ||
