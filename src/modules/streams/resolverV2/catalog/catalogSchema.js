@@ -1,6 +1,7 @@
 'use strict';
 
 const { normalizeBaseUrl } = require('../providers/configuredHttpSourceProvider');
+const { normalizeMediaMap } = require('../providers/peerTubeSourceProvider');
 const { normalizeDomains, normalizePatterns } = require('../resolvers/configuredHttpResolver');
 const { CATALOG_CODES, catalogError } = require('./catalogErrors');
 
@@ -48,6 +49,20 @@ const normalizeSource = (entry) => {
   const maxCandidates = integer(entry.maxCandidates, 8, 1, 32);
   const supportsMovies = boolean(entry.supportsMovies, true);
   const supportsEpisodes = boolean(entry.supportsEpisodes, true);
+  if (entry.type === 'peertube') {
+    const allowed = new Set(['id', 'type', 'enabled', 'priority', 'baseUrl', 'timeoutMs',
+      'maxCandidates', 'mediaMap', 'supportsMovies', 'supportsEpisodes']);
+    if (Object.keys(entry).some((key) => !allowed.has(key))) return null;
+    const mediaMap = normalizeMediaMap(entry.mediaMap);
+    const peerBaseUrl = typeof entry.baseUrl === 'string' && normalizeBaseUrl(entry.baseUrl)
+      ? normalizeBaseUrl(entry.baseUrl).toString().replace(/\/$/, '') : null;
+    if (!id || enabled === null || priority === null || timeoutMs === null ||
+        maxCandidates === null || supportsMovies === null || supportsEpisodes === null ||
+        mediaMap === null || (enabled && !peerBaseUrl)) return null;
+    return Object.freeze({ id, type: 'peertube', enabled, priority,
+      baseUrl: peerBaseUrl || '', timeoutMs, maxCandidates, supportsMovies,
+      supportsEpisodes, mediaMap });
+  }
   const authTokenEnv = authReference(entry.authTokenEnv);
   const baseUrl = typeof entry.baseUrl === 'string' && normalizeBaseUrl(entry.baseUrl)
     ? normalizeBaseUrl(entry.baseUrl).toString().replace(/\/$/, '') : null;

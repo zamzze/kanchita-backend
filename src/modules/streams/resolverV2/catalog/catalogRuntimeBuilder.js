@@ -2,6 +2,7 @@
 
 const { createConfiguredHttpSourceProvider } =
   require('../providers/configuredHttpSourceProvider');
+const { createPeerTubeSourceProvider } = require('../providers/peerTubeSourceProvider');
 const { createConfiguredHttpResolver } = require('../resolvers/configuredHttpResolver');
 const { CATALOG_CODES } = require('./catalogErrors');
 
@@ -21,7 +22,9 @@ const buildResolverV2CatalogRuntime = ({
   const entries = catalog?.loaded === true ? catalog : { sources: [], resolvers: [] };
   for (const entry of entries.sources || []) {
     if (!entry.enabled) continue;
-    if (entry.type !== 'configured_http') { errors.push(CATALOG_CODES.INVALID_SOURCE); continue; }
+    if (!['configured_http', 'peertube'].includes(entry.type)) {
+      errors.push(CATALOG_CODES.INVALID_SOURCE); continue;
+    }
     if (sourceIds.has(entry.id)) { errors.push(CATALOG_CODES.DUPLICATE_SOURCE); continue; }
     const token = entry.authTokenEnv ? env[entry.authTokenEnv] : null;
     if (entry.authTokenEnv && (typeof token !== 'string' || !token.trim())) {
@@ -29,11 +32,15 @@ const buildResolverV2CatalogRuntime = ({
       continue;
     }
     try {
-      const source = createConfiguredHttpSourceProvider({
+      const factory = entry.type === 'peertube'
+        ? createPeerTubeSourceProvider : createConfiguredHttpSourceProvider;
+      const source = factory({
         id: entry.id, enabled: true, priority: entry.priority, baseUrl: entry.baseUrl,
         timeoutMs: entry.timeoutMs, maxCandidates: entry.maxCandidates,
         supportsMovies: entry.supportsMovies, supportsEpisodes: entry.supportsEpisodes,
-        headers: token ? { authorization: `Bearer ${token}` } : {}, http,
+        ...(entry.type === 'peertube' ? { mediaMap: entry.mediaMap }
+          : { headers: token ? { authorization: `Bearer ${token}` } : {} }),
+        http,
       });
       if (!source.descriptor.active) throw new Error('inactive');
       sourceIds.add(entry.id);
