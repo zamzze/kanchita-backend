@@ -1,6 +1,7 @@
 'use strict';
 
-const { parseKodiTaxonomyArgs, formatKodiTaxonomyJson, formatKodiTaxonomyText } =
+const { parseKodiTaxonomyArgs, formatKodiCoverageJson, formatKodiCoverageText,
+  formatKodiTaxonomyJson, formatKodiTaxonomyText } =
   require('../src/modules/streams/resolverV2/diagnostics/kodiTaxonomyCli');
 
 const main = (argv = process.argv.slice(2)) => {
@@ -14,8 +15,18 @@ const main = (argv = process.argv.slice(2)) => {
     require('../src/modules/streams/resolverV2/diagnostics/kodiTaxonomyScanner');
   try {
     const result = scanKodiTaxonomy({ roots: parsed.roots });
-    process.stdout.write(`${parsed.json
-      ? formatKodiTaxonomyJson(result) : formatKodiTaxonomyText(result)}\n`);
+    if (parsed.coverage) {
+      const { createCoverageSummary, recommendNextCapability } =
+        require('../src/modules/streams/resolverV2/diagnostics/capabilityCoverage');
+      const coverage = createCoverageSummary(result.records);
+      const recommendation = recommendNextCapability(coverage);
+      process.stdout.write(`${parsed.json
+        ? formatKodiCoverageJson(result, coverage, recommendation)
+        : formatKodiCoverageText(result, coverage, recommendation)}\n`);
+    } else {
+      process.stdout.write(`${parsed.json
+        ? formatKodiTaxonomyJson(result) : formatKodiTaxonomyText(result)}\n`);
+    }
     process.exitCode = 0;
   } catch {
     process.stdout.write(`${parsed.json ? '{"status":"failed"}' : 'status=failed'}\n`);

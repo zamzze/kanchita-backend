@@ -2,12 +2,16 @@
 
 const parseKodiTaxonomyArgs = (argv = []) => {
   if (!Array.isArray(argv)) return { ok: false, json: false };
-  const roots = []; let json = false; const used = new Set();
+  const roots = []; let json = false; let coverage = false; const used = new Set();
   for (let index = 0; index < argv.length; index += 1) {
     const item = argv[index];
     if (item === '--json') {
       if (json) return { ok: false, json: true };
       json = true; continue;
+    }
+    if (item === '--coverage') {
+      if (coverage) return { ok: false, json };
+      coverage = true; continue;
     }
     if (!['--alfa-path', '--balandro-path'].includes(item) || used.has(item) ||
         index + 1 >= argv.length || argv[index + 1].startsWith('--')) {
@@ -16,7 +20,7 @@ const parseKodiTaxonomyArgs = (argv = []) => {
     used.add(item);
     roots.push(argv[++index]);
   }
-  return roots.length ? { ok: true, json, roots } : { ok: false, json };
+  return roots.length ? { ok: true, json, coverage, roots } : { ok: false, json };
 };
 const formatKodiTaxonomyJson = (result) => JSON.stringify(result);
 const formatKodiTaxonomyText = (result) => {
@@ -34,4 +38,46 @@ const formatKodiTaxonomyText = (result) => {
   return lines.join('\n');
 };
 
-module.exports = { parseKodiTaxonomyArgs, formatKodiTaxonomyJson, formatKodiTaxonomyText };
+const coverageTaxonomySummary = (result) => Object.freeze({
+  servers: result.servers,
+  channels: result.channels,
+  skipped: result.skipped,
+});
+const createCoverageOutput = (taxonomy, coverage, recommendation) => Object.freeze({
+  taxonomy: coverageTaxonomySummary(taxonomy),
+  coverage,
+  recommendation,
+});
+const formatPercent = (value) => value === null ? 'n/a' : `${(value * 100).toFixed(1)}%`;
+const formatKodiCoverageJson = (taxonomy, coverage, recommendation) =>
+  JSON.stringify(createCoverageOutput(taxonomy, coverage, recommendation));
+const formatKodiCoverageText = (taxonomy, coverage, recommendation) => [
+  'Resolver V2 capability coverage',
+  `servers.scanned=${coverage.totalScanned}`,
+  `servers.eligible=${coverage.eligible}`,
+  `servers.inactive=${coverage.inactive}`,
+  `primary_compatible=${coverage.primaryCompatible}`,
+  `resolution_only=${coverage.resolutionOnly}`,
+  `requires_session=${coverage.requiresSession}`,
+  `requires_javascript=${coverage.requiresJavascript}`,
+  `requires_browser=${coverage.requiresBrowser}`,
+  `protected=${coverage.protected}`,
+  `unknown=${coverage.unknown}`,
+  `primary_coverage=${formatPercent(coverage.coveragePercent)}`,
+  `technical_coverage=${formatPercent(coverage.technicalCoveragePercent)}`,
+  `largest_remaining_block=${recommendation.recommendedCapability}`,
+  `affected_servers=${recommendation.affectedServers}`,
+  'top_combinations:',
+  ...coverage.topCombinations.map(({ signature, count }) => `${signature}=${count}`),
+  `channels.total=${taxonomy.channels.total}`,
+  `skipped=${taxonomy.skipped}`,
+].join('\n');
+
+module.exports = {
+  createCoverageOutput,
+  formatKodiCoverageJson,
+  formatKodiCoverageText,
+  formatKodiTaxonomyJson,
+  formatKodiTaxonomyText,
+  parseKodiTaxonomyArgs,
+};

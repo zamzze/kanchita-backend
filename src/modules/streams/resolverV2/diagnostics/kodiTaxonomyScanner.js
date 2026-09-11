@@ -5,8 +5,8 @@ const path = require('node:path');
 
 const CAPABILITIES = Object.freeze([
   'direct_hls', 'direct_http', 'json_api', 'static_html', 'iframe_http',
-  'header_bound', 'cookie_session', 'javascript_transform', 'browser_required',
-  'anti_bot', 'drm_or_protected', 'unknown',
+  'multi_hop_iframe', 'header_bound', 'cookie_session', 'javascript_transform',
+  'browser_required', 'anti_bot', 'drm_or_protected', 'unknown',
 ]);
 const RECOMMENDATIONS = Object.freeze({
   implementable_now: Object.freeze(['direct_hls', 'json_api']),
@@ -56,6 +56,12 @@ const classifyText = (text, kind = 'server') => {
       signals += Math.min(matches.length, 3);
     }
   }
+  if (kind === 'server' && /iframe|embed(?:_url)?/i.test(String(text)) &&
+      /servertools\.resolve_video_urls|servertools\.find_video_items/i.test(String(text)) &&
+      !features.includes('multi_hop_iframe')) {
+    features.push('multi_hop_iframe');
+    signals += 2;
+  }
   if (!features.length) features.push('unknown');
   return Object.freeze({ classifications: Object.freeze(features),
     confidence: confidence(signals) });
@@ -90,9 +96,17 @@ const scanKodiTaxonomy = ({ roots = [], maxFiles = MAX_FILES,
   const records = [];
   let skipped = 0;
   let filesSeen = 0;
+  const folders = [];
   for (const root of roots) {
     if (typeof root !== 'string' || !root.trim()) { skipped += 1; continue; }
-    for (const folder of discoverFolders(root)) {
+    folders.push(...discoverFolders(root));
+  }
+  folders.sort((left, right) => {
+    const leftKind = path.basename(left) === 'servers' ? 0 : 1;
+    const rightKind = path.basename(right) === 'servers' ? 0 : 1;
+    return leftKind - rightKind || left.localeCompare(right);
+  });
+  for (const folder of folders) {
       let entries;
       try { entries = fs.readdirSync(folder, { withFileTypes: true }); } catch {
         skipped += 1; continue;
@@ -118,7 +132,6 @@ const scanKodiTaxonomy = ({ roots = [], maxFiles = MAX_FILES,
         records.push(Object.freeze({ id: safeId(entry.name), kind, inactive,
           classifications: classified.classifications, confidence: classified.confidence }));
       }
-    }
   }
   records.sort((a, b) => a.kind.localeCompare(b.kind) || a.id.localeCompare(b.id));
   const counts = Object.fromEntries(CAPABILITIES.map((key) => [key, 0]));

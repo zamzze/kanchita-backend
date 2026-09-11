@@ -50,6 +50,9 @@ test('scanner reads bounded server/channel text and emits redacted taxonomy only
 test('taxonomy CLI accepts local paths only and modules have no execution/network primitives', () => {
   assert.equal(parseKodiTaxonomyArgs(['--alfa-path', 'C:/tmp/alfa']).ok, true);
   assert.equal(parseKodiTaxonomyArgs(['--balandro-path', 'C:/tmp/b', '--json']).ok, true);
+  assert.equal(parseKodiTaxonomyArgs(
+    ['--alfa-path', 'C:/tmp/a', '--balandro-path', 'C:/tmp/b', '--coverage']).coverage,
+  true);
   for (const args of [[], ['--url', 'https://x'], ['--output', 'x'],
     ['--alfa-path'], ['--alfa-path', 'a', '--alfa-path', 'b']]) {
     assert.equal(parseKodiTaxonomyArgs(args).ok, false);

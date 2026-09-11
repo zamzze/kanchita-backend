@@ -144,7 +144,6 @@ test('all hops share one deadline and timeout stops future queued work', async (
   const resolvers = [
     resolver('a', 'a.example.test', async (_input, context) => {
       deadlines.push(context.deadlineAt);
-      await new Promise((resolve) => setTimeout(resolve, 10));
       return { streams: [], nextCandidates: [candidate('b.example.test'),
         candidate('c.example.test')] };
     }, calls),
