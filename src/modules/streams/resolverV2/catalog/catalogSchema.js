@@ -120,10 +120,15 @@ const normalizeResolver = (entry, limits) => {
   if (entry.type === 'configured_html') {
     const allowed = new Set(['id', 'type', 'enabled', 'priority', 'domains', 'aliases',
       'pathPrefixes', 'timeoutMs', 'maxStreams', 'selectors', 'allowedMediaDomains',
-      'requestHeaderPolicy', 'playbackHeaderPolicy']);
+      'requestHeaderPolicy', 'playbackHeaderPolicy', 'allowedNestedDomains',
+      'maxNextCandidates']);
     if (Object.keys(entry).some((key) => !allowed.has(key))) return null;
     const selectors = normalizeSelectors(entry.selectors, ['source.src', 'video.src']);
     const allowedMediaDomains = normalizePublicDomains(entry.allowedMediaDomains);
+    const allowedNestedDomains = entry.allowedNestedDomains === undefined ||
+      Array.isArray(entry.allowedNestedDomains) && entry.allowedNestedDomains.length === 0
+      ? [] : normalizePublicDomains(entry.allowedNestedDomains);
+    const maxNextCandidates = integer(entry.maxNextCandidates, 4, 1, 8);
     const htmlDomains = entry.domains === undefined ? [] : normalizePublicDomains(entry.domains);
     const htmlAliases = entry.aliases === undefined ? [] : normalizePublicDomains(entry.aliases);
     const requestHeaderPolicy = entry.requestHeaderPolicy ?? 'referer';
@@ -132,13 +137,15 @@ const normalizeResolver = (entry, limits) => {
     if (!id || enabled === null || priority === null || timeoutMs === null ||
         maxStreams === null || maxStreams > 8 || htmlDomains === null || htmlAliases === null ||
         pathPrefixes === null || pathPrefixes?.some((prefix) => prefix.includes('*')) ||
-        !selectors || !allowedMediaDomains || !policies.includes(requestHeaderPolicy) ||
+        !selectors || !allowedMediaDomains || allowedNestedDomains === null ||
+        maxNextCandidates === null || !policies.includes(requestHeaderPolicy) ||
         !policies.includes(playbackHeaderPolicy) || (enabled &&
           htmlDomains.length + htmlAliases.length + pathPrefixes.length === 0)) return null;
     return Object.freeze({ id, type: 'configured_html', enabled, priority,
       domains: Object.freeze(htmlDomains), aliases: Object.freeze(htmlAliases),
       pathPrefixes: Object.freeze(pathPrefixes), timeoutMs, maxStreams,
       selectors: Object.freeze(selectors), allowedMediaDomains: Object.freeze(allowedMediaDomains),
+      allowedNestedDomains: Object.freeze(allowedNestedDomains), maxNextCandidates,
       requestHeaderPolicy, playbackHeaderPolicy });
   }
   if (!id || entry.type !== 'configured_http' || enabled === null || priority === null ||

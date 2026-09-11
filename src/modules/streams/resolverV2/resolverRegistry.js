@@ -5,6 +5,7 @@ const {
   normalizeResolverDescriptor,
   normalizeStreamCandidate,
 } = require('./resolverContracts');
+const { normalizeResolverNodeResult } = require('./resolverNodeResult');
 
 const registryError = (code) => {
   const error = new Error(code);
@@ -37,10 +38,21 @@ const normalizeResolver = (resolver) => {
     }
     return candidates;
   };
+  let resolveNode;
+  if (resolver.resolveNode !== undefined) {
+    if (typeof resolver.resolveNode !== 'function') throw registryError('INVALID_RESOLVER');
+    const boundResolveNode = resolver.resolveNode.bind(resolver);
+    resolveNode = async (...args) => {
+      const result = normalizeResolverNodeResult(await boundResolveNode(...args));
+      if (!result) throw registryError('INVALID_RESOLVER_RESULT');
+      return result;
+    };
+  }
   return Object.freeze({
     descriptor: freezeDescriptor(descriptor),
     canResolve: resolver.canResolve.bind(resolver),
     resolve,
+    ...(resolveNode ? { resolveNode } : {}),
   });
 };
 

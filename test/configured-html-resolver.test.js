@@ -133,6 +133,62 @@ test('HTML contract, redirect domain and invalid media fail closed', async () =>
   assert.deepEqual(await resolver.resolve(candidate('https://embed.example.test/e')), []);
 });
 
+test('resolveNode emits bounded nested candidates without fetching them', async () => {
+  let pageCalls = 0;
+  let hlsCalls = 0;
+  const resolver = createConfiguredHtmlResolver({ id: 'html_resolver', enabled: true,
+    domains: ['embed.example.test'], allowedMediaDomains: ['media.example.test'],
+    allowedNestedDomains: ['next.example.test'], maxNextCandidates: 2,
+    http: { get: async () => { pageCalls += 1; return { ok: true,
+      url: 'https://embed.example.test/e/a', headers: { 'content-type': 'text/html' },
+      body: Buffer.from(`<iframe src="https://next.example.test/e/1?x=1#fragment">
+        <iframe src="https://next.example.test/e/1?x=1#other">
+        <iframe src="https://sub.next.example.test/e/2">
+        <iframe src="https://fake-next.example.test.invalid/e/3">
+        <video src="https://media.example.test/master.m3u8">`) }; } },
+    directHlsResolver: { resolve: async (input) => { hlsCalls += 1; return [{
+      url: input.url, protocol: 'hls', providerId: input.providerId,
+      resolverId: 'direct_hls', headers: {}, validated: true,
+    }]; } },
+  });
+  const input = candidate('https://embed.example.test/e/a', {
+    headers: { authorization: 'Bearer must-not-propagate', cookie: 'private' },
+  });
+  const node = await resolver.resolveNode(input);
+  assert.equal(pageCalls, 1);
+  assert.equal(hlsCalls, 1);
+  assert.equal(node.streams.length, 1);
+  assert.equal(node.nextCandidates.length, 2);
+  assert.deepEqual(node.nextCandidates[0], { providerId: 'html_source',
+    url: 'https://next.example.test/e/1?x=1',
+    referer: 'https://embed.example.test/e/a', origin: 'https://embed.example.test',
+    headers: {}, languageHint: null, qualityHint: null,
+    metadata: { discoveryType: 'iframe', sourceType: 'configured_html_resolver' } });
+  assert.equal(node.nextCandidates[1].url, 'https://sub.next.example.test/e/2');
+  assert.doesNotMatch(JSON.stringify(node.nextCandidates), /authorization|cookie|must-not/i);
+  assert.equal((await resolver.resolve(input)).length, 1);
+  assert.equal(pageCalls, 2);
+});
+
+test('nested chaining is disabled by default and unsafe allowlists fail closed', async () => {
+  const html = { get: async () => ({ ok: true, url: 'https://embed.example.test/e',
+    headers: { 'content-type': 'text/html' },
+    body: Buffer.from('<iframe src="https://next.example.test/e">') }) };
+  const directHlsResolver = { resolve: async () => [] };
+  const resolver = createConfiguredHtmlResolver({ id: 'x', enabled: true,
+    domains: ['embed.example.test'], allowedMediaDomains: ['media.example.test'],
+    http: html, directHlsResolver });
+  assert.deepEqual((await resolver.resolveNode(candidate('https://embed.example.test/e')))
+    .nextCandidates, []);
+  for (const domain of ['*', '127.0.0.1', 'localhost', 'x.localhost',
+    'https://next.example.test', 'next.example.test:443', 'next.example.test/path']) {
+    const unsafe = createConfiguredHtmlResolver({ id: 'x', enabled: true,
+      domains: ['embed.example.test'], allowedMediaDomains: ['media.example.test'],
+      allowedNestedDomains: [domain], http: html, directHlsResolver });
+    assert.equal(unsafe.descriptor.active, false);
+  }
+});
+
 test('resolver module is static HTTP only and never imports legacy/browser transports', () => {
   const text = fs.readFileSync(path.join(__dirname, '..', 'src', 'modules', 'streams',
     'resolverV2', 'resolvers', 'configuredHtmlResolver.js'), 'utf8');

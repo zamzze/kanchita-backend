@@ -24,6 +24,8 @@ const { createPrimaryResolver } = require('./primaryResolver');
 const { createPrimaryStats } = require('./observability/primaryStats');
 const { loadResolverV2Catalog } = require('./catalog/catalogLoader');
 const { buildResolverV2CatalogRuntime } = require('./catalog/catalogRuntimeBuilder');
+const PRODUCT_RESOLVER_MAX_DEPTH = 2;
+const PRODUCT_RESOLVER_MAX_NODES = 16;
 const {
   STREAM_RESOLVER_V2_HTTP_PROVIDER_ENABLED,
   STREAM_RESOLVER_V2_HTTP_PROVIDER_ID,
@@ -191,6 +193,8 @@ const createShadowPipeline = ({
   const activeResolverEngine = resolverEngine || createResolverEngine({
     registry: activeResolverRegistry,
     timeoutMs: runtimeTimeoutMs,
+    maxDepth: PRODUCT_RESOLVER_MAX_DEPTH,
+    maxResolutionNodes: PRODUCT_RESOLVER_MAX_NODES,
     healthStore: activeHealthStore,
     observability: activeObservability,
   });
@@ -236,4 +240,8 @@ const createShadowPipeline = ({
   });
 };
 
-module.exports = { createShadowPipeline };
+module.exports = {
+  PRODUCT_RESOLVER_MAX_DEPTH,
+  PRODUCT_RESOLVER_MAX_NODES,
+  createShadowPipeline,
+};

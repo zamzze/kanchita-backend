@@ -79,6 +79,8 @@ const buildResolverV2CatalogRuntime = ({
         ...(entry.type === 'configured_html' ? {
           pathPrefixes: entry.pathPrefixes, selectors: entry.selectors,
           allowedMediaDomains: entry.allowedMediaDomains,
+          allowedNestedDomains: entry.allowedNestedDomains,
+          maxNextCandidates: entry.maxNextCandidates,
           requestHeaderPolicy: entry.requestHeaderPolicy,
           playbackHeaderPolicy: entry.playbackHeaderPolicy,
           directHlsResolver: hlsResolver,

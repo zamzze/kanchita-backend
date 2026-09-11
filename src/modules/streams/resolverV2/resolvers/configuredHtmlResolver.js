@@ -37,23 +37,27 @@ const createConfiguredHtmlResolver = ({
   id = 'html_resolver', http, directHlsResolver, enabled = false, priority = 2_000,
   domains = [], aliases = [], pathPrefixes = [], timeoutMs = 2_000, maxStreams = 4,
   selectors = DEFAULT_SELECTORS, allowedMediaDomains = [], requestHeaderPolicy = 'referer',
-  playbackHeaderPolicy = 'none', maxBytes = MAX_BYTES, maxRedirects = 3, now = Date.now,
+  playbackHeaderPolicy = 'none', allowedNestedDomains = [], maxNextCandidates = 4,
+  maxBytes = MAX_BYTES, maxRedirects = 3, now = Date.now,
 } = {}) => {
   const normalizedDomains = normalizeDomains(domains);
   const normalizedAliases = normalizeDomains(aliases);
   const normalizedPatterns = normalizePatterns(pathPrefixes);
   const normalizedSelectors = normalizeSelectors(selectors);
   const mediaDomains = normalizePublicDomains(allowedMediaDomains);
+  const nestedDomains = Array.isArray(allowedNestedDomains) && allowedNestedDomains.length === 0
+    ? [] : normalizePublicDomains(allowedNestedDomains);
   const routeDomains = [...(normalizedDomains || []), ...(normalizedAliases || [])];
   const validRoute = routeDomains.length > 0 || (normalizedPatterns?.length || 0) > 0;
   const configValid = normalizedDomains && normalizedAliases && normalizedPatterns &&
-    normalizedSelectors && mediaDomains && validRoute &&
+    normalizedSelectors && mediaDomains && nestedDomains && validRoute &&
     HEADER_POLICIES.includes(requestHeaderPolicy) && HEADER_POLICIES.includes(playbackHeaderPolicy);
   const active = enabled === true && Boolean(configValid);
   if (typeof id !== 'string' || !/^[a-z0-9][a-z0-9_-]{0,127}$/.test(id) ||
       typeof enabled !== 'boolean' || !Number.isInteger(priority) ||
       !Number.isInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > 10_000 ||
       !Number.isInteger(maxStreams) || maxStreams < 1 || maxStreams > 8 ||
+      !Number.isInteger(maxNextCandidates) || maxNextCandidates < 1 || maxNextCandidates > 8 ||
       !Number.isInteger(maxBytes) || maxBytes < 1 || maxBytes > MAX_BYTES ||
       !Number.isInteger(maxRedirects) || maxRedirects < 0 || maxRedirects > 10 ||
       typeof now !== 'function') throw resolverError(ERROR_CODES.INVALID_CONFIG);
@@ -65,9 +69,9 @@ const createConfiguredHtmlResolver = ({
   const canResolve = (candidate) => active && normalizeEmbedCandidate(candidate) !== null &&
     !hasHlsExtension(candidate.url);
 
-  const resolve = async (candidate, context = {}) => {
+  const resolveNode = async (candidate, context = {}) => {
     const normalized = normalizeEmbedCandidate(candidate);
-    if (!active || !normalized) return [];
+    if (!active || !normalized) return { streams: [], nextCandidates: [] };
     if (!http || typeof http.get !== 'function' || !directHlsResolver ||
         typeof directHlsResolver.resolve !== 'function') throw resolverError(ERROR_CODES.INVALID_CONFIG);
     const startedAt = now();
@@ -97,6 +101,22 @@ const createConfiguredHtmlResolver = ({
     const links = extractLinks(response.body.toString('utf8'), {
       baseUrl: finalPage.toString(), selectors: normalizedSelectors, maxLinks: maxStreams,
     });
+    const nestedLinks = nestedDomains.length === 0 ? [] : extractLinks(
+      response.body.toString('utf8'), {
+        baseUrl: finalPage.toString(), selectors: ['iframe.src'],
+        maxLinks: maxNextCandidates,
+      });
+    const nextCandidates = nestedLinks.filter((link) => urlMatchesDomains(link.url, nestedDomains))
+      .map((link) => normalizeEmbedCandidate({
+        providerId: normalized.providerId,
+        url: link.url,
+        referer: finalPage.toString(),
+        origin: finalPage.origin,
+        headers: {},
+        languageHint: null,
+        qualityHint: null,
+        metadata: { discoveryType: 'iframe', sourceType: 'configured_html_resolver' },
+      })).filter(Boolean);
     const streams = [];
     for (const link of links) {
       if (link.kind === 'iframe' || !urlMatchesDomains(link.url, mediaDomains)) continue;
@@ -118,13 +138,16 @@ const createConfiguredHtmlResolver = ({
               ? { sourcePriority: normalized.metadata.sourcePriority } : {}) },
         });
         if (stream) streams.push(stream);
-        if (streams.length >= maxStreams) return streams;
+        if (streams.length >= maxStreams) return { streams, nextCandidates };
       }
     }
-    return streams;
+    return { streams, nextCandidates };
   };
 
-  return Object.freeze({ descriptor, canResolve, resolve });
+  const resolve = async (candidate, context = {}) =>
+    (await resolveNode(candidate, context)).streams;
+
+  return Object.freeze({ descriptor, canResolve, resolve, resolveNode });
 };
 
 module.exports = {

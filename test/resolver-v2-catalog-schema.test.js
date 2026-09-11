@@ -82,6 +82,46 @@ test('resolver validation rejects unsafe routing, browser and executable configu
   assert.equal(catalog.summary.skippedResolvers, entries.length - 1);
 });
 
+test('configured HTML resolver normalizes bounded nested-domain policy', () => {
+  const htmlResolver = (overrides = {}) => ({ id: 'html_a', type: 'configured_html',
+    enabled: true, domains: ['embed.example.test'],
+    allowedMediaDomains: ['media.example.test'], ...overrides });
+  const catalog = normalizeCatalog({ version: 1, resolvers: [
+    htmlResolver({ allowedNestedDomains: [
+      ' Nested.Example.Test ', 'nested.example.test', 'child.example.test'],
+    maxNextCandidates: 8 }),
+    htmlResolver({ id: 'html_default' }),
+    htmlResolver({ id: 'html_minimum', maxNextCandidates: 1 }),
+  ] });
+  assert.deepEqual(catalog.resolvers[0].allowedNestedDomains,
+    ['nested.example.test', 'child.example.test']);
+  assert.equal(catalog.resolvers[0].maxNextCandidates, 8);
+  assert.deepEqual(catalog.resolvers[1].allowedNestedDomains, []);
+  assert.equal(catalog.resolvers[1].maxNextCandidates, 4);
+  assert.equal(catalog.resolvers[2].maxNextCandidates, 1);
+  assert.equal(Object.isFrozen(catalog.resolvers[0].allowedNestedDomains), true);
+});
+
+test('configured HTML resolver rejects unsafe nested domains and out-of-range fanout', () => {
+  const htmlResolver = (overrides = {}) => ({ id: 'html_a', type: 'configured_html',
+    enabled: true, domains: ['embed.example.test'],
+    allowedMediaDomains: ['media.example.test'], ...overrides });
+  const unsafe = ['*', '127.0.0.1', 'localhost', 'https://nested.example.test',
+    'nested.example.test:443', 'nested.example.test/path'];
+  const entries = [
+    ...unsafe.map((domain, index) => htmlResolver({ id: `unsafe_${index}`,
+      allowedNestedDomains: [domain] })),
+    htmlResolver({ id: 'fanout_zero', maxNextCandidates: 0 }),
+    htmlResolver({ id: 'fanout_nine', maxNextCandidates: 9 }),
+    htmlResolver({ id: 'too_many', allowedNestedDomains: Array.from({ length: 17 },
+      (_, index) => `nested-${index}.example.test`) }),
+  ];
+  const catalog = normalizeCatalog({ version: 1, resolvers: entries });
+  assert.equal(catalog.resolvers.length, 0);
+  assert.equal(catalog.summary.skippedResolvers, entries.length);
+  assert.ok(catalog.summary.errorCodes.every((code) => code === 'CATALOG_INVALID_RESOLVER'));
+});
+
 test('duplicates are first-valid-wins within separate namespaces', () => {
   const catalog = normalizeCatalog({ version: 1,
     sources: [source(), source({ baseUrl: 'https://other.example.test' })],
