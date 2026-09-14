@@ -3,6 +3,7 @@
 const { createConfiguredHttpSourceProvider } =
   require('../providers/configuredHttpSourceProvider');
 const { createPeerTubeSourceProvider } = require('../providers/peerTubeSourceProvider');
+const { createPlutoSourceProvider } = require('../providers/plutoSourceProvider');
 const { createConfiguredHtmlSourceProvider } =
   require('../providers/configuredHtmlSourceProvider');
 const { createConfiguredHttpResolver } = require('../resolvers/configuredHttpResolver');
@@ -25,7 +26,7 @@ const buildResolverV2CatalogRuntime = ({
   const entries = catalog?.loaded === true ? catalog : { sources: [], resolvers: [] };
   for (const entry of entries.sources || []) {
     if (!entry.enabled) continue;
-    if (!['configured_http', 'peertube', 'configured_html'].includes(entry.type)) {
+    if (!['configured_http', 'peertube', 'configured_html', 'pluto'].includes(entry.type)) {
       errors.push(CATALOG_CODES.INVALID_SOURCE); continue;
     }
     if (sourceIds.has(entry.id)) { errors.push(CATALOG_CODES.DUPLICATE_SOURCE); continue; }
@@ -36,6 +37,7 @@ const buildResolverV2CatalogRuntime = ({
     }
     try {
       const factory = entry.type === 'peertube' ? createPeerTubeSourceProvider
+        : entry.type === 'pluto' ? createPlutoSourceProvider
         : entry.type === 'configured_html' ? createConfiguredHtmlSourceProvider
           : createConfiguredHttpSourceProvider;
       const source = factory({
@@ -43,6 +45,10 @@ const buildResolverV2CatalogRuntime = ({
         timeoutMs: entry.timeoutMs, maxCandidates: entry.maxCandidates,
         supportsMovies: entry.supportsMovies, supportsEpisodes: entry.supportsEpisodes,
         ...(entry.type === 'peertube' ? { mediaMap: entry.mediaMap }
+          : entry.type === 'pluto' ? {
+            mediaMap: entry.mediaMap,
+            bootUrl: entry.bootUrl,
+          }
           : entry.type === 'configured_html' ? {
             moviePathTemplate: entry.moviePathTemplate,
             episodePathTemplate: entry.episodePathTemplate,

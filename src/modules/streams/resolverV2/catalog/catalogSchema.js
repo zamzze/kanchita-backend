@@ -2,6 +2,8 @@
 
 const { normalizeBaseUrl } = require('../providers/configuredHttpSourceProvider');
 const { normalizeMediaMap } = require('../providers/peerTubeSourceProvider');
+const { normalizeMediaMap: normalizePlutoMediaMap } =
+  require('../providers/plutoSourceProvider');
 const { normalizeDomains, normalizePatterns } = require('../resolvers/configuredHttpResolver');
 const { normalizeSelectors } = require('../html/staticHtmlExtractor');
 const { normalizeMediaPathTemplate } = require('../html/mediaPathTemplate');
@@ -65,6 +67,22 @@ const normalizeSource = (entry) => {
     return Object.freeze({ id, type: 'peertube', enabled, priority,
       baseUrl: peerBaseUrl || '', timeoutMs, maxCandidates, supportsMovies,
       supportsEpisodes, mediaMap });
+  }
+  if (entry.type === 'pluto') {
+    const allowed = new Set(['id', 'type', 'enabled', 'priority', 'baseUrl', 'bootUrl',
+      'timeoutMs', 'maxCandidates', 'mediaMap', 'supportsMovies', 'supportsEpisodes']);
+    if (Object.keys(entry).some((key) => !allowed.has(key))) return null;
+    const mediaMap = normalizePlutoMediaMap(entry.mediaMap);
+    const plutoBaseUrl = typeof entry.baseUrl === 'string' && normalizeBaseUrl(entry.baseUrl)
+      ? normalizeBaseUrl(entry.baseUrl).toString().replace(/\/$/, '') : null;
+    const plutoBootUrl = typeof entry.bootUrl === 'string' && normalizeBaseUrl(entry.bootUrl)
+      ? normalizeBaseUrl(entry.bootUrl).toString().replace(/\/$/, '') : null;
+    if (!id || enabled === null || priority === null || timeoutMs === null ||
+        maxCandidates === null || supportsMovies === null || supportsEpisodes === null ||
+        mediaMap === null || (enabled && (!plutoBaseUrl || !plutoBootUrl))) return null;
+    return Object.freeze({ id, type: 'pluto', enabled, priority,
+      baseUrl: plutoBaseUrl || '', bootUrl: plutoBootUrl || '', timeoutMs,
+      maxCandidates, supportsMovies, supportsEpisodes, mediaMap });
   }
   if (entry.type === 'configured_html') {
     const allowed = new Set(['id', 'type', 'enabled', 'priority', 'baseUrl', 'timeoutMs',
