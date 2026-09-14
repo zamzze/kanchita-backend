@@ -16,6 +16,7 @@ const ERROR_CODES = Object.freeze({
 const JSON_CONTENT_TYPE = /^application\/(?:[a-z0-9!#$&^_.+-]+\+)?json(?:\s*;|$)/i;
 const PLUTO_ID = /^[A-Za-z0-9_-]{6,128}$/;
 const MAX_MAPPINGS = 256;
+const MAX_DISCOVERY_ITEMS = 20;
 const DEFAULT_BOOT_URL = 'https://boot.pluto.tv/v4/start';
 const DEFAULT_BASE_URL = 'https://api.pluto.tv';
 const DEFAULT_MAX_BYTES = 2 * 1024 * 1024;
@@ -112,6 +113,40 @@ const findPlutoItem = (payload, plutoId) => {
   return null;
 };
 
+const contentKind = (item) => {
+  const declared = [item?.type, item?.contentType, item?.kind]
+    .find((value) => typeof value === 'string')?.toLowerCase() || '';
+  if (declared.includes('episode') || Number.isInteger(item?.episodeNumber) ||
+      Number.isInteger(item?.episode)) return 'episode';
+  if (declared.includes('movie') || declared.includes('film')) return 'movie';
+  return firstHlsUrl(item) ? 'movie' : 'unknown';
+};
+
+const discoverPlutoItem = (payload, limit = MAX_DISCOVERY_ITEMS) => {
+  const boundedLimit = Number.isInteger(limit) && limit >= 1
+    ? Math.min(limit, MAX_DISCOVERY_ITEMS) : MAX_DISCOVERY_ITEMS;
+  const queue = Array.isArray(payload?.categories) ? [...payload.categories] : [payload];
+  const seen = new Set();
+  let itemsChecked = 0;
+  for (let index = 0; index < queue.length && itemsChecked < boundedLimit; index += 1) {
+    const item = queue[index];
+    if (!item || typeof item !== 'object' || Array.isArray(item) || seen.has(item)) continue;
+    seen.add(item);
+    const plutoId = typeof item._id === 'string' ? item._id
+      : typeof item.id === 'string' ? item.id : '';
+    if (PLUTO_ID.test(plutoId)) {
+      itemsChecked += 1;
+      const url = firstHlsUrl(item);
+      if (url) return Object.freeze({ plutoId, contentKind: contentKind(item), itemsChecked });
+    }
+    for (const value of Object.values(item)) {
+      if (Array.isArray(value)) queue.push(...value);
+      else if (value && typeof value === 'object') queue.push(value);
+    }
+  }
+  return Object.freeze({ plutoId: null, contentKind: null, itemsChecked });
+};
+
 const safeJson = (response) => {
   const contentType = response?.headers?.['content-type'];
   if (typeof contentType !== 'string' || !JSON_CONTENT_TYPE.test(contentType.trim())) {
@@ -127,10 +162,13 @@ const safeJson = (response) => {
 const createBootUrl = ({ bootUrl, deviceId, sessionId }) => {
   const url = new URL(bootUrl);
   url.searchParams.set('appName', 'web');
+  url.searchParams.set('appVersion', '1.0.0');
   url.searchParams.set('deviceType', 'web');
   url.searchParams.set('deviceMake', 'web');
   url.searchParams.set('deviceModel', 'web');
   url.searchParams.set('deviceVersion', 'unknown');
+  url.searchParams.set('clientID', deviceId);
+  url.searchParams.set('clientModelNumber', '1.0.0');
   url.searchParams.set('sid', sessionId);
   url.searchParams.set('deviceId', deviceId);
   return url.href;
@@ -158,7 +196,7 @@ const createPlutoSourceProvider = ({
   const mappings = normalizeMediaMap(mediaMap);
   if (typeof id !== 'string' || !/^[a-z0-9][a-z0-9_-]{0,127}$/.test(id) ||
       typeof enabled !== 'boolean' || !Number.isInteger(priority) ||
-      !Number.isInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > 10_000 ||
+      !Number.isInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > 30_000 ||
       !Number.isInteger(maxCandidates) || maxCandidates < 1 || maxCandidates > 32 ||
       !Number.isInteger(maxBytes) || maxBytes < 1 || maxBytes > 8 * 1024 * 1024 ||
       !Number.isInteger(maxRedirects) || maxRedirects < 0 || maxRedirects > 10 ||
@@ -206,25 +244,48 @@ const createPlutoSourceProvider = ({
     return state.token;
   };
 
-  const getSources = async (mediaContext, runtime = {}) => {
-    if (!active) return [];
-    const mapping = mappingByKey.get(mediaKey(mediaContext));
-    if (!mapping) return [];
-    const client = runtime.http || http;
-    if (!client || typeof client.get !== 'function') {
-      throw providerError(ERROR_CODES.INVALID_CONFIG);
-    }
-    const token = await boot(client, runtime.signal);
+  const getCatalog = async (client, token, signal, { discovery = false } = {}) => {
     const basePath = parsedBaseUrl.pathname === '/' ? '' : parsedBaseUrl.pathname;
     const requestUrl = new URL(`${basePath}/v3/vod/categories`, parsedBaseUrl.origin);
     requestUrl.searchParams.set('includeItems', 'true');
     requestUrl.searchParams.set('deviceType', 'web');
-    requestUrl.searchParams.set('offset', '1000');
-    const payload = await requestJson(client, requestUrl.href, {
-      signal: runtime.signal,
+    requestUrl.searchParams.set('offset', discovery ? '0' : '1000');
+    if (discovery) requestUrl.searchParams.set('limit', String(MAX_DISCOVERY_ITEMS));
+    return requestJson(client, requestUrl.href, {
+      signal,
       headers: { authorization: `Bearer ${token}`, origin: 'https://pluto.tv',
         referer: 'https://pluto.tv/' },
     });
+  };
+
+  const clientFrom = (runtime) => {
+    const client = runtime.http || http;
+    if (!client || typeof client.get !== 'function') {
+      throw providerError(ERROR_CODES.INVALID_CONFIG);
+    }
+    return client;
+  };
+
+  const discoverPublicItem = async (runtime = {}) => {
+    if (!active) return Object.freeze({ plutoId: null, contentKind: null, itemsChecked: 0 });
+    const client = clientFrom(runtime);
+    const token = await boot(client, runtime.signal);
+    if (typeof runtime.onStage === 'function') runtime.onStage('boot');
+    const payload = await getCatalog(client, token, runtime.signal, { discovery: true });
+    if (typeof runtime.onStage === 'function') runtime.onStage('catalog');
+    if (payload === null) {
+      return Object.freeze({ plutoId: null, contentKind: null, itemsChecked: 0 });
+    }
+    return discoverPlutoItem(payload, runtime.maxItems);
+  };
+
+  const getSources = async (mediaContext, runtime = {}) => {
+    if (!active) return [];
+    const mapping = mappingByKey.get(mediaKey(mediaContext));
+    if (!mapping) return [];
+    const client = clientFrom(runtime);
+    const token = await boot(client, runtime.signal);
+    const payload = await getCatalog(client, token, runtime.signal);
     if (payload === null) return [];
     const item = findPlutoItem(payload, mapping.plutoId);
     if (!item) return [];
@@ -252,6 +313,7 @@ const createPlutoSourceProvider = ({
       timeoutMs,
       maxCandidates,
     }),
+    discoverPublicItem,
     getSources,
   });
 };
@@ -260,8 +322,10 @@ module.exports = {
   DEFAULT_BASE_URL,
   DEFAULT_BOOT_URL,
   ERROR_CODES,
+  MAX_DISCOVERY_ITEMS,
   MAX_MAPPINGS,
   createPlutoSourceProvider,
+  discoverPlutoItem,
   findPlutoItem,
   firstHlsUrl,
   normalizeMediaMap,
