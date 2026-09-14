@@ -165,6 +165,55 @@ const createSafeHttpClient = ({
     request.end();
   });
 
+  const performSingleStreamingRequest = (url, {
+    method, headers, addresses, remainingMs, signal,
+  }) => new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(clientError('HTTP_ABORTED'));
+    let settled = false;
+    let request;
+    let response;
+    const cleanup = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+    };
+    const fail = (error) => {
+      response?.destroy(error);
+      request?.destroy(error);
+      if (!settled) {
+        settled = true;
+        cleanup();
+        reject(error);
+      }
+    };
+    const onAbort = () => fail(clientError('HTTP_ABORTED'));
+    const timer = setTimeout(() => fail(clientError('HTTP_TIMEOUT')), remainingMs);
+    signal?.addEventListener('abort', onAbort, { once: true });
+    try {
+      request = requestImpl(url, {
+        method, headers, agent: false, lookup: pinnedLookup(addresses),
+      }, (incoming) => {
+        response = incoming;
+        const status = Number(incoming.statusCode) || 0;
+        const responseHeaders = normalizeResponseHeaders(incoming.headers);
+        if (!settled) {
+          settled = true;
+          incoming.once('end', cleanup);
+          incoming.once('close', cleanup);
+          resolve({ status, headers: responseHeaders, body: incoming,
+            abort: () => request.destroy(clientError('HTTP_ABORTED')) });
+        }
+      });
+    } catch {
+      fail(clientError('HTTP_CONNECTION_ERROR'));
+      return;
+    }
+    request.once('error', (error) => {
+      if (!settled) fail(error?.code?.startsWith('HTTP_')
+        ? error : clientError('HTTP_CONNECTION_ERROR'));
+    });
+    request.end();
+  });
+
   const request = async (rawMethod, rawUrl, options = {}) => {
     const startedAt = now();
     const method = normalizeMethod(rawMethod);
@@ -259,11 +308,61 @@ const createSafeHttpClient = ({
     }
   };
 
+  const stream = async (rawUrl, options = {}) => {
+    const startedAt = now();
+    const initialUrl = parseHttpUrl(rawUrl);
+    if (!initialUrl) throw clientError('HTTP_INVALID_URL');
+    if (!options || typeof options !== 'object' || Array.isArray(options)) {
+      throw clientError('HTTP_INVALID_HEADERS');
+    }
+    const timeoutMs = positiveInteger(options.timeoutMs, positiveInteger(defaultTimeoutMs, 12_000));
+    const maxRedirects = nonNegativeInteger(options.maxRedirects,
+      nonNegativeInteger(defaultMaxRedirects, 4));
+    const allowPrivateNetworks = options.allowPrivateNetworks ?? defaultAllowPrivateNetworks;
+    if (typeof allowPrivateNetworks !== 'boolean') throw clientError('HTTP_UNSAFE_DESTINATION');
+    const signal = options.signal || null;
+    if (signal?.aborted) throw clientError('HTTP_ABORTED');
+    let currentUrl = initialUrl;
+    let currentHeaders = normalizeRequestHeaders(options.headers);
+    if (!currentHeaders['user-agent']) currentHeaders['user-agent'] = userAgent;
+    if (!currentHeaders['accept-encoding']) currentHeaders['accept-encoding'] = 'identity';
+    const deadline = startedAt + timeoutMs;
+    for (let redirects = 0; ; redirects += 1) {
+      let remainingMs = deadline - now();
+      if (remainingMs < 1) throw clientError('HTTP_TIMEOUT');
+      const addresses = await withDeadline(resolveDestination(currentUrl, {
+        dnsLookup, allowPrivateNetworks, unsafeCode: 'HTTP_UNSAFE_DESTINATION',
+      }), remainingMs, { signal });
+      remainingMs = deadline - now();
+      if (remainingMs < 1) throw clientError('HTTP_TIMEOUT');
+      const response = await performSingleStreamingRequest(currentUrl, {
+        method: 'GET', headers: currentHeaders, addresses, remainingMs, signal,
+      });
+      if (!REDIRECT_STATUSES.has(response.status)) {
+        return { ...response, ok: response.status >= 200 && response.status < 300,
+          url: currentUrl.toString(), redirects,
+          latencyMs: Math.max(0, now() - startedAt) };
+      }
+      response.body.resume();
+      if (redirects >= maxRedirects) throw clientError('HTTP_TOO_MANY_REDIRECTS');
+      const location = response.headers.location;
+      let nextUrl = null;
+      try { nextUrl = parseHttpUrl(new URL(location, currentUrl).toString()); } catch { /* invalid */ }
+      if (!nextUrl) throw clientError('HTTP_REDIRECT_ERROR');
+      if (currentUrl.origin !== nextUrl.origin) {
+        currentHeaders = Object.fromEntries(Object.entries(currentHeaders)
+          .filter(([name]) => !SENSITIVE_REDIRECT_HEADERS.has(name)));
+      }
+      currentUrl = nextUrl;
+    }
+  };
+
   return {
     request,
     get: (url, options) => request('GET', url, options),
     head: (url, options) => request('HEAD', url, options),
     post: (url, options) => request('POST', url, options),
+    stream,
   };
 };
 

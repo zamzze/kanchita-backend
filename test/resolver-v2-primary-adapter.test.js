@@ -18,13 +18,18 @@ test('accepted V2 HLS maps exactly to the existing lifecycle resolver shape', ()
     url: 'https://media.example.test/master.m3u8', provider: 'source_a', serverName: 'V2',
     strategy: 'direct', cleanliness: 'unknown', quality: '1080p', language: 'es-419',
     audioLanguage: 'es-419', subtitleLanguage: 'es',
-    expiresAt: '2030-01-01T00:05:00.000Z', validated: true,
+    expiresAt: '2030-01-01T00:05:00.000Z', validated: true, playbackHeaders: {},
   });
 });
 
-test('adapter never drops headers or adapts unsupported/unvalidated streams', () => {
+test('adapter preserves only safe playback headers and rejects other unsupported streams', () => {
+  assert.deepEqual(adaptV2ToLegacyResult(candidate({ headers: {
+    Referer: 'https://player.example.test/watch', Origin: 'https://player.example.test',
+  } })).playbackHeaders, {
+    referer: 'https://player.example.test/watch', origin: 'https://player.example.test',
+  });
   for (const fixture of [
-    candidate({ headers: { referer: 'https://player.example.test' } }),
+    candidate({ headers: { cookie: 'private' } }),
     candidate({ protocol: 'mp4' }), candidate({ validated: false }),
     candidate({ metadata: { resolverStrategy: 'browser' } }), { invalid: true },
   ]) {

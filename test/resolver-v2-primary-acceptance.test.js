@@ -51,11 +51,23 @@ test('expiry margin rejects expired and less than sixty seconds', () => {
   }
 });
 
-test('any playback header is unsupported and summaries stay safe', () => {
-  for (const name of ['referer', 'origin', 'cookie', 'authorization', 'user-agent']) {
-    const result = gate.evaluate(candidate({ headers: { [name]: 'fixture-secret' } }));
-    assert.equal(result.code, PRIMARY_CODES.HEADERS_UNSUPPORTED);
+test('playback headers require transport while invalid and unsupported values differ', () => {
+  for (const [name, value, code] of [
+    ['referer', 'https://player.example.test/watch', PRIMARY_CODES.HEADERS_UNSUPPORTED],
+    ['origin', 'https://player.example.test', PRIMARY_CODES.HEADERS_UNSUPPORTED],
+    ['origin', 'fixture-secret', PRIMARY_CODES.HEADERS_INVALID],
+    ['cookie', 'fixture-secret', PRIMARY_CODES.HEADERS_UNSUPPORTED],
+    ['authorization', 'fixture-secret', PRIMARY_CODES.HEADERS_UNSUPPORTED],
+    ['user-agent', 'fixture-secret', PRIMARY_CODES.HEADERS_UNSUPPORTED],
+  ]) {
+    const result = gate.evaluate(candidate({ headers: { [name]: value } }));
+    assert.equal(result.code, code);
     assert.doesNotMatch(JSON.stringify(result.summary),
       /https?:|fixture-secret|authorization|cookie|referer|origin|token|provider|resolverId/i);
   }
+  const proxyGate = createPrimaryAcceptanceGate({ now: () => now,
+    playbackTransportAvailable: true });
+  assert.equal(proxyGate.evaluate(candidate({ headers: {
+    Referer: 'https://player.example.test/watch', Origin: 'https://player.example.test',
+  } })).code, PRIMARY_CODES.ACCEPTED);
 });

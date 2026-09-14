@@ -2,6 +2,7 @@
 
 const { createStreamStore } = require('../../db/streams.queries');
 const { inspectManifestCleanliness } = require('./streamCleanlinessInspector');
+const { playbackHeadersOrNull } = require('./playbackHeaders');
 
 const processingError = (code) => {
   const error = new Error('Stream processing failed');
@@ -44,6 +45,7 @@ const createStreamLifecycle = ({
   logger = console,
   cacheTtlMinutes,
   verifyIntervalMinutes,
+  playbackTransportAvailable = false,
 } = {}) => {
   const store = createStreamStore(db);
   const ttlMs = cacheTtlMinutes * 60 * 1000;
@@ -58,7 +60,12 @@ const createStreamLifecycle = ({
       return null;
     }
 
-    const validation = await validator(stream.stream_url);
+    const playbackHeaders = playbackHeadersOrNull(stream.playback_headers);
+    if (!playbackHeaders) {
+      await store.markStale(stream.id);
+      return null;
+    }
+    const validation = await validator(stream.stream_url, { headers: playbackHeaders });
     if (!validation.valid) {
       logger.warn(`[Streams] validation failed: ${validation.code}`);
       await store.markStale(stream.id);
@@ -77,9 +84,12 @@ const createStreamLifecycle = ({
 
   const readUsableCache = async (contentType, contentId, { validate = false } = {}) => {
     const streams = await store.findDirectStreams(contentType, contentId);
+    const transportable = (stream) => {
+      const headers = playbackHeadersOrNull(stream.playback_headers);
+      return headers && (Object.keys(headers).length === 0 || playbackTransportAvailable);
+    };
     const fresh = streams.filter((stream) =>
-      isFreshReadyStream(stream, verifyIntervalMs)
-    );
+      transportable(stream) && isFreshReadyStream(stream, verifyIntervalMs));
     if (fresh.length > 0) {
       logger.log('[Streams] cache hit');
       return { streams: fresh, all: streams, backoff: false };
@@ -91,7 +101,7 @@ const createStreamLifecycle = ({
 
     if (validate) {
       for (const stream of streams) {
-        if (stream.status !== 'failed') {
+        if (stream.status !== 'failed' && transportable(stream)) {
           const valid = await validateCandidate(stream);
           if (valid) return { streams: [valid], all: streams, backoff: false };
         }
@@ -181,6 +191,10 @@ const createStreamLifecycle = ({
       return recordFailure(contentType, contentId, candidate, 'RESOLUTION_FAILED');
     }
 
+    const resolvedPlaybackHeaders = playbackHeadersOrNull(resolved.playbackHeaders);
+    if (resolved.playbackHeaders != null && !resolvedPlaybackHeaders) {
+      return recordFailure(contentType, contentId, candidate, 'RESOLUTION_FAILED');
+    }
     return store.upsertStream({
       content_type: contentType,
       content_id: contentId,
@@ -204,6 +218,8 @@ const createStreamLifecycle = ({
       last_failure_at: null,
       next_retry_at: null,
       last_error_code: null,
+      playback_headers: resolvedPlaybackHeaders && Object.keys(resolvedPlaybackHeaders).length
+        ? resolvedPlaybackHeaders : null,
     });
   };
 

@@ -10,6 +10,7 @@ const {
   pinnedLookup,
   withDeadline: withSafeDeadline,
 } = require('./http/safeNetwork');
+const { playbackHeadersOrNull } = require('./playbackHeaders');
 
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 
@@ -34,7 +35,7 @@ const resolveDestination = async (url, {
   }
 };
 
-const requestManifest = (url, { addresses, timeoutMs, maxBytes }) =>
+const requestManifest = (url, { addresses, timeoutMs, maxBytes, headers = {} }) =>
   new Promise((resolve, reject) => {
     const transport = url.protocol === 'https:' ? https : http;
     let settled = false;
@@ -51,6 +52,7 @@ const requestManifest = (url, { addresses, timeoutMs, maxBytes }) =>
       lookup: pinnedLookup(addresses),
       headers: {
         Accept: 'application/vnd.apple.mpegurl, application/x-mpegURL, text/plain;q=0.8',
+        ...headers,
       },
     });
 
@@ -111,9 +113,12 @@ const createHlsValidator = ({
   requestImpl = requestManifest,
   allowPrivateNetworks = false,
   includeManifest = false,
-} = {}) => async (candidate) => {
+} = {}) => async (candidate, options = {}) => {
   let currentUrl = parseHttpUrl(candidate);
   if (!currentUrl) return { valid: false, code: 'HLS_INVALID_URL' };
+  const playbackHeaders = playbackHeadersOrNull(options.headers);
+  if (!playbackHeaders) return { valid: false, code: 'HLS_INVALID_URL' };
+  let currentHeaders = playbackHeaders;
   const deadline = Date.now() + timeoutMs;
 
   try {
@@ -130,6 +135,7 @@ const createHlsValidator = ({
         addresses,
         timeoutMs: requestRemainingMs,
         maxBytes,
+        headers: currentHeaders,
       });
 
       if (REDIRECT_STATUSES.has(response.status)) {
@@ -137,7 +143,9 @@ const createHlsValidator = ({
           return { valid: false, code: 'HLS_TOO_MANY_REDIRECTS' };
         }
         if (!response.location) return { valid: false, code: 'HLS_HTTP_ERROR' };
-        currentUrl = parseHttpUrl(new URL(response.location, currentUrl).toString());
+        const nextUrl = parseHttpUrl(new URL(response.location, currentUrl).toString());
+        if (nextUrl && nextUrl.origin !== currentUrl.origin) currentHeaders = {};
+        currentUrl = nextUrl;
         if (!currentUrl) return { valid: false, code: 'HLS_INVALID_URL' };
         continue;
       }

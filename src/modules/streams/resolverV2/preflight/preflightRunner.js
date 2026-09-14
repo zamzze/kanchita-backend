@@ -292,7 +292,10 @@ const createPreflightRunner = ({
       const acceptanceSummary = Object.freeze({
         accepted: gate.accepted,
         code: gate.code,
-        headersSupported: gate.code !== PRIMARY_CODES.HEADERS_UNSUPPORTED,
+        headersSupported: ![
+          PRIMARY_CODES.HEADERS_UNSUPPORTED,
+          PRIMARY_CODES.HEADERS_INVALID,
+        ].includes(gate.code),
       });
       const common = { mediaType: mediaContext.contentType, sourceSummary,
         resolverSummary, rankingSummary, acceptanceSummary };

@@ -1,13 +1,14 @@
 'use strict';
 
 const pool = require('../config/db');
+const { playbackHeadersOrNull } = require('../modules/streams/playbackHeaders');
 
 const streamColumns = `
   id, server_name, quality, language, stream_url, embed_url,
   stream_type, priority, is_active, provider, status, expires_at,
   resolved_at, last_verified_at, failure_count, last_failure_at,
   next_retry_at, last_error_code, audio_language, subtitle_language,
-  cleanliness`;
+  cleanliness, playback_headers`;
 
 const createStreamStore = (db = pool) => {
   const findStreams = async (contentType, contentId) => {
@@ -124,16 +125,22 @@ const createStreamStore = (db = pool) => {
   };
 
   const upsertStreamWithClient = async (client, stream) => {
+    const playbackHeaders = playbackHeadersOrNull(stream.playback_headers);
+    if (stream.playback_headers != null && !playbackHeaders) {
+      const error = new Error('STREAM_PLAYBACK_HEADERS_INVALID');
+      error.code = 'STREAM_PLAYBACK_HEADERS_INVALID';
+      throw error;
+    }
     const { rows } = await client.query(
       `INSERT INTO streams (
          content_type, content_id, server_name, quality, language,
          stream_url, embed_url, stream_type, priority, is_active,
          provider, status, expires_at, resolved_at, last_verified_at,
          failure_count, last_failure_at, next_retry_at, last_error_code,
-         audio_language, subtitle_language, cleanliness
+         audio_language, subtitle_language, cleanliness, playback_headers
        ) VALUES (
          $1, $2, $3, $4, $5, $6, $7, $8, $9, TRUE,
-         $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21
+         $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22
        )
        ON CONFLICT ON CONSTRAINT streams_content_server_unique
        DO UPDATE SET
@@ -155,7 +162,8 @@ const createStreamStore = (db = pool) => {
          last_error_code = EXCLUDED.last_error_code,
          audio_language = EXCLUDED.audio_language,
          subtitle_language = EXCLUDED.subtitle_language,
-         cleanliness = EXCLUDED.cleanliness
+         cleanliness = EXCLUDED.cleanliness,
+         playback_headers = EXCLUDED.playback_headers
        RETURNING ${streamColumns}`,
       [
         stream.content_type,
@@ -179,12 +187,25 @@ const createStreamStore = (db = pool) => {
         stream.audio_language || null,
         stream.subtitle_language || null,
         stream.cleanliness || 'unknown',
+        playbackHeaders && Object.keys(playbackHeaders).length ? playbackHeaders : null,
       ]
     );
     return rows[0];
   };
 
   const upsertStream = (stream) => upsertStreamWithClient(db, stream);
+
+  const findProxyStream = async (streamId) => {
+    const { rows } = await db.query(
+      `SELECT ${streamColumns}
+       FROM streams
+       WHERE id = $1 AND is_active = TRUE AND status = 'ready'
+         AND stream_url IS NOT NULL
+         AND (expires_at IS NULL OR expires_at > NOW())`,
+      [streamId]
+    );
+    return rows[0] || null;
+  };
 
   return {
     findStreams,
@@ -195,6 +216,7 @@ const createStreamStore = (db = pool) => {
     recordRefreshFailure,
     upsertStream,
     upsertStreamWithClient,
+    findProxyStream,
   };
 };
 

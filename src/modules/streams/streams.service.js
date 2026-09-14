@@ -10,6 +10,8 @@ const { createStreamLifecycle } = require('./streamLifecycle');
 const { createStreamStatsStore } = require('./streamStats');
 const { createMetricsStore } = require('./streamMetrics');
 const { createStreamPrewarm } = require('./streamPrewarm');
+const { createHlsProxy } = require('./hlsProxy');
+const { playbackHeadersOrNull } = require('./playbackHeaders');
 const {
   STREAM_CACHE_TTL_MINUTES,
   STREAM_VERIFY_INTERVAL_MINUTES,
@@ -19,6 +21,9 @@ const {
   STREAM_PENDING_RETRY_SECONDS,
   STREAM_REFRESH_AHEAD_MINUTES,
   STREAM_PREWARM_NEXT_EPISODE,
+  STREAM_HLS_PROXY_ENABLED,
+  STREAM_HLS_PROXY_SIGNING_SECRET,
+  API_BASE_URL,
 } = require('../../config/env');
 
 const unavailableError = () => {
@@ -38,19 +43,24 @@ const notFoundError = (contentType) => {
   return error;
 };
 
-const formatResponse = (streams, contentId, contentType, subtitleUrl = null) => {
-  const serialized = streams.map((stream) => ({
+const formatResponse = (streams, contentId, contentType, subtitleUrl = null, proxy = null) => {
+  const serialized = streams.map((stream) => {
+    const playbackHeaders = playbackHeadersOrNull(stream.playback_headers);
+    const needsProxy = playbackHeaders && Object.keys(playbackHeaders).length > 0;
+    return ({
     server_name: stream.server_name,
     quality: stream.quality || 'auto',
     language: stream.language,
     audio_language: stream.audio_language || null,
     subtitle_language: stream.subtitle_language || null,
-    stream_url: stream.stream_url || null,
+    stream_url: playbackHeaders === null ? null : needsProxy
+      ? proxy?.createPlaybackUrl(stream) || null : stream.stream_url || null,
     embed_url: stream.embed_url || null,
     stream_type: stream.stream_type,
     priority: stream.priority,
     expires_at: stream.expires_at || null,
-  }));
+    });
+  });
   const primary = serialized[0] || null;
   return {
   status: 'ready',
@@ -105,6 +115,9 @@ const createStreamsService = ({
   prewarmNextEpisode = STREAM_PREWARM_NEXT_EPISODE,
   metrics = createMetricsStore(db),
   stats = createStreamStatsStore(db),
+  proxy = createHlsProxy({ enabled: STREAM_HLS_PROXY_ENABLED,
+    secret: STREAM_HLS_PROXY_SIGNING_SECRET, publicBaseUrl: API_BASE_URL,
+    store: require('../../db/streams.queries').createStreamStore(db) }),
 } = {}) => {
   const lifecycle = createStreamLifecycle({
     db,
@@ -112,6 +125,7 @@ const createStreamsService = ({
     logger,
     cacheTtlMinutes,
     verifyIntervalMinutes,
+    playbackTransportAvailable: proxy.available === true,
   });
   const prewarm = createStreamPrewarm({
     db,
@@ -166,7 +180,7 @@ const createStreamsService = ({
         await prewarm.prepareNextEpisode(contentId);
       }
       const subtitleUrl = await fetchSubtitle(contentType, contentId, content);
-      return formatResponse(cache.streams, contentId, contentType, subtitleUrl);
+      return formatResponse(cache.streams, contentId, contentType, subtitleUrl, proxy);
     }
     await metrics.increment('cache_miss_total');
     if (cache.backoff) {

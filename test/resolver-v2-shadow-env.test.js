@@ -37,6 +37,8 @@ delete process.env.STREAM_RESOLVER_V2_HEALTH_ENABLED;
 delete process.env.STREAM_RESOLVER_V2_FAILURE_THRESHOLD;
 delete process.env.STREAM_RESOLVER_V2_COOLDOWN_SECONDS;
 delete process.env.STREAM_RESOLVER_V2_HALF_OPEN_SUCCESS_THRESHOLD;
+delete process.env.STREAM_HLS_PROXY_ENABLED;
+delete process.env.STREAM_HLS_PROXY_SIGNING_SECRET;
 
 const env = require('../src/config/env');
 
@@ -179,4 +181,11 @@ test('V2 health defaults enabled with independent bounded settings', () => {
     assert.equal(env.boundedPositiveInteger(name, fallback, minimum, maximum), fallback);
     delete process.env[name];
   }
+});
+
+test('HLS playback proxy is disabled and secretless by default', () => {
+  assert.equal(env.STREAM_HLS_PROXY_ENABLED, false);
+  assert.equal(env.STREAM_HLS_PROXY_SIGNING_SECRET, '');
+  assert.equal(env.isExplicitlyEnabled('true'), true);
+  assert.equal(env.isExplicitlyEnabled('TRUE'), false);
 });

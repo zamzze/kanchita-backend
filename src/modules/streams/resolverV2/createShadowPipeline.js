@@ -24,6 +24,7 @@ const { createPrimaryResolver } = require('./primaryResolver');
 const { createPrimaryStats } = require('./observability/primaryStats');
 const { loadResolverV2Catalog } = require('./catalog/catalogLoader');
 const { buildResolverV2CatalogRuntime } = require('./catalog/catalogRuntimeBuilder');
+const { isPlaybackTransportConfigured } = require('../playbackHeaders');
 const PRODUCT_RESOLVER_MAX_DEPTH = 2;
 const PRODUCT_RESOLVER_MAX_NODES = 16;
 const {
@@ -47,6 +48,9 @@ const {
   STREAM_RESOLVER_V2_PRIMARY_TIMEOUT_MS,
   STREAM_RESOLVER_V2_CATALOG_ENABLED,
   STREAM_RESOLVER_V2_CATALOG_PATH,
+  STREAM_HLS_PROXY_ENABLED,
+  STREAM_HLS_PROXY_SIGNING_SECRET,
+  API_BASE_URL,
 } = require('../../../config/env');
 
 const createShadowPipeline = ({
@@ -75,6 +79,10 @@ const createShadowPipeline = ({
   primaryAcceptanceGate = null,
   primaryStats = null,
   primaryMetrics = null,
+  playbackTransportAvailable = isPlaybackTransportConfigured({
+    enabled: STREAM_HLS_PROXY_ENABLED, secret: STREAM_HLS_PROXY_SIGNING_SECRET,
+    publicBaseUrl: API_BASE_URL || '',
+  }),
   catalogEnabled = STREAM_RESOLVER_V2_CATALOG_ENABLED,
   catalogPath = STREAM_RESOLVER_V2_CATALOG_PATH,
   catalogReadFile,
@@ -214,7 +222,9 @@ const createShadowPipeline = ({
   const activePrimaryResolver = primaryResolver || createPrimaryResolver({
     pipeline: activePipeline,
     ranker: activeRanker,
-    acceptanceGate: primaryAcceptanceGate || createPrimaryAcceptanceGate(),
+    acceptanceGate: primaryAcceptanceGate || createPrimaryAcceptanceGate({
+      playbackTransportAvailable,
+    }),
     enabled: primaryEnabled,
     timeoutMs: primaryTimeoutMs,
     metrics: primaryMetrics,

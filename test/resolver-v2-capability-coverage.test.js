@@ -8,6 +8,7 @@ const { test } = require('node:test');
 const {
   CAPABILITY_STATES,
   V2_CAPABILITY_MATRIX,
+  createV2CapabilityMatrix,
 } = require('../src/modules/streams/resolverV2/diagnostics/v2CapabilityMatrix');
 const {
   classifyServerCoverage,
@@ -35,11 +36,21 @@ test('capability matrix separates primary, resolution-only and unsupported layer
   }
   for (const name of ['header_bound', 'playback_header_bound']) {
     assert.equal(V2_CAPABILITY_MATRIX[name].state, SUPPORTED_RESOLUTION_ONLY);
+    assert.equal(createV2CapabilityMatrix({ playbackHeaders: true })[name].state,
+      SUPPORTED_PRIMARY);
   }
   for (const name of ['cookie_session', 'javascript_transform', 'browser_required',
     'anti_bot', 'drm_or_protected', 'unknown']) {
     assert.equal(V2_CAPABILITY_MATRIX[name].state, NOT_SUPPORTED);
   }
+});
+
+test('header-bound coverage becomes primary only when playback transport is enabled', () => {
+  assert.equal(classifyServerCoverage(entry(['header_bound'])).coverage, 'resolution_only');
+  assert.equal(classifyServerCoverage(entry(['header_bound']), { playbackHeaders: true }).coverage,
+    'primary');
+  assert.equal(createCoverageSummary([entry(['playback_header_bound'])],
+    { playbackHeaders: true }).primaryCompatible, 1);
 });
 
 test('coverage classification follows deterministic blocker precedence', () => {

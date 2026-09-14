@@ -2,6 +2,7 @@
 
 const { normalizeStreamCandidate } = require('./resolverContracts');
 const { normalizeLanguage, normalizeQuality } = require('../streamAttributes');
+const { playbackHeadersOrNull } = require('../playbackHeaders');
 
 const ADAPTER_ERROR_CODE = 'V2_LEGACY_ADAPTER_INVALID_INPUT';
 const adapterError = () => Object.assign(new Error(ADAPTER_ERROR_CODE), {
@@ -10,8 +11,8 @@ const adapterError = () => Object.assign(new Error(ADAPTER_ERROR_CODE), {
 
 const adaptV2ToLegacyResult = (candidate) => {
   const stream = normalizeStreamCandidate(candidate);
-  if (!stream || stream.validated !== true || stream.protocol !== 'hls' ||
-      Object.keys(stream.headers).length > 0 ||
+  const playbackHeaders = stream ? playbackHeadersOrNull(stream.headers) : null;
+  if (!stream || !playbackHeaders || stream.validated !== true || stream.protocol !== 'hls' ||
       !['direct', 'http'].includes(stream.metadata?.resolverStrategy)) {
     throw adapterError();
   }
@@ -31,6 +32,7 @@ const adaptV2ToLegacyResult = (candidate) => {
     subtitleLanguage: subtitleLanguage === 'unknown' ? null : subtitleLanguage,
     expiresAt: stream.expiresAt,
     validated: true,
+    playbackHeaders,
   });
 };
 

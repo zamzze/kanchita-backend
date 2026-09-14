@@ -2,6 +2,7 @@
 
 const { normalizeStreamCandidate } = require('./resolverContracts');
 const { classifyLanguage, qualityTier } = require('./ranking/streamRanker');
+const { normalizePlaybackHeaders, PLAYBACK_HEADER_CODES } = require('../playbackHeaders');
 
 const PRIMARY_MIN_EXPIRY_MS = 60_000;
 const PRIMARY_CODES = Object.freeze({
@@ -13,6 +14,7 @@ const PRIMARY_CODES = Object.freeze({
   EXPIRED: 'PRIMARY_EXPIRED',
   EXPIRING_TOO_SOON: 'PRIMARY_EXPIRING_TOO_SOON',
   HEADERS_UNSUPPORTED: 'PRIMARY_HEADERS_UNSUPPORTED',
+  HEADERS_INVALID: 'PRIMARY_HEADERS_INVALID',
   INCOMPATIBLE: 'PRIMARY_INCOMPATIBLE',
   UNKNOWN: 'PRIMARY_UNKNOWN',
 });
@@ -31,8 +33,10 @@ const safeSummary = (stream, code) => Object.freeze({
 const createPrimaryAcceptanceGate = ({
   now = Date.now,
   minimumExpiryMs = PRIMARY_MIN_EXPIRY_MS,
+  playbackTransportAvailable = false,
 } = {}) => {
-  if (typeof now !== 'function' || !Number.isInteger(minimumExpiryMs) || minimumExpiryMs < 0) {
+  if (typeof now !== 'function' || !Number.isInteger(minimumExpiryMs) || minimumExpiryMs < 0 ||
+      typeof playbackTransportAvailable !== 'boolean') {
     throw new Error('PRIMARY_GATE_INVALID_CONFIG');
   }
   const reject = (stream, code) => Object.freeze({
@@ -41,6 +45,11 @@ const createPrimaryAcceptanceGate = ({
   const evaluate = (candidate) => {
     if (candidate === null || candidate === undefined) {
       return reject(null, PRIMARY_CODES.NO_STREAM);
+    }
+    const rawPlaybackHeaders = normalizePlaybackHeaders(candidate?.headers);
+    if (!rawPlaybackHeaders.ok) {
+      return reject(null, rawPlaybackHeaders.code === PLAYBACK_HEADER_CODES.UNSUPPORTED
+        ? PRIMARY_CODES.HEADERS_UNSUPPORTED : PRIMARY_CODES.HEADERS_INVALID);
     }
     const stream = normalizeStreamCandidate(candidate);
     if (!stream) return reject(null, PRIMARY_CODES.INVALID_STREAM);
@@ -57,7 +66,7 @@ const createPrimaryAcceptanceGate = ({
     if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password) {
       return reject(stream, PRIMARY_CODES.INVALID_STREAM);
     }
-    if (Object.keys(stream.headers).length > 0) {
+    if (Object.keys(rawPlaybackHeaders.headers).length > 0 && !playbackTransportAvailable) {
       return reject(stream, PRIMARY_CODES.HEADERS_UNSUPPORTED);
     }
     if (!['direct', 'http'].includes(stream.metadata?.resolverStrategy)) {

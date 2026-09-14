@@ -304,6 +304,7 @@ test(
         failureCount: 0,
         nextRetryAt: null,
         errorCode: null,
+        playbackHeaders: null,
         ...overrides,
       };
       const { rows } = await pool.query(
@@ -311,10 +312,10 @@ test(
            content_type, content_id, server_name, quality, language,
            stream_url, stream_type, priority, provider, status,
            expires_at, resolved_at, last_verified_at, failure_count,
-           next_retry_at, last_error_code
+           next_retry_at, last_error_code, playback_headers
          ) VALUES (
            $1, $2, $3, 'auto', 'en-sub', $4, 'direct', 1, 'fixture', $5,
-           $6, $7, $8, $9, $10, $11
+           $6, $7, $8, $9, $10, $11, $12
          ) RETURNING *`,
         [
           contentType,
@@ -328,6 +329,7 @@ test(
           values.failureCount,
           values.nextRetryAt,
           values.errorCode,
+          values.playbackHeaders,
         ]
       );
       return rows[0];
@@ -342,7 +344,7 @@ test(
       };
     };
 
-    const makeService = ({ validator, logger = makeLogger() } = {}) => {
+    const makeService = ({ validator, logger = makeLogger(), proxy } = {}) => {
       const persistentQueue = createResolutionQueue(pool);
       let enqueueCalls = 0;
       const service = createStreamsService({
@@ -364,6 +366,7 @@ test(
         cacheTtlMinutes: 60,
         verifyIntervalMinutes: 10,
         pendingRetrySeconds: 2,
+        ...(proxy ? { proxy } : {}),
       });
       return { service, logger, enqueueCalls: () => enqueueCalls };
     };
@@ -423,6 +426,27 @@ test(
       assert.ok(stored.rows[0].expires_at);
       assert.ok(stored.rows[0].last_verified_at);
     });
+
+    await t.test('header-bound cache is validated with persisted headers and exposed only by proxy',
+      async () => {
+        const movie = await createContent('movie');
+        const referer = `${baseUrl}/embed`;
+        await insertStream('movie', movie.id, { verifiedAt: null,
+          playbackHeaders: { referer } });
+        let receivedHeaders = null;
+        const setup = makeService({
+          validator: async (_url, options) => {
+            receivedHeaders = options.headers;
+            return { valid: true, code: null };
+          },
+          proxy: { available: true, createPlaybackUrl: () => '/stream-proxy/opaque' },
+        });
+        const response = await setup.service.getMovieStreams(movie.id, null);
+        assert.deepEqual(receivedHeaders, { referer });
+        assert.equal(response.stream.url, '/stream-proxy/opaque');
+        assert.equal(response.streams[0].stream_url, '/stream-proxy/opaque');
+        assert.doesNotMatch(JSON.stringify(response), /\/embed|referer/i);
+      });
 
     await t.test('ready stream outside verification interval is validated, not resolved', async () => {
       const movie = await createContent('movie');

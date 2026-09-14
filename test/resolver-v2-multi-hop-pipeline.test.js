@@ -26,7 +26,7 @@ const media = { contentType: 'movie', contentId: 'm', tmdbId: 10, title: 'Movie'
 const close = (server) => new Promise((resolve) => { server.closeAllConnections?.(); server.close(resolve); });
 const client = () => createSafeHttpClient({ allowPrivateNetworks: true,
   dnsLookup: async () => [{ address: '127.0.0.1', family: 4 }] });
-const runtimeFor = (port, playbackHeaderPolicy = 'none') => {
+const runtimeFor = (port, playbackHeaderPolicy = 'none', playbackTransportAvailable = false) => {
   const catalog = { version: 1, sources: [{ id: 'html_source', type: 'configured_html',
     enabled: true, baseUrl: `http://source.example.test:${port}`,
     allowedCandidateDomains: ['a.example.test'],
@@ -37,6 +37,7 @@ const runtimeFor = (port, playbackHeaderPolicy = 'none') => {
     domains: ['b.example.test'], allowedMediaDomains: ['media.example.test'],
     playbackHeaderPolicy }] };
   return createShadowPipeline({ enabled: false, primaryEnabled: true,
+    playbackTransportAvailable,
     primaryTimeoutMs: 1_500, timeoutMs: 1_500, healthEnabled: false,
     catalogEnabled: true, catalogPath: 'catalog.json',
     catalogReadFile: () => JSON.stringify(catalog),
@@ -168,4 +169,22 @@ test('header-bound final hop validates then primary falls back to legacy exactly
   assert.equal(runtime.primaryStats.snapshot().headersUnsupported, 1);
   assert.equal(calls.at(-1).headers.referer, `http://b.example.test:${server.address().port}/b`);
   assert.equal(calls.slice(1).some(({ headers }) => headers.authorization || headers.cookie), false);
+
+  const enabledRuntime = runtimeFor(server.address().port, 'referer', true);
+  let enabledLegacyCalls = 0;
+  const enabledProcessor = createStreamProcessor({ db: { query: async () => {} },
+    resolverExecutor: { shutdown: async () => {} }, validator: async () => ({ valid: true }),
+    findContent: async () => ({ tmdb_id: 10, title: 'Movie' }), primaryEnabled: true,
+    primaryRolloutPercent: 100, primaryResolver: enabledRuntime.primaryResolver,
+    primaryStats: enabledRuntime.primaryStats, providerManager: { resolve: async () => {
+      enabledLegacyCalls += 1; return legacy; } }, lifecycle: {
+      readUsableCache: async () => ({ streams: null }),
+      resolveAndPersist: async (_type, _id, content, resolve) => resolve({ contentType: 'movie',
+        contentId: 'm', tmdbId: content.tmdb_id, title: content.title }) },
+    stats: { recordReady: async () => {} }, logger: { log: () => {}, warn: () => {} } });
+  const enabledResult = await enabledProcessor(
+    { content_type: 'movie', content_id: 'm', job_type: 'resolve' });
+  assert.deepEqual(enabledResult.playbackHeaders,
+    { referer: `http://b.example.test:${server.address().port}/b` });
+  assert.equal(enabledLegacyCalls, 0);
 });

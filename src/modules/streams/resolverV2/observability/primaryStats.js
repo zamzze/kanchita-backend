@@ -4,6 +4,7 @@ const CODE_COUNTERS = Object.freeze({
   PRIMARY_UNVALIDATED: 'unvalidated',
   PRIMARY_UNSUPPORTED_PROTOCOL: 'unsupportedProtocol',
   PRIMARY_HEADERS_UNSUPPORTED: 'headersUnsupported',
+  PRIMARY_HEADERS_INVALID: 'invalid',
   PRIMARY_EXPIRED: 'expired',
   PRIMARY_EXPIRING_TOO_SOON: 'expiring',
   PRIMARY_INVALID_STREAM: 'invalid',

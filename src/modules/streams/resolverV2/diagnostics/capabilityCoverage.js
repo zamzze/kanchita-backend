@@ -3,7 +3,7 @@
 const {
   CAPABILITY_NAMES,
   CAPABILITY_STATES,
-  V2_CAPABILITY_MATRIX,
+  createV2CapabilityMatrix,
 } = require('./v2CapabilityMatrix');
 
 const COVERAGE = Object.freeze([
@@ -32,7 +32,7 @@ const normalizeCapabilities = (entry) => {
 };
 const signatureFor = (capabilities) => capabilities.slice().sort().join('+');
 
-const classifyServerCoverage = (entry) => {
+const classifyServerCoverage = (entry, { playbackHeaders = false } = {}) => {
   const matchedCapabilities = normalizeCapabilities(entry);
   const set = new Set(matchedCapabilities);
   let coverage = 'unknown';
@@ -49,12 +49,14 @@ const classifyServerCoverage = (entry) => {
   } else if (set.has('cookie_session')) {
     coverage = 'requires_session';
     blockingCapabilities = ['cookie_session'];
-  } else if (set.has('playback_header_bound') || set.has('header_bound')) {
+  } else if (!playbackHeaders &&
+      (set.has('playback_header_bound') || set.has('header_bound'))) {
     coverage = 'resolution_only';
     blockingCapabilities = ['playback_header_bound', 'header_bound']
       .filter((item) => set.has(item));
   } else if (matchedCapabilities.some((item) =>
-    V2_CAPABILITY_MATRIX[item]?.state === CAPABILITY_STATES.SUPPORTED_PRIMARY)) {
+    createV2CapabilityMatrix({ playbackHeaders })[item]?.state ===
+      CAPABILITY_STATES.SUPPORTED_PRIMARY)) {
     coverage = 'primary';
   }
   let confidence = CONFIDENCE_SET.has(entry?.confidence) ? entry.confidence : 'low';
@@ -68,7 +70,7 @@ const classifyServerCoverage = (entry) => {
 };
 
 const safeRatio = (numerator, denominator) => denominator === 0 ? null : numerator / denominator;
-const createCoverageSummary = (entries = []) => {
+const createCoverageSummary = (entries = [], options = {}) => {
   if (!Array.isArray(entries)) {
     const error = new Error('CAPABILITY_COVERAGE_INVALID_INPUT');
     error.code = 'CAPABILITY_COVERAGE_INVALID_INPUT';
@@ -82,7 +84,7 @@ const createCoverageSummary = (entries = []) => {
   const confidence = Object.fromEntries(CONFIDENCE.map((name) => [name, 0]));
   const combinations = new Map();
   for (const entry of eligibleEntries) {
-    const result = classifyServerCoverage(entry);
+    const result = classifyServerCoverage(entry, options);
     counts[result.coverage] += 1;
     confidence[result.confidence] += 1;
     for (const blocker of result.blockingCapabilities) blockers[blocker] += 1;

@@ -36,6 +36,7 @@ test('migration files are ordered and checksummed deterministically', async () =
       '004_stream_lifecycle.sql',
       '005_stream_resolution_jobs.sql',
       '006_fast_stream_engine.sql',
+      '007_safe_playback_headers.sql',
     ]
   );
   assert.ok(migrations.every(({ checksum }) => /^[a-f0-9]{64}$/.test(checksum)));
@@ -80,6 +81,7 @@ test(
           '004_stream_lifecycle.sql',
           '005_stream_resolution_jobs.sql',
           '006_fast_stream_engine.sql',
+          '007_safe_playback_headers.sql',
         ]);
 
         const second = await runMigrations({
@@ -289,7 +291,8 @@ test(
           WHERE table_schema = current_schema() AND table_name = 'streams'
         `);
         const names = streamColumns.rows.map((row) => row.column_name);
-        for (const name of ['audio_language', 'subtitle_language', 'cleanliness']) {
+        for (const name of ['audio_language', 'subtitle_language', 'cleanliness',
+          'playback_headers']) {
           assert.ok(names.includes(name));
         }
 
@@ -309,13 +312,19 @@ test(
           SELECT conname FROM pg_constraint
           WHERE conname IN (
             'streams_cleanliness_check',
+            'streams_playback_headers_check',
             'stream_content_stats_type_check',
             'stream_browser_slots_lease_check',
             'stream_worker_heartbeats_type_check'
           )
             AND connamespace = current_schema()::regnamespace
         `);
-        assert.equal(constraints.rowCount, 4);
+        assert.equal(constraints.rowCount, 5);
+
+        await assert.rejects(pools.empty.query(
+          `INSERT INTO streams (content_type, content_id, playback_headers)
+           VALUES ('movie', $1, '{"cookie":"private"}'::jsonb)`,
+          [crypto.randomUUID()]), (error) => error.code === '23514');
 
         await assert.rejects(
           pools.empty.query(
@@ -406,7 +415,7 @@ test(
         );
         const preservedStream = await pools.legacy.query(
           `SELECT id, stream_url, status, last_verified_at, expires_at,
-                  audio_language, subtitle_language, cleanliness
+                  audio_language, subtitle_language, cleanliness, playback_headers
            FROM streams WHERE id = $1`,
           [stream.rows[0].id]
         );
@@ -422,6 +431,7 @@ test(
         assert.equal(preservedStream.rows[0].audio_language, 'es');
         assert.equal(preservedStream.rows[0].subtitle_language, null);
         assert.equal(preservedStream.rows[0].cleanliness, 'unknown');
+        assert.equal(preservedStream.rows[0].playback_headers, null);
 
         const preservedUser = await pools.legacy.query(
           'SELECT id, refresh_token FROM users WHERE id = $1',

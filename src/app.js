@@ -20,9 +20,14 @@ const { initIngestion } = require('./ingestion');
 const { createCorsMiddleware } = require('./middleware/cors');
 const { createDefaultLimiter } = require('./middleware/rateLimiter');
 const { error } = require('./utils/response');
+const { createHlsProxy } = require('./modules/streams/hlsProxy');
+const { createHlsProxyRouter } = require('./modules/streams/hlsProxy.routes');
 const {
   CORS_ORIGINS,
   ALLOW_PUBLIC_REGISTRATION,
+  STREAM_HLS_PROXY_ENABLED,
+  STREAM_HLS_PROXY_SIGNING_SECRET,
+  API_BASE_URL,
 } = require('./config/env');
 
 const DEFAULT_SUBTITLES_DIR = path.join(__dirname, '../public/subtitles');
@@ -35,6 +40,7 @@ const createApp = ({
   streamsService,
   seriesService,
   healthService,
+  hlsProxy,
 } = {}) => {
   const app = express();
   app.locals.allowPublicRegistration = allowPublicRegistration === true;
@@ -47,6 +53,12 @@ const createApp = ({
 
   app.use('/subtitles', express.static(subtitlesDir));
   app.use('/health', createHealthRouter(healthService));
+  const activeHlsProxy = hlsProxy || createHlsProxy({
+    enabled: STREAM_HLS_PROXY_ENABLED,
+    secret: STREAM_HLS_PROXY_SIGNING_SECRET,
+    publicBaseUrl: API_BASE_URL,
+  });
+  app.use('/stream-proxy', createHlsProxyRouter(activeHlsProxy));
 
   app.use('/api', apiLimiter);
   app.use('/api/auth',      authRoutes);

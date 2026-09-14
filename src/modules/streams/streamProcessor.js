@@ -21,6 +21,7 @@ const { createPrimaryRuntimeGuard } =
   require('./resolverV2/health/primaryRuntimeGuard');
 const { findStreamContent } = require('./streamContent');
 const { createStreamLifecycle, processingError } = require('./streamLifecycle');
+const { isPlaybackTransportConfigured } = require('./playbackHeaders');
 const {
   STREAM_CACHE_TTL_MINUTES,
   STREAM_VERIFY_INTERVAL_MINUTES,
@@ -46,6 +47,9 @@ const {
   STREAM_RESOLVER_V2_PRIMARY_GUARD_FAILURE_RATE_PERCENT,
   STREAM_RESOLVER_V2_PRIMARY_GUARD_TIMEOUT_RATE_PERCENT,
   STREAM_RESOLVER_V2_PRIMARY_GUARD_COOLDOWN_SECONDS,
+  STREAM_HLS_PROXY_ENABLED,
+  STREAM_HLS_PROXY_SIGNING_SECRET,
+  API_BASE_URL,
 } = require('../../config/env');
 
 const createStreamProcessor = ({
@@ -239,6 +243,10 @@ const createStreamProcessor = ({
     logger,
     cacheTtlMinutes,
     verifyIntervalMinutes,
+    playbackTransportAvailable: isPlaybackTransportConfigured({
+      enabled: STREAM_HLS_PROXY_ENABLED, secret: STREAM_HLS_PROXY_SIGNING_SECRET,
+      publicBaseUrl: API_BASE_URL || '',
+    }),
   });
 
   const processJob = async (job) => {
