@@ -4,6 +4,7 @@ const crypto = require('node:crypto');
 
 const MAX_TOKEN_TTL_SECONDS = 15 * 60;
 const TOKEN_VERSION = 1;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const tokenError = () => Object.assign(new Error('HLS_PROXY_TOKEN_INVALID'), {
   code: 'HLS_PROXY_TOKEN_INVALID',
 });
@@ -19,7 +20,7 @@ const createHlsProxyTokenCodec = ({ secret, ttlSeconds = 10 * 60, now = Date.now
   const macKey = crypto.createHash('sha256').update(`mac:${secret}`, 'utf8').digest();
   const sign = (parts) => crypto.createHmac('sha256', macKey).update(parts).digest();
   const issue = ({ streamId, targetUrl, kind = 'resource' }) => {
-    if (typeof streamId !== 'string' || !/^[0-9a-f-]{36}$/i.test(streamId) ||
+    if (typeof streamId !== 'string' || !UUID.test(streamId) ||
         !['manifest', 'resource'].includes(kind)) throw tokenError();
     let parsed;
     try { parsed = new URL(targetUrl); } catch { throw tokenError(); }
@@ -57,7 +58,7 @@ const createHlsProxyTokenCodec = ({ secret, ttlSeconds = 10 * 60, now = Date.now
         decipher.update(encrypted), decipher.final(),
       ]).toString('utf8'));
       if (payload.v !== TOKEN_VERSION || typeof payload.sid !== 'string' ||
-          !/^[0-9a-f-]{36}$/i.test(payload.sid) ||
+          !UUID.test(payload.sid) ||
           !['manifest', 'resource'].includes(payload.kind) ||
           !Number.isInteger(payload.exp) || payload.exp <= Math.floor(now() / 1000)) {
         throw tokenError();

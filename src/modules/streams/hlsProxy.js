@@ -58,18 +58,35 @@ const createHlsProxy = ({
   };
   const handle = async (req, res, next) => {
     if (!available) return next(proxyError());
+    const controller = new AbortController();
+    let responseBody = null;
+    let streaming = false;
+    const abortUpstream = () => {
+      if (!controller.signal.aborted) controller.abort();
+      responseBody?.destroy();
+    };
+    const onResponseClose = () => {
+      if (!res.writableEnded) abortUpstream();
+    };
+    const cleanup = () => {
+      req.removeListener('aborted', abortUpstream);
+      res.removeListener('close', onResponseClose);
+    };
+    req.once('aborted', abortUpstream);
+    res.once('close', onResponseClose);
     let payload;
-    try { payload = codec.verify(req.params.token); } catch { return next(proxyError()); }
-    const stream = await store.findProxyStream(payload.streamId);
-    const headers = playbackHeadersOrNull(stream?.playback_headers);
-    if (!stream || !headers || Object.keys(headers).length === 0) return next(proxyError());
-    const range = req.headers.range;
-    if (!validRange(range)) return next(proxyError(416));
-    const upstreamHeaders = { ...headers, ...(range ? { range } : {}) };
     try {
+      try { payload = codec.verify(req.params.token); } catch { return next(proxyError()); }
+      const stream = await store.findProxyStream(payload.streamId);
+      const headers = playbackHeadersOrNull(stream?.playback_headers);
+      if (!stream || !headers || Object.keys(headers).length === 0) return next(proxyError());
+      const range = req.headers.range;
+      if (!validRange(range)) return next(proxyError(416));
+      const upstreamHeaders = { ...headers, ...(range ? { range } : {}) };
       if (payload.kind === 'manifest') {
         const response = await httpClient.get(payload.targetUrl, {
           headers: upstreamHeaders, timeoutMs, maxBytes: maxManifestBytes,
+          signal: controller.signal,
         });
         if (!response.ok) return next(proxyError(response.status === 404 ? 404 : 502));
         const manifest = bodyText(response);
@@ -80,8 +97,9 @@ const createHlsProxy = ({
         return res.status(200).send(rewritten);
       }
       const response = await httpClient.stream(payload.targetUrl, {
-        headers: upstreamHeaders, timeoutMs,
+        headers: upstreamHeaders, timeoutMs, signal: controller.signal,
       });
+      responseBody = response.body;
       if (!response.ok) {
         response.body.resume();
         return next(proxyError(response.status === 404 ? 404 : 502));
@@ -92,13 +110,17 @@ const createHlsProxy = ({
       }
       copyHeaders(res, response.headers);
       res.status(response.status);
-      const disconnect = () => response.abort();
-      req.once('aborted', disconnect);
-      res.once('close', () => { if (!res.writableEnded) disconnect(); });
+      streaming = true;
+      const finishStreaming = () => cleanup();
+      response.body.once('end', finishStreaming);
+      response.body.once('close', finishStreaming);
       response.body.once('error', () => { if (!res.headersSent) next(proxyError(502)); else res.destroy(); });
       return response.body.pipe(res);
     } catch {
+      if (controller.signal.aborted) return undefined;
       return next(proxyError(502));
+    } finally {
+      if (!streaming) cleanup();
     }
   };
   return Object.freeze({ available, createPlaybackUrl, handle });
