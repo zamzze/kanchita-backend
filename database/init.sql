@@ -11,4 +11,5 @@ BEGIN;
 \ir migrations/005_stream_resolution_jobs.sql
 \ir migrations/006_fast_stream_engine.sql
 \ir migrations/007_safe_playback_headers.sql
+\ir migrations/008_temporary_stream_urls.sql
 COMMIT;

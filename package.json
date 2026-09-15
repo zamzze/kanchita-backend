@@ -2,7 +2,7 @@
   "name": "streaming-api",
   "version": "1.0.0",
   "scripts": {
-    "pretest": "node --test test/playback-headers.test.js test/hls-proxy.test.js test/hls-proxy-readiness.test.js",
+    "pretest": "node --test test/temporary-stream-url.test.js test/playback-headers.test.js test/hls-proxy.test.js test/hls-proxy-readiness.test.js",
     "test:playback-headers": "node --test test/playback-headers.test.js test/hls-proxy.test.js test/hls-proxy-readiness.test.js test/playback-headers-db.test.js test/resolver-v2-primary-acceptance.test.js test/resolver-v2-primary-adapter.test.js",
     "start": "node server.js",
     "dev": "node --env-file=.env ./node_modules/nodemon/bin/nodemon.js server.js",
@@ -43,6 +43,7 @@
     "resolver:v2:kodi-taxonomy": "node scripts/resolver-v2-kodi-taxonomy.js",
     "test:resolver-v2-real-providers": "node --test test/peer-tube-source-provider.test.js test/resolver-v2-real-network-probe.test.js test/resolver-v2-kodi-taxonomy.test.js",
     "test:resolver-v2-pluto": "node --test test/pluto-source-provider.test.js test/resolver-v2-pluto-probe.test.js",
+    "test:temporary-streams": "node --test test/temporary-stream-url.test.js test/resolver-v2-primary-acceptance.test.js test/pluto-source-provider.test.js test/resolver-v2-pluto-probe.test.js test/streams/stream-processor-primary.test.js",
     "test:resolver-v2-coverage": "node --test test/resolver-v2-capability-coverage.test.js test/resolver-v2-kodi-taxonomy.test.js",
     "test:resolver-v2-html": "node --test test/resolver-v2-static-html-extractor.test.js test/configured-html-source-provider.test.js test/configured-html-resolver.test.js test/resolver-v2-html-pipeline.test.js",
     "test:resolver-v2-multi-hop": "node --test test/resolver-v2-node-result.test.js test/resolver-v2-multi-hop-engine.test.js test/configured-html-resolver.test.js test/resolver-v2-multi-hop-pipeline.test.js"

@@ -8,7 +8,7 @@ const streamColumns = `
   stream_type, priority, is_active, provider, status, expires_at,
   resolved_at, last_verified_at, failure_count, last_failure_at,
   next_retry_at, last_error_code, audio_language, subtitle_language,
-  cleanliness, playback_headers`;
+  cleanliness, playback_headers, url_sensitivity`;
 
 const createStreamStore = (db = pool) => {
   const findStreams = async (contentType, contentId) => {
@@ -55,7 +55,10 @@ const createStreamStore = (db = pool) => {
   };
 
   const markStale = (streamId) => db.query(
-    `UPDATE streams SET status = 'stale' WHERE id = $1 AND status <> 'failed'`,
+    `UPDATE streams
+     SET status = 'stale',
+         stream_url = CASE WHEN url_sensitivity = 'temporary_signed' THEN NULL ELSE stream_url END
+     WHERE id = $1 AND status <> 'failed'`,
     [streamId]
   );
 
@@ -77,6 +80,7 @@ const createStreamStore = (db = pool) => {
       const { rows } = await db.query(
         `UPDATE streams
          SET status = 'failed',
+             stream_url = CASE WHEN url_sensitivity = 'temporary_signed' THEN NULL ELSE stream_url END,
              failure_count = failure_count + 1,
              last_failure_at = NOW(),
              next_retry_at = NOW() + ${failureDelaySql},
@@ -137,10 +141,11 @@ const createStreamStore = (db = pool) => {
          stream_url, embed_url, stream_type, priority, is_active,
          provider, status, expires_at, resolved_at, last_verified_at,
          failure_count, last_failure_at, next_retry_at, last_error_code,
-         audio_language, subtitle_language, cleanliness, playback_headers
+         audio_language, subtitle_language, cleanliness, playback_headers,
+         url_sensitivity
        ) VALUES (
          $1, $2, $3, $4, $5, $6, $7, $8, $9, TRUE,
-         $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22
+         $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23
        )
        ON CONFLICT ON CONSTRAINT streams_content_server_unique
        DO UPDATE SET
@@ -163,7 +168,8 @@ const createStreamStore = (db = pool) => {
          audio_language = EXCLUDED.audio_language,
          subtitle_language = EXCLUDED.subtitle_language,
          cleanliness = EXCLUDED.cleanliness,
-         playback_headers = EXCLUDED.playback_headers
+         playback_headers = EXCLUDED.playback_headers,
+         url_sensitivity = EXCLUDED.url_sensitivity
        RETURNING ${streamColumns}`,
       [
         stream.content_type,
@@ -188,6 +194,7 @@ const createStreamStore = (db = pool) => {
         stream.subtitle_language || null,
         stream.cleanliness || 'unknown',
         playbackHeaders && Object.keys(playbackHeaders).length ? playbackHeaders : null,
+        stream.url_sensitivity || 'normal',
       ]
     );
     return rows[0];
@@ -195,14 +202,16 @@ const createStreamStore = (db = pool) => {
 
   const upsertStream = (stream) => upsertStreamWithClient(db, stream);
 
-  const findProxyStream = async (streamId) => {
+  const findProxyStream = async (streamId, temporarySafetyWindowMs = 60_000) => {
     const { rows } = await db.query(
       `SELECT ${streamColumns}
        FROM streams
        WHERE id = $1 AND is_active = TRUE AND status = 'ready'
          AND stream_url IS NOT NULL
-         AND (expires_at IS NULL OR expires_at > NOW())`,
-      [streamId]
+         AND (expires_at IS NULL OR expires_at > NOW())
+         AND (url_sensitivity = 'normal'
+           OR expires_at > NOW() + ($2::double precision * INTERVAL '1 millisecond'))`,
+      [streamId, temporarySafetyWindowMs]
     );
     return rows[0] || null;
   };

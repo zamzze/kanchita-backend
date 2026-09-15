@@ -3,6 +3,9 @@
 const { createStreamStore } = require('../../db/streams.queries');
 const { inspectManifestCleanliness } = require('./streamCleanlinessInspector');
 const { playbackHeadersOrNull } = require('./playbackHeaders');
+const { TEMPORARY_URL_SAFETY_WINDOW_MS, isTemporaryUrlReusable,
+  normalizeUrlSensitivity } =
+  require('./temporaryStreamUrl');
 
 const processingError = (code) => {
   const error = new Error('Stream processing failed');
@@ -24,11 +27,13 @@ const RESOLUTION_ERROR_CODES = new Set([
   'HLS_UNSAFE_DESTINATION',
 ]);
 
-const isFreshReadyStream = (stream, verifyIntervalMs, now = Date.now()) =>
+const isFreshReadyStream = (stream, verifyIntervalMs, now = Date.now(),
+  temporarySafetyWindowMs = TEMPORARY_URL_SAFETY_WINDOW_MS) =>
   stream.status === 'ready' &&
   Boolean(stream.stream_url) &&
   Boolean(stream.expires_at) &&
   new Date(stream.expires_at).getTime() > now &&
+  isTemporaryUrlReusable(stream, { now, safetyWindowMs: temporarySafetyWindowMs }) &&
   Boolean(stream.last_verified_at) &&
   new Date(stream.last_verified_at).getTime() > now - verifyIntervalMs;
 
@@ -45,16 +50,19 @@ const createStreamLifecycle = ({
   logger = console,
   cacheTtlMinutes,
   verifyIntervalMinutes,
+  temporaryUrlSafetySeconds = TEMPORARY_URL_SAFETY_WINDOW_MS / 1000,
   playbackTransportAvailable = false,
 } = {}) => {
   const store = createStreamStore(db);
   const ttlMs = cacheTtlMinutes * 60 * 1000;
   const verifyIntervalMs = verifyIntervalMinutes * 60 * 1000;
+  const temporarySafetyWindowMs = temporaryUrlSafetySeconds * 1000;
   const fallbackExpiry = () => new Date(Date.now() + ttlMs);
 
   const validateCandidate = async (stream) => {
     if (!stream.stream_url) return null;
-    if (stream.expires_at && new Date(stream.expires_at).getTime() <= Date.now()) {
+    if (stream.expires_at && (new Date(stream.expires_at).getTime() <= Date.now() ||
+        !isTemporaryUrlReusable(stream, { safetyWindowMs: temporarySafetyWindowMs }))) {
       logger.log('[Streams] cache expired');
       await store.markStale(stream.id);
       return null;
@@ -68,6 +76,11 @@ const createStreamLifecycle = ({
     const validation = await validator(stream.stream_url, { headers: playbackHeaders });
     if (!validation.valid) {
       logger.warn(`[Streams] validation failed: ${validation.code}`);
+      await store.markStale(stream.id);
+      return null;
+    }
+    if (!isTemporaryUrlReusable(stream, { safetyWindowMs: temporarySafetyWindowMs })) {
+      logger.log('[Streams] cache expired');
       await store.markStale(stream.id);
       return null;
     }
@@ -89,7 +102,8 @@ const createStreamLifecycle = ({
       return headers && (Object.keys(headers).length === 0 || playbackTransportAvailable);
     };
     const fresh = streams.filter((stream) =>
-      transportable(stream) && isFreshReadyStream(stream, verifyIntervalMs));
+      transportable(stream) && isFreshReadyStream(stream, verifyIntervalMs, Date.now(),
+        temporarySafetyWindowMs));
     if (fresh.length > 0) {
       logger.log('[Streams] cache hit');
       return { streams: fresh, all: streams, backoff: false };
@@ -183,7 +197,12 @@ const createStreamLifecycle = ({
 
     const now = new Date();
     const explicitExpiry = resolved.expiresAt ? new Date(resolved.expiresAt) : null;
-    if (explicitExpiry && (!Number.isFinite(explicitExpiry.getTime()) || explicitExpiry <= now)) {
+    const urlSensitivity = normalizeUrlSensitivity(resolved.urlSensitivity || 'normal');
+    const temporaryReusable = isTemporaryUrlReusable({ urlSensitivity,
+      expiresAt: explicitExpiry }, { now: now.getTime(), safetyWindowMs: temporarySafetyWindowMs });
+    if (!urlSensitivity ||
+        (urlSensitivity === 'temporary_signed' && (!explicitExpiry || !temporaryReusable)) ||
+        (explicitExpiry && (!Number.isFinite(explicitExpiry.getTime()) || explicitExpiry <= now))) {
       if (preserveCurrent && candidate) {
         await store.recordRefreshFailure(candidate.id, 'RESOLUTION_FAILED');
         throw processingError('RESOLUTION_FAILED');
@@ -220,6 +239,7 @@ const createStreamLifecycle = ({
       last_error_code: null,
       playback_headers: resolvedPlaybackHeaders && Object.keys(resolvedPlaybackHeaders).length
         ? resolvedPlaybackHeaders : null,
+      url_sensitivity: urlSensitivity,
     });
   };
 

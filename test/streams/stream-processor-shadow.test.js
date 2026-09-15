@@ -68,7 +68,7 @@ test('all shadow outcomes and unexpected throws leave legacy authoritative', asy
   }
 });
 
-test('refresh skips shadow while retaining legacy behavior', async () => {
+test('refresh observes V2 before retaining legacy authority', async () => {
   let shadowCalls = 0;
   let legacyCalls = 0;
   const processor = createStreamProcessor(dependencies({
@@ -76,7 +76,7 @@ test('refresh skips shadow while retaining legacy behavior', async () => {
     providerManager: { resolve: async () => { legacyCalls += 1; return legacyStream; } },
   }));
   assert.equal(await processor({ ...job, job_type: 'refresh' }), legacyStream);
-  assert.equal(shadowCalls, 0);
+  assert.equal(shadowCalls, 1);
   assert.equal(legacyCalls, 1);
 });
 

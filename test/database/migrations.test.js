@@ -37,6 +37,7 @@ test('migration files are ordered and checksummed deterministically', async () =
       '005_stream_resolution_jobs.sql',
       '006_fast_stream_engine.sql',
       '007_safe_playback_headers.sql',
+      '008_temporary_stream_urls.sql',
     ]
   );
   assert.ok(migrations.every(({ checksum }) => /^[a-f0-9]{64}$/.test(checksum)));
@@ -82,6 +83,7 @@ test(
           '005_stream_resolution_jobs.sql',
           '006_fast_stream_engine.sql',
           '007_safe_playback_headers.sql',
+          '008_temporary_stream_urls.sql',
         ]);
 
         const second = await runMigrations({
@@ -184,6 +186,7 @@ test(
           'last_failure_at',
           'next_retry_at',
           'last_error_code',
+          'url_sensitivity',
         ]) {
           assert.ok(columnNames.includes(name));
         }
@@ -197,6 +200,8 @@ test(
         assert.ok(constraintNames.includes('streams_status_check'));
         assert.ok(constraintNames.includes('streams_failure_count_check'));
         assert.ok(constraintNames.includes('streams_last_error_code_check'));
+        assert.ok(constraintNames.includes('streams_url_sensitivity_check'));
+        assert.ok(constraintNames.includes('streams_temporary_url_expiry_check'));
 
         const indexes = await pools.empty.query(`
           SELECT indexname
@@ -211,6 +216,13 @@ test(
           pools.empty.query(`
             INSERT INTO streams (content_type, content_id, status)
             VALUES ('movie', $1, 'arbitrary')
+          `, [crypto.randomUUID()]),
+          (error) => error.code === '23514'
+        );
+        await assert.rejects(
+          pools.empty.query(`
+            INSERT INTO streams (content_type, content_id, url_sensitivity)
+            VALUES ('movie', $1, 'temporary_signed')
           `, [crypto.randomUUID()]),
           (error) => error.code === '23514'
         );
@@ -292,7 +304,7 @@ test(
         `);
         const names = streamColumns.rows.map((row) => row.column_name);
         for (const name of ['audio_language', 'subtitle_language', 'cleanliness',
-          'playback_headers']) {
+          'playback_headers', 'url_sensitivity']) {
           assert.ok(names.includes(name));
         }
 
@@ -415,7 +427,8 @@ test(
         );
         const preservedStream = await pools.legacy.query(
           `SELECT id, stream_url, status, last_verified_at, expires_at,
-                  audio_language, subtitle_language, cleanliness, playback_headers
+                  audio_language, subtitle_language, cleanliness, playback_headers,
+                  url_sensitivity
            FROM streams WHERE id = $1`,
           [stream.rows[0].id]
         );
@@ -432,6 +445,7 @@ test(
         assert.equal(preservedStream.rows[0].subtitle_language, null);
         assert.equal(preservedStream.rows[0].cleanliness, 'unknown');
         assert.equal(preservedStream.rows[0].playback_headers, null);
+        assert.equal(preservedStream.rows[0].url_sensitivity, 'normal');
 
         const preservedUser = await pools.legacy.query(
           'SELECT id, refresh_token FROM users WHERE id = $1',

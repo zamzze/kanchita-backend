@@ -97,6 +97,8 @@ test('Pluto provider boots anonymously, reads mapped movie and emits HLS candida
     assert.equal(candidates[0].providerId, 'pluto_test');
     assert.deepEqual(candidates[0].headers, {});
     assert.deepEqual(candidates[0].metadata, { sourceType: 'pluto' });
+    assert.equal(candidates[0].urlSensitivity, 'normal');
+    assert.equal(candidates[0].expiresAt, undefined);
     assert.match(bootUrl, /deviceType=web/);
     assert.equal(authorization, `Bearer ${jwt}`);
     assert.equal(bootCount, 1);

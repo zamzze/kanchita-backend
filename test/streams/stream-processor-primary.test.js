@@ -114,7 +114,7 @@ test('adapter rejection fails closed while telemetry cannot undo safe adaptation
   assert.equal((await authoritative(job)).url, selected.url);
 });
 
-test('refresh remains legacy and an external primary abort does not start legacy', async () => {
+test('refresh attempts V2 before legacy and an external primary abort does not start legacy', async () => {
   let primaryCalls = 0;
   let legacyCalls = 0;
   const processor = createStreamProcessor(dependencies({
@@ -125,12 +125,27 @@ test('refresh remains legacy and an external primary abort does not start legacy
     }; } },
     providerManager: { resolve: async () => { legacyCalls += 1; return legacy; } },
   }));
-  assert.equal(await processor({ ...job, job_type: 'refresh' }), legacy);
-  assert.equal(primaryCalls, 0);
-  assert.equal(legacyCalls, 1);
-  await assert.rejects(processor(job), (error) => error.code === 'RESOLUTION_ABORTED');
+  await assert.rejects(processor({ ...job, job_type: 'refresh' }),
+    (error) => error.code === 'RESOLUTION_ABORTED');
   assert.equal(primaryCalls, 1);
-  assert.equal(legacyCalls, 1);
+  assert.equal(legacyCalls, 0);
+  await assert.rejects(processor(job), (error) => error.code === 'RESOLUTION_ABORTED');
+  assert.equal(primaryCalls, 2);
+  assert.equal(legacyCalls, 0);
+});
+
+test('refresh uses accepted V2 result before considering legacy', async () => {
+  let primaryCalls = 0;
+  let legacyCalls = 0;
+  const processor = createStreamProcessor(dependencies({
+    primaryEnabled: true,
+    primaryResolver: { resolve: async () => { primaryCalls += 1; return accepted; } },
+    providerManager: { resolve: async () => { legacyCalls += 1; return legacy; } },
+  }));
+  const result = await processor({ ...job, job_type: 'refresh' });
+  assert.equal(result.url, selected.url);
+  assert.equal(primaryCalls, 1);
+  assert.equal(legacyCalls, 0);
 });
 
 test('processor forwards an external signal and deadline to primary', async () => {

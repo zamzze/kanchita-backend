@@ -20,6 +20,7 @@ const {
   STREAM_JOB_MAX_ATTEMPTS,
   STREAM_PENDING_RETRY_SECONDS,
   STREAM_REFRESH_AHEAD_MINUTES,
+  STREAM_TEMPORARY_URL_SAFETY_SECONDS,
   STREAM_PREWARM_NEXT_EPISODE,
   STREAM_HLS_PROXY_ENABLED,
   STREAM_HLS_PROXY_SIGNING_SECRET,
@@ -112,20 +113,24 @@ const createStreamsService = ({
   verifyIntervalMinutes = STREAM_VERIFY_INTERVAL_MINUTES,
   pendingRetrySeconds = STREAM_PENDING_RETRY_SECONDS,
   refreshAheadMinutes = STREAM_REFRESH_AHEAD_MINUTES,
+  temporaryUrlSafetySeconds = STREAM_TEMPORARY_URL_SAFETY_SECONDS,
   prewarmNextEpisode = STREAM_PREWARM_NEXT_EPISODE,
   metrics = createMetricsStore(db),
   stats = createStreamStatsStore(db),
-  proxy = createHlsProxy({ enabled: STREAM_HLS_PROXY_ENABLED,
-    secret: STREAM_HLS_PROXY_SIGNING_SECRET, publicBaseUrl: API_BASE_URL,
-    store: require('../../db/streams.queries').createStreamStore(db) }),
+  proxy = null,
 } = {}) => {
+  const activeProxy = proxy || createHlsProxy({ enabled: STREAM_HLS_PROXY_ENABLED,
+    secret: STREAM_HLS_PROXY_SIGNING_SECRET, publicBaseUrl: API_BASE_URL,
+    temporaryUrlSafetySeconds,
+    store: require('../../db/streams.queries').createStreamStore(db) });
   const lifecycle = createStreamLifecycle({
     db,
     validator,
     logger,
     cacheTtlMinutes,
     verifyIntervalMinutes,
-    playbackTransportAvailable: proxy.available === true,
+    temporaryUrlSafetySeconds,
+    playbackTransportAvailable: activeProxy.available === true,
   });
   const prewarm = createStreamPrewarm({
     db,
@@ -180,7 +185,7 @@ const createStreamsService = ({
         await prewarm.prepareNextEpisode(contentId);
       }
       const subtitleUrl = await fetchSubtitle(contentType, contentId, content);
-      return formatResponse(cache.streams, contentId, contentType, subtitleUrl, proxy);
+      return formatResponse(cache.streams, contentId, contentType, subtitleUrl, activeProxy);
     }
     await metrics.increment('cache_miss_total');
     if (cache.backoff) {

@@ -30,6 +30,7 @@ const {
   STREAM_BROWSER_MAX_CONCURRENT,
   STREAM_BROWSER_SLOT_LEASE_SECONDS,
   STREAM_RESOLUTION_TIMEOUT_MS,
+  STREAM_TEMPORARY_URL_SAFETY_SECONDS,
   STREAM_PROVIDER_FAILURE_THRESHOLD,
   STREAM_PROVIDER_COOLDOWN_SECONDS,
   STREAM_REJECT_AD_MARKED,
@@ -64,6 +65,7 @@ const createStreamProcessor = ({
   logger = console,
   cacheTtlMinutes = STREAM_CACHE_TTL_MINUTES,
   verifyIntervalMinutes = STREAM_VERIFY_INTERVAL_MINUTES,
+  temporaryUrlSafetySeconds = STREAM_TEMPORARY_URL_SAFETY_SECONDS,
   workerId = 'stream-worker',
   providerManager,
   shadowResolver,
@@ -243,6 +245,7 @@ const createStreamProcessor = ({
     logger,
     cacheTtlMinutes,
     verifyIntervalMinutes,
+    temporaryUrlSafetySeconds,
     playbackTransportAvailable: isPlaybackTransportConfigured({
       enabled: STREAM_HLS_PROXY_ENABLED, secret: STREAM_HLS_PROXY_SIGNING_SECRET,
       publicBaseUrl: API_BASE_URL || '',
@@ -263,7 +266,6 @@ const createStreamProcessor = ({
       job.content_id,
       content,
       async (context) => {
-        if (job.job_type === 'refresh') return manager.resolve(context);
         if (mode === 'primary') {
           let rolloutDecision;
           try { rolloutDecision = rollout.evaluate(context); } catch {

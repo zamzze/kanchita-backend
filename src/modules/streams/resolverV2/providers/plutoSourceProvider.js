@@ -3,6 +3,7 @@
 const crypto = require('node:crypto');
 const { normalizeEmbedCandidate } = require('../resolverContracts');
 const { normalizeBaseUrl } = require('./configuredHttpSourceProvider');
+const { parseJwtExpiry, temporaryExpiryFromUrl } = require('../../temporaryStreamUrl');
 
 const ERROR_CODES = Object.freeze({
   INVALID_CONFIG: 'SOURCE_PLUTO_INVALID_CONFIG',
@@ -60,18 +61,6 @@ const normalizeMediaMap = (value) => {
     output.push(normalized);
   }
   return Object.freeze(output);
-};
-
-const parseJwtExpiry = (token, now) => {
-  if (typeof token !== 'string') return 0;
-  try {
-    const payload = token.split('.')[1];
-    if (!payload) return 0;
-    const decoded = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
-    return Number.isInteger(decoded?.exp) ? decoded.exp * 1000 : 0;
-  } catch {
-    return 0;
-  }
 };
 
 const normalizeHttpUrl = (value) => {
@@ -281,7 +270,8 @@ const createPlutoSourceProvider = ({
     }), { signal, onResponse: (bytes) => { state.bootBytes = bytes; } });
     const token = typeof payload?.sessionToken === 'string' ? payload.sessionToken : '';
     if (!token) throw providerError(ERROR_CODES.INVALID_RESPONSE);
-    const tokenExpiry = parseJwtExpiry(token, now);
+    const tokenExpiryIso = parseJwtExpiry(token);
+    const tokenExpiry = tokenExpiryIso ? new Date(tokenExpiryIso).getTime() : 0;
     const fallbackExpiry = now() + DEFAULT_SESSION_TTL_MS;
     state.token = token;
     state.expiresAt = Math.min(
@@ -293,6 +283,17 @@ const createPlutoSourceProvider = ({
     state.stitcherParams = typeof payload?.stitcherParams === 'string' &&
       payload.stitcherParams.length <= 4096 ? payload.stitcherParams : '';
     return state.token;
+  };
+
+  const createCandidate = (url) => {
+    if (!url) return null;
+    let hasJwt = false;
+    try { hasJwt = new URL(url).searchParams.has('jwt'); } catch { return null; }
+    const expiresAt = hasJwt ? temporaryExpiryFromUrl(url, ['jwt']) : null;
+    return normalizeEmbedCandidate({ providerId: id, url, headers: {},
+      qualityHint: 'auto', expiresAt,
+      urlSensitivity: hasJwt ? 'temporary_signed' : 'normal',
+      metadata: { sourceType: 'pluto' } });
   };
 
   const buildDiagnosticSessionUrl = (item, token) => {
@@ -366,8 +367,7 @@ const createPlutoSourceProvider = ({
     if (runtime.diagnosticSessionPlayback === true &&
         state.bootItem?.plutoId === mapping.plutoId) {
       const url = buildDiagnosticSessionUrl(state.bootItem, token);
-      const candidate = url && normalizeEmbedCandidate({ providerId: id, url, headers: {},
-        qualityHint: 'auto', metadata: { sourceType: 'pluto' } });
+      const candidate = createCandidate(url);
       return candidate ? [candidate] : [];
     }
     const payload = await getCatalog(client, token, runtime.signal);
@@ -376,13 +376,7 @@ const createPlutoSourceProvider = ({
     if (!item) return [];
     const url = firstHlsUrl(item);
     if (!url) return [];
-    const candidate = normalizeEmbedCandidate({
-      providerId: id,
-      url,
-      headers: {},
-      qualityHint: 'auto',
-      metadata: { sourceType: 'pluto' },
-    });
+    const candidate = createCandidate(url);
     return candidate ? [candidate].slice(0, maxCandidates) : [];
   };
 

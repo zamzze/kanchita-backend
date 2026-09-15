@@ -305,6 +305,7 @@ test(
         nextRetryAt: null,
         errorCode: null,
         playbackHeaders: null,
+        urlSensitivity: 'normal',
         ...overrides,
       };
       const { rows } = await pool.query(
@@ -312,10 +313,10 @@ test(
            content_type, content_id, server_name, quality, language,
            stream_url, stream_type, priority, provider, status,
            expires_at, resolved_at, last_verified_at, failure_count,
-           next_retry_at, last_error_code, playback_headers
+           next_retry_at, last_error_code, playback_headers, url_sensitivity
          ) VALUES (
            $1, $2, $3, 'auto', 'en-sub', $4, 'direct', 1, 'fixture', $5,
-           $6, $7, $8, $9, $10, $11, $12
+           $6, $7, $8, $9, $10, $11, $12, $13
          ) RETURNING *`,
         [
           contentType,
@@ -330,6 +331,7 @@ test(
           values.nextRetryAt,
           values.errorCode,
           values.playbackHeaders,
+          values.urlSensitivity,
         ]
       );
       return rows[0];
@@ -485,6 +487,29 @@ test(
       assert.equal(setup.enqueueCalls(), 1);
       assert.ok(!validatedUrls.includes(oldUrl));
     });
+
+    await t.test('near-expiry signed stream is cleared and queued for V2-capable refresh',
+      async () => {
+        const movie = await createContent('movie');
+        const secret = 'SIGNED_DATABASE_FIXTURE';
+        const stored = await insertStream('movie', movie.id, {
+          url: `${baseUrl}/media?jwt=${secret}`,
+          urlSensitivity: 'temporary_signed',
+          expiresAt: new Date(Date.now() + 30_000),
+        });
+        const setup = makeService();
+        const response = await setup.service.getMovieStreams(movie.id, null);
+        const after = await pool.query(
+          'SELECT status, stream_url, url_sensitivity FROM streams WHERE id = $1',
+          [stored.id]
+        );
+        assert.equal(response.code, 'STREAM_RESOLUTION_PENDING');
+        assert.equal(setup.enqueueCalls(), 1);
+        assert.equal(after.rows[0].status, 'stale');
+        assert.equal(after.rows[0].stream_url, null);
+        assert.equal(after.rows[0].url_sensitivity, 'temporary_signed');
+        assert.doesNotMatch(setup.logger.messages.join('\n'), /SIGNED_DATABASE_FIXTURE|jwt=/);
+      });
 
     await t.test('no stream returns pending and creates a persistent job', async () => {
       const movie = await createContent('movie');

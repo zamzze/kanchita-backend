@@ -23,6 +23,7 @@ const createHlsProxy = ({
   tokenTtlSeconds = 600,
   timeoutMs = 12_000,
   maxManifestBytes = 256 * 1024,
+  temporaryUrlSafetySeconds = 60,
   store = createStreamStore(),
   httpClient = createSafeHttpClient({ timeoutMs }),
   tokenCodec,
@@ -77,7 +78,8 @@ const createHlsProxy = ({
     let payload;
     try {
       try { payload = codec.verify(req.params.token); } catch { return next(proxyError()); }
-      const stream = await store.findProxyStream(payload.streamId);
+      const stream = await store.findProxyStream(payload.streamId,
+        temporaryUrlSafetySeconds * 1000);
       const headers = playbackHeadersOrNull(stream?.playback_headers);
       if (!stream || !headers || Object.keys(headers).length === 0) return next(proxyError());
       const range = req.headers.range;

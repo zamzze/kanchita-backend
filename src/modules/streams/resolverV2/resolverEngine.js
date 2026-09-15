@@ -20,6 +20,8 @@ const streamIdentity = (stream) => JSON.stringify([
   stream.providerId,
   normalizedUrlIdentity(stream.url),
   Object.entries(stream.headers || {}).sort(([left], [right]) => left.localeCompare(right)),
+  stream.urlSensitivity || 'normal',
+  stream.expiresAt || '',
 ]);
 const graphCandidateIdentity = (candidate) => candidateIdentity({
   ...candidate,

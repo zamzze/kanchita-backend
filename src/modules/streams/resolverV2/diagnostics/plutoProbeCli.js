@@ -87,6 +87,9 @@ const createPlutoProbe = ({ httpClient, clock = Date.now } = {}) => {
       audio: 0,
       subtitles: 0,
       session_requirement: 'unknown',
+      temporary_url: false,
+      expiry_detected: false,
+      remaining_lifetime_seconds: null,
       latency_ms: 0,
     };
     try {
@@ -149,6 +152,11 @@ const createPlutoProbe = ({ httpClient, clock = Date.now } = {}) => {
         if (candidates.length) {
           result.session_requirement = new URL(candidates[0].url).search
             ? 'url_temporal' : 'none';
+          result.temporary_url = candidates[0].urlSensitivity === 'temporary_signed';
+          result.expiry_detected = typeof candidates[0].expiresAt === 'string';
+          result.remaining_lifetime_seconds = result.expiry_detected
+            ? Math.max(0, Math.floor((new Date(candidates[0].expiresAt).getTime() - clock()) / 1000))
+            : null;
         }
         if (candidates.length) {
           const direct = createDirectHlsResolver({ httpClient: client,
@@ -196,6 +204,9 @@ const safeOutput = (result) => Object.freeze({
   audio: result.audio,
   subtitles: result.subtitles,
   session_requirement: result.session_requirement,
+  temporary_url: result.temporary_url,
+  expiry_detected: result.expiry_detected,
+  remaining_lifetime_seconds: result.remaining_lifetime_seconds,
   latency_ms: result.latency_ms,
 });
 

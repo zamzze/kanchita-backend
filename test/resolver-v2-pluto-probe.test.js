@@ -117,10 +117,13 @@ test('Pluto discovery inspects one bounded catalog page then reuses the real pro
       assert.equal(result.hls_valid, true);
       assert.equal(result.variants, 1);
       assert.equal(result.session_requirement, 'url_temporal');
+      assert.equal(result.temporary_url, true);
+      assert.equal(result.expiry_detected, true);
+      assert.ok(result.remaining_lifetime_seconds > 60);
       assert.equal(bootCount, 1);
       assert.equal(catalogCount, 0);
       assert.doesNotMatch(formatJson(result),
-        /sessionToken|Bearer|region=fixture|master\.m3u8|127\.0\.0\.1/i);
+        /sessionToken|Bearer|region=fixture|master\.m3u8|127\.0\.0\.1|header\.|jwt=/i);
     } finally { await close(server); }
   });
 

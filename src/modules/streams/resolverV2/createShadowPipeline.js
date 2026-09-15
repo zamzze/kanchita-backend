@@ -46,6 +46,7 @@ const {
   STREAM_RESOLVER_V2_HALF_OPEN_SUCCESS_THRESHOLD,
   STREAM_RESOLVER_V2_PRIMARY_ENABLED,
   STREAM_RESOLVER_V2_PRIMARY_TIMEOUT_MS,
+  STREAM_TEMPORARY_URL_SAFETY_SECONDS,
   STREAM_RESOLVER_V2_CATALOG_ENABLED,
   STREAM_RESOLVER_V2_CATALOG_PATH,
   STREAM_HLS_PROXY_ENABLED,
@@ -95,7 +96,9 @@ const createShadowPipeline = ({
   const runtimeTimeoutMs = primaryEnabled ? Math.max(timeoutMs, primaryTimeoutMs) : timeoutMs;
   const activeHttpClient = httpClient || createSafeHttpClient({ timeoutMs: runtimeTimeoutMs });
   const activeObservability = observability || createV2Observability({ maxSamples: 256 });
-  const activeRanker = ranker || createStreamRanker();
+  const activeRanker = ranker || createStreamRanker({
+    temporarySafetyWindowMs: STREAM_TEMPORARY_URL_SAFETY_SECONDS * 1000,
+  });
   const activeShadowComparator = shadowComparator || createShadowLegacyComparator();
   const activeComparisonStats = comparisonStats || createShadowComparisonStats();
   const activePrimaryStats = primaryStats || createPrimaryStats();
@@ -224,6 +227,7 @@ const createShadowPipeline = ({
     ranker: activeRanker,
     acceptanceGate: primaryAcceptanceGate || createPrimaryAcceptanceGate({
       playbackTransportAvailable,
+      minimumExpiryMs: STREAM_TEMPORARY_URL_SAFETY_SECONDS * 1000,
     }),
     enabled: primaryEnabled,
     timeoutMs: primaryTimeoutMs,

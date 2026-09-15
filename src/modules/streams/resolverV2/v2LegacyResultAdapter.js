@@ -31,6 +31,8 @@ const adaptV2ToLegacyResult = (candidate) => {
     audioLanguage: audioLanguage === 'unknown' ? null : audioLanguage,
     subtitleLanguage: subtitleLanguage === 'unknown' ? null : subtitleLanguage,
     expiresAt: stream.expiresAt,
+    ...(stream.urlSensitivity === 'temporary_signed'
+      ? { urlSensitivity: 'temporary_signed' } : {}),
     validated: true,
     playbackHeaders,
   });

@@ -1,6 +1,8 @@
 'use strict';
 
 const crypto = require('node:crypto');
+const { TEMPORARY_URL_SAFETY_WINDOW_MS, isTemporaryUrlReusable } =
+  require('../../temporaryStreamUrl');
 const { normalizeStreamCandidate } = require('../resolverContracts');
 
 const LANGUAGE_RANK = Object.freeze({ latino: 5, castellano: 4, vose: 3, vo: 2, unknown: 1 });
@@ -59,7 +61,8 @@ const qualityTier = (stream) => qualityFromHls(stream.hlsInfo) || normalizeQuali
 const safePriority = (value) => Number.isInteger(value) ? value : 0;
 const fingerprint = (url) => crypto.createHash('sha256').update(url).digest('hex');
 
-const createStreamRanker = ({ now = Date.now, protocolRanks = PROTOCOL_RANK } = {}) => {
+const createStreamRanker = ({ now = Date.now, protocolRanks = PROTOCOL_RANK,
+  temporarySafetyWindowMs = TEMPORARY_URL_SAFETY_WINDOW_MS } = {}) => {
   if (typeof now !== 'function' || !protocolRanks || typeof protocolRanks !== 'object') {
     throw new Error('STREAM_RANKER_INVALID_INPUT');
   }
@@ -97,6 +100,9 @@ const createStreamRanker = ({ now = Date.now, protocolRanks = PROTOCOL_RANK } = 
     if (!Array.isArray(streams)) throw new Error('STREAM_RANKER_INVALID_INPUT');
     const observedAt = now();
     return streams.map(normalizeStreamCandidate).filter(Boolean)
+      .filter((stream) => isTemporaryUrlReusable(stream, {
+        now: observedAt, safetyWindowMs: temporarySafetyWindowMs,
+      }))
       .map((stream) => describe(stream, observedAt))
       .filter(({ expiry }) => expiry === null || expiry > observedAt)
       .sort(compare).map(({ stream }) => stream);

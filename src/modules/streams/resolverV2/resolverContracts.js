@@ -15,6 +15,7 @@ const MAX_METADATA_ITEMS = 512;
 const RESOLVER_STRATEGIES = Object.freeze(['direct', 'http', 'browser']);
 const resolverStrategies = new Set(RESOLVER_STRATEGIES);
 const UNSAFE_METADATA_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
+const { normalizeUrlSensitivity } = require('../temporaryStreamUrl');
 
 const isPlainObject = (value) => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
@@ -150,14 +151,24 @@ const normalizeEmbedCandidate = (input) => {
   const qualityHint = normalizeOptionalString(input.qualityHint, 64);
   const metadata = input.metadata === undefined || input.metadata === null
     ? null : cloneJsonLike(input.metadata);
+  const urlSensitivity = normalizeUrlSensitivity(input.urlSensitivity ?? 'normal');
+  let expiresAt = null;
+  if (input.expiresAt !== undefined && input.expiresAt !== null) {
+    const parsed = new Date(input.expiresAt);
+    if (Number.isNaN(parsed.getTime())) return null;
+    expiresAt = parsed.toISOString();
+  }
 
   if (!providerId || !url || headers === null ||
       (input.referer != null && !referer) || (input.origin != null && !origin) ||
       (input.languageHint != null && !languageHint) ||
       (input.qualityHint != null && !qualityHint) ||
-      (input.metadata != null && metadata === undefined)) return null;
+      (input.metadata != null && metadata === undefined) || !urlSensitivity) return null;
 
-  return { providerId, url, referer, origin, headers, languageHint, qualityHint, metadata };
+  return { providerId, url, referer, origin, headers, languageHint, qualityHint,
+    ...(input.expiresAt !== undefined && input.expiresAt !== null ? { expiresAt } : {}),
+    ...(input.urlSensitivity !== undefined ? { urlSensitivity } : {}),
+    metadata };
 };
 
 const normalizeStreamCandidate = (input) => {
@@ -194,6 +205,8 @@ const normalizeStreamCandidate = (input) => {
   const metadata = input.metadata === undefined || input.metadata === null
     ? null : cloneJsonLike(input.metadata);
   if (input.metadata != null && metadata === undefined) return null;
+  const urlSensitivity = normalizeUrlSensitivity(input.urlSensitivity ?? 'normal');
+  if (!urlSensitivity) return null;
 
   return {
     url,
@@ -202,6 +215,7 @@ const normalizeStreamCandidate = (input) => {
     resolverId,
     headers,
     expiresAt,
+    urlSensitivity,
     latencyMs,
     validated: input.validated ?? false,
     quality,

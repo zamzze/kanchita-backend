@@ -14,6 +14,8 @@ const candidateIdentity = (candidate) => {
     normalizedUrlIdentity(candidate.url),
     referer ? normalizedUrlIdentity(referer) : '',
     origin ? normalizedUrlIdentity(origin) : '',
+    candidate.urlSensitivity || 'normal',
+    candidate.expiresAt || '',
   ]);
 };
 

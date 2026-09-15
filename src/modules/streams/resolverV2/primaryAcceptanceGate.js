@@ -3,8 +3,10 @@
 const { normalizeStreamCandidate } = require('./resolverContracts');
 const { classifyLanguage, qualityTier } = require('./ranking/streamRanker');
 const { normalizePlaybackHeaders, PLAYBACK_HEADER_CODES } = require('../playbackHeaders');
+const { TEMPORARY_URL_SAFETY_WINDOW_MS, isTemporaryUrlReusable } =
+  require('../temporaryStreamUrl');
 
-const PRIMARY_MIN_EXPIRY_MS = 60_000;
+const PRIMARY_MIN_EXPIRY_MS = TEMPORARY_URL_SAFETY_WINDOW_MS;
 const PRIMARY_CODES = Object.freeze({
   ACCEPTED: 'PRIMARY_ACCEPTED',
   NO_STREAM: 'PRIMARY_NO_STREAM',
@@ -13,6 +15,7 @@ const PRIMARY_CODES = Object.freeze({
   UNSUPPORTED_PROTOCOL: 'PRIMARY_UNSUPPORTED_PROTOCOL',
   EXPIRED: 'PRIMARY_EXPIRED',
   EXPIRING_TOO_SOON: 'PRIMARY_EXPIRING_TOO_SOON',
+  TEMPORARY_EXPIRY_REQUIRED: 'PRIMARY_TEMPORARY_EXPIRY_REQUIRED',
   HEADERS_UNSUPPORTED: 'PRIMARY_HEADERS_UNSUPPORTED',
   HEADERS_INVALID: 'PRIMARY_HEADERS_INVALID',
   INCOMPATIBLE: 'PRIMARY_INCOMPATIBLE',
@@ -72,12 +75,18 @@ const createPrimaryAcceptanceGate = ({
     if (!['direct', 'http'].includes(stream.metadata?.resolverStrategy)) {
       return reject(stream, PRIMARY_CODES.INCOMPATIBLE);
     }
+    if (stream.urlSensitivity === 'temporary_signed' && !stream.expiresAt) {
+      return reject(stream, PRIMARY_CODES.TEMPORARY_EXPIRY_REQUIRED);
+    }
     if (stream.expiresAt) {
       const remainingMs = new Date(stream.expiresAt).getTime() - now();
       if (remainingMs <= 0) return reject(stream, PRIMARY_CODES.EXPIRED);
       if (remainingMs < minimumExpiryMs) {
         return reject(stream, PRIMARY_CODES.EXPIRING_TOO_SOON);
       }
+    }
+    if (!isTemporaryUrlReusable(stream, { now: now(), safetyWindowMs: minimumExpiryMs })) {
+      return reject(stream, PRIMARY_CODES.EXPIRING_TOO_SOON);
     }
     return Object.freeze({
       accepted: true,

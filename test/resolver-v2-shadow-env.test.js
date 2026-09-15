@@ -39,6 +39,7 @@ delete process.env.STREAM_RESOLVER_V2_COOLDOWN_SECONDS;
 delete process.env.STREAM_RESOLVER_V2_HALF_OPEN_SUCCESS_THRESHOLD;
 delete process.env.STREAM_HLS_PROXY_ENABLED;
 delete process.env.STREAM_HLS_PROXY_SIGNING_SECRET;
+delete process.env.STREAM_TEMPORARY_URL_SAFETY_SECONDS;
 
 const env = require('../src/config/env');
 
@@ -188,4 +189,15 @@ test('HLS playback proxy is disabled and secretless by default', () => {
   assert.equal(env.STREAM_HLS_PROXY_SIGNING_SECRET, '');
   assert.equal(env.isExplicitlyEnabled('true'), true);
   assert.equal(env.isExplicitlyEnabled('TRUE'), false);
+});
+
+test('temporary URL safety window has one bounded shared default', () => {
+  assert.equal(env.STREAM_TEMPORARY_URL_SAFETY_SECONDS, 60);
+  for (const [value, expected] of [['1', 1], ['3600', 3600], ['0', 60],
+    ['3601', 60], ['bad', 60]]) {
+    process.env.TEMPORARY_SAFETY_FIXTURE = value;
+    assert.equal(env.boundedPositiveInteger('TEMPORARY_SAFETY_FIXTURE', 60, 1, 3600),
+      expected);
+  }
+  delete process.env.TEMPORARY_SAFETY_FIXTURE;
 });

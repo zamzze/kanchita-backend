@@ -26,6 +26,7 @@ const {
   STREAM_VERIFY_INTERVAL_MINUTES,
   STREAM_VERIFY_TIMEOUT_MS,
   STREAM_MAX_MANIFEST_BYTES,
+  STREAM_TEMPORARY_URL_SAFETY_SECONDS,
 } = require('../config/env');
 
 const MIN_LEASE_MARGIN_MS = 30_000;
@@ -163,6 +164,7 @@ const main = async () => {
     }),
     cacheTtlMinutes: STREAM_CACHE_TTL_MINUTES,
     verifyIntervalMinutes: STREAM_VERIFY_INTERVAL_MINUTES,
+    temporaryUrlSafetySeconds: STREAM_TEMPORARY_URL_SAFETY_SECONDS,
   });
   const worker = createStreamWorker({
     workerId,
