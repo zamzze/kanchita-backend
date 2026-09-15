@@ -19,7 +19,7 @@ const PLUTO_ID = /^[A-Za-z0-9_-]{6,128}$/;
 const MAX_MAPPINGS = 256;
 const MAX_DISCOVERY_ITEMS = 20;
 const DEFAULT_BOOT_URL = 'https://boot.pluto.tv/v4/start';
-const DEFAULT_BASE_URL = 'https://api.pluto.tv';
+const DEFAULT_BASE_URL = 'https://service-vod.clusters.pluto.tv';
 const DEFAULT_MAX_BYTES = 2 * 1024 * 1024;
 const SESSION_REFRESH_SKEW_MS = 60_000;
 const DEFAULT_SESSION_TTL_MS = 30 * 60 * 1000;
@@ -129,20 +129,26 @@ const firstHlsUrl = (value) => {
   return null;
 };
 
-const findPlutoItem = (payload, plutoId) => {
-  const stack = Array.isArray(payload?.categories) ? [...payload.categories] : [payload];
-  const seen = new Set();
-  while (stack.length) {
-    const item = stack.pop();
-    if (!item || typeof item !== 'object' || Array.isArray(item) || seen.has(item)) continue;
-    seen.add(item);
-    if (item._id === plutoId || item.id === plutoId) return item;
-    for (const value of Object.values(item)) {
-      if (Array.isArray(value)) stack.push(...value);
-      else if (value && typeof value === 'object') stack.push(value);
-    }
+const playbackPathFromItem = (item) => {
+  const path = stitchedHlsPath(item);
+  if (path) return path;
+  const url = firstHlsUrl(item);
+  if (!url) return null;
+  try {
+    const parsed = new URL(url);
+    return `${parsed.pathname}`;
+  } catch {
+    return null;
   }
-  return null;
+};
+
+const exactItemFromPayload = (payload, plutoId) => {
+  const items = Array.isArray(payload) ? payload
+    : Array.isArray(payload?.data) ? payload.data
+      : Array.isArray(payload?.items) ? payload.items : null;
+  if (!items) return null;
+  return items.find((item) => item && typeof item === 'object' &&
+    (item.id === plutoId || item._id === plutoId)) || null;
 };
 
 const contentKindFromItem = (item) => {
@@ -152,32 +158,6 @@ const contentKindFromItem = (item) => {
       Number.isInteger(item?.episode)) return 'episode';
   if (declared.includes('movie') || declared.includes('film')) return 'movie';
   return firstHlsUrl(item) ? 'movie' : 'unknown';
-};
-
-const discoverPlutoItem = (payload, limit = MAX_DISCOVERY_ITEMS) => {
-  const boundedLimit = Number.isInteger(limit) && limit >= 1
-    ? Math.min(limit, MAX_DISCOVERY_ITEMS) : MAX_DISCOVERY_ITEMS;
-  const queue = Array.isArray(payload?.categories) ? [...payload.categories] : [payload];
-  const seen = new Set();
-  let itemsChecked = 0;
-  for (let index = 0; index < queue.length && itemsChecked < boundedLimit; index += 1) {
-    const item = queue[index];
-    if (!item || typeof item !== 'object' || Array.isArray(item) || seen.has(item)) continue;
-    seen.add(item);
-    const plutoId = typeof item._id === 'string' ? item._id
-      : typeof item.id === 'string' ? item.id : '';
-    if (PLUTO_ID.test(plutoId)) {
-      itemsChecked += 1;
-      const url = firstHlsUrl(item);
-      if (url) return Object.freeze({ plutoId,
-        contentKind: contentKindFromItem(item), itemsChecked });
-    }
-    for (const value of Object.values(item)) {
-      if (Array.isArray(value)) queue.push(...value);
-      else if (value && typeof value === 'object') queue.push(value);
-    }
-  }
-  return Object.freeze({ plutoId: null, contentKind: null, itemsChecked });
 };
 
 const safeJson = (response) => {
@@ -296,7 +276,7 @@ const createPlutoSourceProvider = ({
       metadata: { sourceType: 'pluto' } });
   };
 
-  const buildDiagnosticSessionUrl = (item, token) => {
+  const buildSessionUrl = (item, token) => {
     if (!item?.path || !state.stitcherUrl || !token) return null;
     try {
       const relativePath = item.path.startsWith('/stitch/') ? `v2${item.path}` : item.path;
@@ -313,18 +293,16 @@ const createPlutoSourceProvider = ({
     }
   };
 
-  const getCatalog = async (client, token, signal, { discovery = false } = {}) => {
+  const getExactItem = async (client, token, plutoId, signal) => {
     const basePath = parsedBaseUrl.pathname === '/' ? '' : parsedBaseUrl.pathname;
-    const requestUrl = new URL(`${basePath}/v3/vod/categories`, parsedBaseUrl.origin);
-    requestUrl.searchParams.set('includeItems', 'true');
-    requestUrl.searchParams.set('deviceType', 'web');
-    requestUrl.searchParams.set('offset', discovery ? '0' : '1000');
-    if (discovery) requestUrl.searchParams.set('limit', String(MAX_DISCOVERY_ITEMS));
-    return requestJson(client, requestUrl.href, {
+    const requestUrl = new URL(`${basePath}/v4/vod/items`, parsedBaseUrl.origin);
+    requestUrl.searchParams.set('ids', plutoId);
+    const payload = await requestJson(client, requestUrl.href, {
       signal,
       headers: { authorization: `Bearer ${token}`, origin: 'https://pluto.tv',
         referer: 'https://pluto.tv/' },
     });
+    return payload === null ? null : exactItemFromPayload(payload, plutoId);
   };
 
   const clientFrom = (runtime) => {
@@ -366,15 +344,14 @@ const createPlutoSourceProvider = ({
     const token = await boot(client, runtime.signal);
     if (runtime.diagnosticSessionPlayback === true &&
         state.bootItem?.plutoId === mapping.plutoId) {
-      const url = buildDiagnosticSessionUrl(state.bootItem, token);
+      const url = buildSessionUrl(state.bootItem, token);
       const candidate = createCandidate(url);
       return candidate ? [candidate] : [];
     }
-    const payload = await getCatalog(client, token, runtime.signal);
-    if (payload === null) return [];
-    const item = findPlutoItem(payload, mapping.plutoId);
+    const item = await getExactItem(client, token, mapping.plutoId, runtime.signal);
     if (!item) return [];
-    const url = firstHlsUrl(item);
+    const path = playbackPathFromItem(item);
+    const url = buildSessionUrl(path ? { path } : null, token);
     if (!url) return [];
     const candidate = createCandidate(url);
     return candidate ? [candidate].slice(0, maxCandidates) : [];
@@ -405,8 +382,8 @@ module.exports = {
   MAX_MAPPINGS,
   createPlutoSourceProvider,
   discoverBootItem,
-  discoverPlutoItem,
-  findPlutoItem,
+  exactItemFromPayload,
   firstHlsUrl,
   normalizeMediaMap,
+  playbackPathFromItem,
 };

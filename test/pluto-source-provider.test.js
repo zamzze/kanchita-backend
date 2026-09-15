@@ -59,8 +59,22 @@ test('Pluto media map is explicit, bounded and first-valid-wins', () => {
   assert.equal(normalizeMediaMap(Array.from({ length: 257 }, () => ({}))), null);
 });
 
-test('Pluto provider boots anonymously, reads mapped movie and emits HLS candidate', async () => {
+test('Pluto provider performs no network request without an exact mapping', async () => {
+  let requests = 0;
+  const provider = createPlutoSourceProvider({
+    enabled: true,
+    baseUrl: 'https://service-vod.example.test',
+    bootUrl: 'https://boot.example.test/start',
+    http: { get: async () => { requests += 1; throw new Error('unexpected'); } },
+    mediaMap: [{ contentType: 'movie', tmdbId: 550, plutoId: 'movie123' }],
+  });
+  assert.deepEqual(await provider.getSources({ contentType: 'movie', tmdbId: 551 }), []);
+  assert.equal(requests, 0);
+});
+
+test('Pluto provider boots anonymously, fetches only the exact mapped movie and emits HLS', async () => {
   let bootCount = 0;
+  let itemCount = 0;
   let catalogCount = 0;
   let authorization;
   let bootUrl = '';
@@ -69,17 +83,23 @@ test('Pluto provider boots anonymously, reads mapped movie and emits HLS candida
       bootCount += 1;
       bootUrl = request.url;
       response.setHeader('content-type', 'application/json');
-      return response.end(JSON.stringify({ sessionToken: jwt }));
+      return response.end(JSON.stringify({ sessionToken: jwt,
+        servers: { stitcher: origin(server) }, stitcherParams: 'region=fixture' }));
     }
-    if (request.url.startsWith('/v3/vod/categories')) {
-      catalogCount += 1;
+    if (request.url.startsWith('/v4/vod/items')) {
+      itemCount += 1;
       authorization = request.headers.authorization;
       response.setHeader('content-type', 'application/json');
-      return response.end(JSON.stringify({ categories: [{ items: [
-        { _id: 'movie123', name: 'PRIVATE TITLE', stitched: { urls: [
-          { url: `${origin(server)}/master.m3u8` },
-        ] } },
-      ] }] }));
+      assert.equal(new URL(request.url, origin(server)).searchParams.get('ids'), 'movie123');
+      return response.end(JSON.stringify([
+        { _id: 'movie123', name: 'PRIVATE TITLE',
+          stitched: { path: '/stitch/hls/episode/movie123/master.m3u8' } },
+      ]));
+    }
+    if (request.url.includes('/categories')) {
+      catalogCount += 1;
+      response.statusCode = 500;
+      return response.end();
     }
     response.setHeader('content-type', 'application/vnd.apple.mpegurl');
     response.end(hls);
@@ -97,25 +117,30 @@ test('Pluto provider boots anonymously, reads mapped movie and emits HLS candida
     assert.equal(candidates[0].providerId, 'pluto_test');
     assert.deepEqual(candidates[0].headers, {});
     assert.deepEqual(candidates[0].metadata, { sourceType: 'pluto' });
-    assert.equal(candidates[0].urlSensitivity, 'normal');
-    assert.equal(candidates[0].expiresAt, undefined);
+    assert.equal(candidates[0].urlSensitivity, 'temporary_signed');
+    assert.equal(typeof candidates[0].expiresAt, 'string');
     assert.match(bootUrl, /deviceType=web/);
     assert.equal(authorization, `Bearer ${jwt}`);
     assert.equal(bootCount, 1);
+    assert.equal(itemCount, 1);
+    assert.equal(catalogCount, 0);
     await provider.getSources({ contentType: 'movie', tmdbId: 550 }, { http: client });
     assert.equal(bootCount, 1);
-    assert.equal(catalogCount, 2);
+    assert.equal(itemCount, 2);
     assert.doesNotMatch(JSON.stringify(candidates), /PRIVATE TITLE|Bearer|sessionToken/);
   } finally { await close(server); }
 });
 
 test('Pluto provider supports explicit episode mapping without title search', async () => {
+  let itemRequests = 0;
   const server = await listen((request, response) => {
     response.setHeader('content-type', 'application/json');
-    if (request.url.startsWith('/boot')) return response.end(JSON.stringify({ sessionToken: jwt }));
-    response.end(JSON.stringify({ categories: [{ items: [{ seasons: [{ episodes: [
-      { id: 'episode123', stitched: { urls: [{ url: `${origin(server)}/ep.m3u8` }] } },
-    ] }] }] }] }));
+    if (request.url.startsWith('/boot')) return response.end(JSON.stringify({ sessionToken: jwt,
+      servers: { stitcher: origin(server) }, stitcherParams: '' }));
+    itemRequests += 1;
+    assert.equal(new URL(request.url, origin(server)).searchParams.get('ids'), 'episode123');
+    response.end(JSON.stringify([{ id: 'episode123', type: 'episode',
+      stitched: { path: '/stitch/hls/episode/episode123/master.m3u8' } }]));
   });
   try {
     const client = createSafeHttpClient({ allowPrivateNetworks: true });
@@ -130,7 +155,8 @@ test('Pluto provider supports explicit episode mapping without title search', as
     const candidates = await provider.getSources({ contentType: 'episode', tmdbId: 10,
       season: 1, episode: 2 });
     assert.equal(candidates.length, 1);
-    assert.equal(candidates[0].url, `${origin(server)}/ep.m3u8`);
+    assert.match(candidates[0].url, /\/v2\/stitch\/hls\/episode\/episode123\/master\.m3u8/);
+    assert.equal(itemRequests, 1);
   } finally { await close(server); }
 });
 
@@ -143,16 +169,17 @@ test('Pluto status and malformed response semantics fail closed', async () => {
     }
     if (path.startsWith('/boot')) {
       response.setHeader('content-type', 'application/json');
-      return response.end(JSON.stringify({ sessionToken: jwt }));
+      return response.end(JSON.stringify({ sessionToken: jwt,
+        servers: { stitcher: origin(server) }, stitcherParams: '' }));
     }
     if (path.includes('unauthorized')) { response.statusCode = 401; return response.end(); }
     if (path.includes('forbidden')) { response.statusCode = 403; return response.end(); }
     if (path.includes('missing')) { response.statusCode = 404; return response.end(); }
     response.setHeader('content-type', 'application/json');
     if (path.includes('badjson')) return response.end('{bad');
-    if (path.includes('no-hls')) return response.end(JSON.stringify({
-      categories: [{ items: [{ _id: 'movie123', stitched: { urls: [] } }] }],
-    }));
+    if (path.includes('no-hls')) return response.end(JSON.stringify([
+      { _id: 'movie123', stitched: { urls: [] } },
+    ]));
     response.end(JSON.stringify({ wrong: [] }));
   });
   const client = createSafeHttpClient({ allowPrivateNetworks: true });
@@ -180,7 +207,8 @@ test('Pluto provider propagates timeout and abort through SafeHttpClient', async
   const server = await listen((request, response) => {
     if (request.url.startsWith('/boot')) {
       response.setHeader('content-type', 'application/json');
-      return response.end(JSON.stringify({ sessionToken: jwt }));
+      return response.end(JSON.stringify({ sessionToken: jwt,
+        servers: { stitcher: origin(server) }, stitcherParams: '' }));
     }
     setTimeout(() => {
       response.setHeader('content-type', 'application/json');
@@ -209,17 +237,18 @@ test('Pluto provider propagates timeout and abort through SafeHttpClient', async
   } finally { await close(server); }
 });
 
-test('Pluto provider composes catalog, DirectHlsResolver, preflight and primary', async () => {
+test('Pluto exact item provider composes DirectHlsResolver, preflight and primary', async () => {
   const server = await listen((request, response) => {
     if (request.url.startsWith('/boot')) {
       response.setHeader('content-type', 'application/json');
-      return response.end(JSON.stringify({ sessionToken: jwt }));
+      return response.end(JSON.stringify({ sessionToken: jwt,
+        servers: { stitcher: origin(server) }, stitcherParams: '' }));
     }
-    if (request.url.startsWith('/v3/vod/categories')) {
+    if (request.url.startsWith('/v4/vod/items')) {
       response.setHeader('content-type', 'application/json');
-      return response.end(JSON.stringify({ categories: [{ items: [
-        { _id: 'movie123', stitched: { urls: [{ url: `${origin(server)}/master.m3u8` }] } },
-      ] }] }));
+      return response.end(JSON.stringify([
+        { _id: 'movie123', stitched: { path: '/stitch/hls/episode/movie123/master.m3u8' } },
+      ]));
     }
     response.setHeader('content-type', 'application/vnd.apple.mpegurl');
     response.end(hls);
@@ -267,4 +296,6 @@ test('Pluto provider has no browser, legacy, direct transport or persistent-cook
     '../src/modules/streams/resolverV2/providers/plutoSourceProvider'), 'utf8');
   assert.doesNotMatch(source,
     /puppeteer|browserSlots|ProviderC|ResolverExecutor|child_process|linkExtractor|\bfetch\s*\(|http\.get|https\.get|axios|CookieJar|set-cookie/i);
+  assert.doesNotMatch(source, /v3\/vod\/categories|includeItems=true/i);
+  assert.match(source, /\/v4\/vod\/items/);
 });

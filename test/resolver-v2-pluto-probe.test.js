@@ -12,6 +12,7 @@ process.env.TMDB_API_KEY ||= 'unused-test-tmdb-key';
 
 const { createSafeHttpClient } = require('../src/modules/streams/http/safeHttpClient');
 const {
+  DIAGNOSTIC_VOD_ID,
   createPlutoProbe,
   formatJson,
   formatText,
@@ -34,6 +35,9 @@ test('Pluto probe CLI requires explicit mapping and emits sanitized summaries', 
   assert.equal(parseArgs(['--content-type', 'episode', '--tmdb-id', '10',
     '--pluto-id', 'episode123', '--season', '1', '--episode', '2']).ok, true);
   assert.equal(parseArgs(['--discover']).ok, true);
+  assert.equal(parseArgs(['--vod-discover']).ok, true);
+  assert.equal(parseArgs(['--vod-discover', '--discover']).ok, false);
+  assert.equal(parseArgs(['--vod-discover', '--pluto-id', 'movie123']).ok, false);
   assert.equal(parseArgs(['--discover', '--tmdb-id', '550', '--pluto-id', 'movie123']).ok,
     false);
   assert.equal(parseArgs(['--url', 'https://example.test']).ok, false);
@@ -41,15 +45,15 @@ test('Pluto probe CLI requires explicit mapping and emits sanitized summaries', 
   const server = await listen((request, response) => {
     if (request.url.startsWith('/boot')) {
       response.setHeader('content-type', 'application/json');
-      return response.end(JSON.stringify({ sessionToken: jwt }));
+      return response.end(JSON.stringify({ sessionToken: jwt,
+        servers: { stitcher: origin(server) }, stitcherParams: '' }));
     }
-    if (request.url.startsWith('/v3/vod/categories')) {
+    if (request.url.startsWith('/v4/vod/items')) {
       response.setHeader('content-type', 'application/json');
-      return response.end(JSON.stringify({ categories: [{ items: [
-        { _id: 'movie123', name: 'PRIVATE TITLE', stitched: { urls: [
-          { url: `${origin(server)}/master.m3u8?token=PRIVATE_URL_TOKEN` },
-        ] } },
-      ] }] }));
+      return response.end(JSON.stringify([
+        { _id: 'movie123', name: 'PRIVATE TITLE',
+          stitched: { path: '/stitch/hls/episode/movie123/master.m3u8' } },
+      ]));
     }
     response.setHeader('content-type', 'application/vnd.apple.mpegurl');
     response.end('#EXTM3U\n#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="a",LANGUAGE="es-419",NAME="Latino"\n#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="s",LANGUAGE="es",NAME="ES",URI="sub.vtt"\n#EXT-X-STREAM-INF:BANDWIDTH=1,RESOLUTION=1920x1080,AUDIO="a",SUBTITLES="s"\nmedia.m3u8\n');
@@ -65,6 +69,7 @@ test('Pluto probe CLI requires explicit mapping and emits sanitized summaries', 
     assert.equal(result.boot_ok, true);
     assert.equal(result.hls_found, true);
     assert.equal(result.hls_valid, true);
+    assert.equal(result.exact_item_request, true);
     assert.equal(result.variants, 1);
     assert.equal(result.audio, 1);
     assert.equal(result.subtitles, 1);
@@ -74,6 +79,50 @@ test('Pluto probe CLI requires explicit mapping and emits sanitized summaries', 
     }
   } finally { await close(server); }
 });
+
+test('Pluto VOD discovery uses one bounded exact item and reuses production provider flow',
+  async () => {
+    let bootCount = 0;
+    let exactItemCount = 0;
+    let catalogCount = 0;
+    const server = await listen((request, response) => {
+      if (request.url.startsWith('/boot')) {
+        bootCount += 1;
+        response.setHeader('content-type', 'application/json');
+        return response.end(JSON.stringify({ sessionToken: jwt,
+          servers: { stitcher: origin(server) }, stitcherParams: 'region=fixture' }));
+      }
+      if (request.url.startsWith('/v4/vod/items')) {
+        exactItemCount += 1;
+        assert.equal(new URL(request.url, origin(server)).searchParams.get('ids'),
+          DIAGNOSTIC_VOD_ID);
+        response.setHeader('content-type', 'application/json');
+        return response.end(JSON.stringify([{ id: DIAGNOSTIC_VOD_ID, type: 'movie',
+          stitched: { path: `/stitch/hls/episode/${DIAGNOSTIC_VOD_ID}/master.m3u8` } }]));
+      }
+      if (request.url.includes('/categories')) catalogCount += 1;
+      response.setHeader('content-type', 'application/vnd.apple.mpegurl');
+      response.end('#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1,RESOLUTION=1920x1080\nmedia.m3u8\n');
+    });
+    try {
+      const parsed = parseArgs(['--vod-discover', '--base-url', origin(server),
+        '--boot-url', `${origin(server)}/boot`, '--timeout-ms', '3000']);
+      const result = await createPlutoProbe({
+        httpClient: createSafeHttpClient({ allowPrivateNetworks: true }),
+      }).run(parsed.value);
+      assert.equal(result.status, 'ready');
+      assert.equal(result.content_kind, 'movie');
+      assert.equal(result.pluto_id, DIAGNOSTIC_VOD_ID);
+      assert.equal(result.exact_item_request, true);
+      assert.equal(result.hls_valid, true);
+      assert.equal(result.temporary_url, true);
+      assert.equal(result.expiry_detected, true);
+      assert.equal(bootCount, 1);
+      assert.equal(exactItemCount, 1);
+      assert.equal(catalogCount, 0);
+      assert.doesNotMatch(formatJson(result), /jwt=|Bearer|region=fixture|master\.m3u8/i);
+    } finally { await close(server); }
+  });
 
 test('Pluto discovery inspects one bounded catalog page then reuses the real provider path',
   async () => {
@@ -199,7 +248,8 @@ test('Pluto probe maps operational failures to coarse statuses only', async () =
   const server = await listen((request, response) => {
     if (request.url.startsWith('/boot')) {
       response.setHeader('content-type', 'application/json');
-      return response.end(JSON.stringify({ sessionToken: jwt }));
+      return response.end(JSON.stringify({ sessionToken: jwt,
+        servers: { stitcher: origin(server) }, stitcherParams: '' }));
     }
     response.statusCode = 500;
     response.end('PRIVATE BODY');

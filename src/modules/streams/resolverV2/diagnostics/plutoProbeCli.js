@@ -7,19 +7,22 @@ const { createDirectHlsResolver } = require('../resolvers/directHlsResolver');
 const { createPlutoSourceProvider, DEFAULT_BASE_URL, DEFAULT_BOOT_URL } =
   require('../providers/plutoSourceProvider');
 
-const BOOLEAN_FLAGS = new Set(['--json', '--discover']);
+// Public LATAM movie URL observed in Pluto's indexed web surface. Diagnostic only.
+const DIAGNOSTIC_VOD_ID = '69d91bb1bf7771122425d2ba';
+const BOOLEAN_FLAGS = new Set(['--json', '--discover', '--vod-discover']);
 const VALUE_FLAGS = new Set([
   '--content-type', '--tmdb-id', '--season', '--episode', '--pluto-id',
   '--base-url', '--boot-url', '--timeout-ms',
 ]);
 
 const parseArgs = (argv = []) => {
-  const options = { json: false, discover: false, contentType: 'movie', baseUrl: DEFAULT_BASE_URL,
-    bootUrl: DEFAULT_BOOT_URL, timeoutMs: 10_000 };
+  const options = { json: false, discover: false, vodDiscover: false, contentType: 'movie',
+    baseUrl: DEFAULT_BASE_URL, bootUrl: DEFAULT_BOOT_URL, timeoutMs: 10_000 };
   for (let index = 0; index < argv.length; index += 1) {
     const flag = argv[index];
     if (BOOLEAN_FLAGS.has(flag)) {
-      options[flag.slice(2)] = true;
+      const key = flag.slice(2).replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
+      options[key] = true;
       continue;
     }
     if (!VALUE_FLAGS.has(flag)) return { ok: false, json: options.json };
@@ -39,21 +42,23 @@ const parseArgs = (argv = []) => {
     options.season !== undefined || options.episode !== undefined;
   if (!['movie', 'episode'].includes(options.contentType) ||
       !Number.isInteger(timeoutMs) || timeoutMs < 1000 || timeoutMs > 30000 ||
-      (options.discover && hasExplicitMapping) ||
-      (!options.discover && (!Number.isInteger(tmdbId) || tmdbId < 1 ||
+      (options.discover && options.vodDiscover) ||
+      ((options.discover || options.vodDiscover) && hasExplicitMapping) ||
+      (!options.discover && !options.vodDiscover && (!Number.isInteger(tmdbId) || tmdbId < 1 ||
         typeof options.plutoId !== 'string' || !options.plutoId.trim())) ||
-      (!options.discover && options.contentType === 'episode' &&
+      (!options.discover && !options.vodDiscover && options.contentType === 'episode' &&
         (!Number.isInteger(season) || season < 0 ||
           !Number.isInteger(episode) || episode < 1))) {
     return { ok: false, json: options.json };
   }
   return { ok: true, json: options.json, value: Object.freeze({
     discover: options.discover,
+    vodDiscover: options.vodDiscover,
     contentType: options.contentType,
-    tmdbId: options.discover ? null : tmdbId,
-    season: options.discover ? null : season,
-    episode: options.discover ? null : episode,
-    plutoId: options.discover ? null : options.plutoId.trim(),
+    tmdbId: options.discover || options.vodDiscover ? null : tmdbId,
+    season: options.discover || options.vodDiscover ? null : season,
+    episode: options.discover || options.vodDiscover ? null : episode,
+    plutoId: options.discover || options.vodDiscover ? null : options.plutoId.trim(),
     baseUrl: options.baseUrl,
     bootUrl: options.bootUrl,
     timeoutMs,
@@ -76,11 +81,13 @@ const createPlutoProbe = ({ httpClient, clock = Date.now } = {}) => {
     const result = {
       status: 'failed',
       boot_ok: false,
-      discovery_endpoint_type: input.discover ? 'boot_epg' : 'explicit_mapping',
+      discovery_endpoint_type: input.discover ? 'boot_epg'
+        : input.vodDiscover ? 'exact_vod_item' : 'explicit_mapping',
       response_bytes_read: 0,
       items_inspected: 0,
       pluto_id: null,
       content_kind: null,
+      exact_item_request: input.discover !== true,
       hls_found: false,
       hls_valid: false,
       variants: 0,
@@ -96,7 +103,13 @@ const createPlutoProbe = ({ httpClient, clock = Date.now } = {}) => {
       const client = httpClient || createSafeHttpClient({ timeoutMs: input.timeoutMs });
       let mapping = input;
       let provider = null;
-      if (input.discover) {
+      if (input.vodDiscover) {
+        mapping = Object.freeze({ ...input, contentType: 'movie', tmdbId: 1,
+          season: null, episode: null, plutoId: DIAGNOSTIC_VOD_ID });
+        result.pluto_id = DIAGNOSTIC_VOD_ID;
+        result.content_kind = 'movie';
+        result.items_inspected = 1;
+      } else if (input.discover) {
         const discoveryProvider = createPlutoSourceProvider({
           id: 'pluto_discovery', enabled: true, baseUrl: input.baseUrl,
           bootUrl: input.bootUrl, timeoutMs: input.timeoutMs,
@@ -198,6 +211,7 @@ const safeOutput = (result) => Object.freeze({
   items_inspected: result.items_inspected,
   pluto_id: result.pluto_id,
   content_kind: result.content_kind,
+  exact_item_request: result.exact_item_request,
   hls_found: result.hls_found,
   hls_valid: result.hls_valid,
   variants: result.variants,
@@ -216,6 +230,7 @@ const formatText = (result) => Object.entries(safeOutput(result))
 const formatJson = (result) => JSON.stringify(safeOutput(result));
 
 module.exports = {
+  DIAGNOSTIC_VOD_ID,
   createPlutoProbe,
   formatJson,
   formatText,
