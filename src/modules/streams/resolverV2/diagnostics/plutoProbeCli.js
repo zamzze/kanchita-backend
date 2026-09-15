@@ -63,9 +63,9 @@ const parseArgs = (argv = []) => {
 const safeHlsSummary = (stream) => {
   const info = stream?.hlsInfo || {};
   return Object.freeze({
-    variant_count: Array.isArray(info.variants) ? info.variants.length : 0,
-    audio_count: Array.isArray(info.audioTracks) ? Math.min(info.audioTracks.length, 16) : 0,
-    subtitle_count: Array.isArray(info.subtitleTracks)
+    variants: Array.isArray(info.variants) ? info.variants.length : 0,
+    audio: Array.isArray(info.audioTracks) ? Math.min(info.audioTracks.length, 16) : 0,
+    subtitles: Array.isArray(info.subtitleTracks)
       ? Math.min(info.subtitleTracks.length, 16) : 0,
   });
 };
@@ -76,76 +76,80 @@ const createPlutoProbe = ({ httpClient, clock = Date.now } = {}) => {
     const result = {
       status: 'failed',
       boot_ok: false,
-      catalog_ok: false,
-      items_checked: 0,
-      public_item_found: false,
+      discovery_endpoint_type: input.discover ? 'boot_epg' : 'explicit_mapping',
+      response_bytes_read: 0,
+      items_inspected: 0,
       pluto_id: null,
       content_kind: null,
       hls_found: false,
       hls_valid: false,
-      variant_count: 0,
-      audio_count: 0,
-      subtitle_count: 0,
+      variants: 0,
+      audio: 0,
+      subtitles: 0,
+      session_requirement: 'unknown',
       latency_ms: 0,
     };
     try {
       const client = httpClient || createSafeHttpClient({ timeoutMs: input.timeoutMs });
       let mapping = input;
+      let provider = null;
       if (input.discover) {
         const discoveryProvider = createPlutoSourceProvider({
           id: 'pluto_discovery', enabled: true, baseUrl: input.baseUrl,
           bootUrl: input.bootUrl, timeoutMs: input.timeoutMs,
           mediaMap: [], http: client,
         });
+        provider = discoveryProvider;
         const discovered = await discoveryProvider.discoverPublicItem({
           maxItems: 20,
           onStage: (stage) => {
             if (stage === 'boot') result.boot_ok = true;
-            if (stage === 'catalog') result.catalog_ok = true;
           },
         });
-        result.items_checked = discovered.itemsChecked;
-        result.public_item_found = Boolean(discovered.plutoId);
+        result.discovery_endpoint_type = discovered.endpointType;
+        result.response_bytes_read = discovered.responseBytes;
+        result.items_inspected = discovered.itemsChecked;
         result.pluto_id = discovered.plutoId;
         result.content_kind = discovered.contentKind;
         if (!discovered.plutoId) {
           result.status = 'no_public_item';
           mapping = null;
         } else {
-          mapping = Object.freeze({ ...input, contentType: discovered.contentKind || 'movie',
-            tmdbId: 1, season: discovered.contentKind === 'episode' ? 1 : null,
-            episode: discovered.contentKind === 'episode' ? 1 : null,
+          const mappedType = discovered.contentKind === 'episode' ? 'episode' : 'movie';
+          mapping = Object.freeze({ ...input, contentType: mappedType,
+            tmdbId: 1, season: mappedType === 'episode' ? 1 : null,
+            episode: mappedType === 'episode' ? 1 : null,
             plutoId: discovered.plutoId });
         }
       } else {
-        result.public_item_found = true;
         result.pluto_id = input.plutoId;
         result.content_kind = input.contentType;
       }
       if (mapping) {
-        const provider = createPlutoSourceProvider({
-        id: 'pluto_probe',
-        enabled: true,
-        baseUrl: mapping.baseUrl,
-        bootUrl: mapping.bootUrl,
-        timeoutMs: input.timeoutMs,
-        mediaMap: [{ contentType: mapping.contentType, tmdbId: mapping.tmdbId,
-          ...(mapping.contentType === 'episode'
-            ? { season: mapping.season, episode: mapping.episode } : {}),
-          plutoId: mapping.plutoId }],
-        http: client,
-      });
+        provider ||= createPlutoSourceProvider({
+          id: 'pluto_probe', enabled: true, baseUrl: mapping.baseUrl,
+          bootUrl: mapping.bootUrl, timeoutMs: input.timeoutMs,
+          mediaMap: [{ contentType: mapping.contentType, tmdbId: mapping.tmdbId,
+            ...(mapping.contentType === 'episode'
+              ? { season: mapping.season, episode: mapping.episode } : {}),
+            plutoId: mapping.plutoId }],
+          http: client,
+        });
         const candidates = await provider.getSources({
-        contentType: mapping.contentType,
-        contentId: 'pluto-probe',
-        tmdbId: mapping.tmdbId,
-        title: 'Pluto probe',
-        season: mapping.season,
-        episode: mapping.episode,
-      });
+          contentType: mapping.contentType,
+          contentId: 'pluto-probe',
+          tmdbId: mapping.tmdbId,
+          title: 'Pluto probe',
+          season: mapping.season,
+          episode: mapping.episode,
+        }, { diagnosticSessionPlayback: input.discover === true,
+          temporaryPlutoId: input.discover ? mapping.plutoId : undefined });
         result.boot_ok = true;
-        result.catalog_ok = true;
         result.hls_found = candidates.length > 0;
+        if (candidates.length) {
+          result.session_requirement = new URL(candidates[0].url).search
+            ? 'url_temporal' : 'none';
+        }
         if (candidates.length) {
           const direct = createDirectHlsResolver({ httpClient: client,
             timeoutMs: input.timeoutMs });
@@ -179,23 +183,26 @@ const createPlutoProbe = ({ httpClient, clock = Date.now } = {}) => {
   return Object.freeze({ run });
 };
 
-const formatText = (result) => [
-  `status=${result.status}`,
-  `boot_ok=${result.boot_ok}`,
-  `catalog_ok=${result.catalog_ok}`,
-  `items_checked=${result.items_checked}`,
-  `public_item_found=${result.public_item_found}`,
-  `pluto_id=${result.pluto_id || ''}`,
-  `content_kind=${result.content_kind || ''}`,
-  `hls_found=${result.hls_found}`,
-  `hls_valid=${result.hls_valid}`,
-  `variant_count=${result.variant_count}`,
-  `audio_count=${result.audio_count}`,
-  `subtitle_count=${result.subtitle_count}`,
-  `latency_ms=${result.latency_ms}`,
-].join('\n');
+const safeOutput = (result) => Object.freeze({
+  boot_ok: result.boot_ok,
+  discovery_endpoint_type: result.discovery_endpoint_type,
+  response_bytes_read: result.response_bytes_read,
+  items_inspected: result.items_inspected,
+  pluto_id: result.pluto_id,
+  content_kind: result.content_kind,
+  hls_found: result.hls_found,
+  hls_valid: result.hls_valid,
+  variants: result.variants,
+  audio: result.audio,
+  subtitles: result.subtitles,
+  session_requirement: result.session_requirement,
+  latency_ms: result.latency_ms,
+});
 
-const formatJson = (result) => JSON.stringify(result);
+const formatText = (result) => Object.entries(safeOutput(result))
+  .map(([name, value]) => `${name}=${value ?? ''}`).join('\n');
+
+const formatJson = (result) => JSON.stringify(safeOutput(result));
 
 module.exports = {
   createPlutoProbe,

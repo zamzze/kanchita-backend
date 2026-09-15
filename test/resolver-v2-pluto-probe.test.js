@@ -63,12 +63,11 @@ test('Pluto probe CLI requires explicit mapping and emits sanitized summaries', 
     }).run(parsed.value);
     assert.equal(result.status, 'ready');
     assert.equal(result.boot_ok, true);
-    assert.equal(result.catalog_ok, true);
     assert.equal(result.hls_found, true);
     assert.equal(result.hls_valid, true);
-    assert.equal(result.variant_count, 1);
-    assert.equal(result.audio_count, 1);
-    assert.equal(result.subtitle_count, 1);
+    assert.equal(result.variants, 1);
+    assert.equal(result.audio, 1);
+    assert.equal(result.subtitles, 1);
     for (const output of [formatText(result), formatJson(result)]) {
       assert.doesNotMatch(output,
         /PRIVATE|sessionToken|Bearer|127\.0\.0\.1|master\.m3u8/i);
@@ -80,23 +79,23 @@ test('Pluto discovery inspects one bounded catalog page then reuses the real pro
   async () => {
     let bootCount = 0;
     let catalogCount = 0;
-    const catalogUrls = [];
     const server = await listen((request, response) => {
       if (request.url.startsWith('/boot')) {
         bootCount += 1;
         response.setHeader('content-type', 'application/json');
-        return response.end(JSON.stringify({ sessionToken: jwt }));
+        return response.end(JSON.stringify({ sessionToken: jwt,
+          servers: { stitcher: origin(server) }, stitcherParams: 'region=fixture',
+          EPG: [
+            { id: 'empty001', stitched: {} },
+            { id: 'public002', stitched: {
+              path: '/stitch/hls/channel/public002/master.m3u8',
+            } },
+          ] }));
       }
       if (request.url.startsWith('/v3/vod/categories')) {
         catalogCount += 1;
-        catalogUrls.push(request.url);
-        response.setHeader('content-type', 'application/json');
-        return response.end(JSON.stringify({ categories: [{ items: [
-          { _id: 'empty001', type: 'movie', stitched: { urls: [] } },
-          { _id: 'public002', type: 'movie', stitched: { urls: [
-            { url: `${origin(server)}/master.m3u8?token=PRIVATE_URL_TOKEN` },
-          ] } },
-        ] }] }));
+        response.statusCode = 500;
+        return response.end();
       }
       response.setHeader('content-type', 'application/vnd.apple.mpegurl');
       response.end('#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1,RESOLUTION=1280x720\nmedia.m3u8\n');
@@ -109,34 +108,31 @@ test('Pluto discovery inspects one bounded catalog page then reuses the real pro
       }).run(parsed.value);
       assert.equal(result.status, 'ready');
       assert.equal(result.boot_ok, true);
-      assert.equal(result.catalog_ok, true);
-      assert.equal(result.items_checked, 2);
-      assert.equal(result.public_item_found, true);
+      assert.equal(result.discovery_endpoint_type, 'boot_epg');
+      assert.ok(result.response_bytes_read > 0);
+      assert.equal(result.items_inspected, 2);
       assert.equal(result.pluto_id, 'public002');
-      assert.equal(result.content_kind, 'movie');
+      assert.equal(result.content_kind, 'channel');
       assert.equal(result.hls_found, true);
       assert.equal(result.hls_valid, true);
-      assert.equal(result.variant_count, 1);
-      assert.equal(bootCount, 2);
-      assert.equal(catalogCount, 2);
-      assert.match(catalogUrls[0], /[?&]offset=0(?:&|$)/);
-      assert.match(catalogUrls[0], /[?&]limit=20(?:&|$)/);
-      assert.match(catalogUrls[1], /[?&]offset=1000(?:&|$)/);
+      assert.equal(result.variants, 1);
+      assert.equal(result.session_requirement, 'url_temporal');
+      assert.equal(bootCount, 1);
+      assert.equal(catalogCount, 0);
       assert.doesNotMatch(formatJson(result),
-        /sessionToken|Bearer|PRIVATE_URL_TOKEN|master\.m3u8|127\.0\.0\.1/i);
+        /sessionToken|Bearer|region=fixture|master\.m3u8|127\.0\.0\.1/i);
     } finally { await close(server); }
   });
 
-test('Pluto discovery handles empty catalogs and items without HLS', async () => {
-  for (const categories of [[], [{ items: [
-    { _id: 'empty001', type: 'movie', stitched: { urls: [] } },
-  ] }]]) {
+test('Pluto discovery handles empty boot listings and items without HLS', async () => {
+  for (const EPG of [[], [{ id: 'empty001', stitched: {} }]]) {
     const server = await listen((request, response) => {
       response.setHeader('content-type', 'application/json');
       if (request.url.startsWith('/boot')) {
-        return response.end(JSON.stringify({ sessionToken: jwt }));
+        return response.end(JSON.stringify({ sessionToken: jwt, EPG }));
       }
-      response.end(JSON.stringify({ categories }));
+      response.statusCode = 500;
+      response.end();
     });
     try {
       const parsed = parseArgs(['--discover', '--base-url', origin(server),
@@ -146,23 +142,22 @@ test('Pluto discovery handles empty catalogs and items without HLS', async () =>
       }).run(parsed.value);
       assert.equal(result.status, 'no_public_item');
       assert.equal(result.boot_ok, true);
-      assert.equal(result.catalog_ok, true);
-      assert.equal(result.public_item_found, false);
+      assert.equal(result.discovery_endpoint_type, 'boot_epg');
       assert.equal(result.hls_found, false);
     } finally { await close(server); }
   }
 });
 
 test('Pluto discovery never inspects more than twenty identified items', async () => {
-  const items = Array.from({ length: 21 }, (_, index) => ({
-    _id: `item${String(index).padStart(3, '0')}`,
-    type: 'movie',
-    stitched: { urls: index === 20 ? [{ url: 'https://example.test/master.m3u8' }] : [] },
+  const EPG = Array.from({ length: 21 }, (_, index) => ({
+    id: `item${String(index).padStart(3, '0')}`,
+    stitched: index === 20 ? { path: '/stitch/hls/channel/late/master.m3u8' } : {},
   }));
   const server = await listen((request, response) => {
     response.setHeader('content-type', 'application/json');
     if (request.url.startsWith('/boot')) {
-      return response.end(JSON.stringify({ sessionToken: jwt }));
+      return response.end(JSON.stringify({ sessionToken: jwt, EPG,
+        servers: { stitcher: 'https://example.test' } }));
     }
     response.end(JSON.stringify({ categories: [{ items }] }));
   });
@@ -173,8 +168,27 @@ test('Pluto discovery never inspects more than twenty identified items', async (
       httpClient: createSafeHttpClient({ allowPrivateNetworks: true }),
     }).run(parsed.value);
     assert.equal(result.status, 'no_public_item');
-    assert.equal(result.items_checked, 20);
+    assert.equal(result.items_inspected, 20);
     assert.equal(result.pluto_id, null);
+  } finally { await close(server); }
+});
+
+test('Pluto discovery aborts an oversized boot response before buffering it', async () => {
+  const server = await listen((_request, response) => {
+    response.setHeader('content-type', 'application/json');
+    response.setHeader('content-length', String(3 * 1024 * 1024));
+    response.end('{"sessionToken":"not-consumed"}');
+  });
+  try {
+    const parsed = parseArgs(['--discover', '--base-url', origin(server),
+      '--boot-url', `${origin(server)}/boot`, '--timeout-ms', '3000']);
+    const result = await createPlutoProbe({
+      httpClient: createSafeHttpClient({ allowPrivateNetworks: true }),
+    }).run(parsed.value);
+    assert.equal(result.status, 'unreachable');
+    assert.equal(result.boot_ok, false);
+    assert.equal(result.response_bytes_read, 0);
+    assert.equal(result.items_inspected, 0);
   } finally { await close(server); }
 });
 

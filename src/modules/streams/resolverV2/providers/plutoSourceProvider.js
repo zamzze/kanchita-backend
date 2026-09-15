@@ -85,6 +85,49 @@ const normalizeHttpUrl = (value) => {
   }
 };
 
+const normalizeHlsPath = (value) => {
+  if (typeof value !== 'string' || !value.trim() || value.length > 4096) return null;
+  try {
+    const url = new URL(value.trim(), 'https://example.test');
+    return url.pathname.toLowerCase().endsWith('.m3u8') ? value.trim() : null;
+  } catch {
+    return null;
+  }
+};
+
+const stitchedHlsPath = (item) => {
+  const stitched = item?.stitched;
+  const direct = normalizeHlsPath(stitched?.path);
+  if (direct) return direct;
+  const paths = Array.isArray(stitched?.paths) ? stitched.paths : [];
+  for (const entry of paths) {
+    const path = normalizeHlsPath(typeof entry === 'string' ? entry : entry?.path);
+    const type = typeof entry?.type === 'string' ? entry.type.toLowerCase() : 'hls';
+    if (path && type === 'hls') return path;
+  }
+  return null;
+};
+
+const discoverBootItem = (payload, limit = MAX_DISCOVERY_ITEMS) => {
+  const boundedLimit = Number.isInteger(limit) && limit >= 1
+    ? Math.min(limit, MAX_DISCOVERY_ITEMS) : MAX_DISCOVERY_ITEMS;
+  const items = [...(Array.isArray(payload?.EPG) ? payload.EPG : []),
+    ...(Array.isArray(payload?.VOD) ? payload.VOD : [])];
+  let itemsChecked = 0;
+  for (const item of items.slice(0, boundedLimit)) {
+    const plutoId = typeof item?.id === 'string' ? item.id
+      : typeof item?._id === 'string' ? item._id : '';
+    itemsChecked += 1;
+    const path = stitchedHlsPath(item);
+    if (PLUTO_ID.test(plutoId) && path) {
+      const contentKind = (Array.isArray(payload?.EPG) && payload.EPG.includes(item))
+        ? 'channel' : contentKindFromItem(item);
+      return Object.freeze({ plutoId, contentKind, itemsChecked, path });
+    }
+  }
+  return Object.freeze({ plutoId: null, contentKind: null, itemsChecked, path: null });
+};
+
 const firstHlsUrl = (value) => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const stitched = value.stitched;
@@ -113,7 +156,7 @@ const findPlutoItem = (payload, plutoId) => {
   return null;
 };
 
-const contentKind = (item) => {
+const contentKindFromItem = (item) => {
   const declared = [item?.type, item?.contentType, item?.kind]
     .find((value) => typeof value === 'string')?.toLowerCase() || '';
   if (declared.includes('episode') || Number.isInteger(item?.episodeNumber) ||
@@ -137,7 +180,8 @@ const discoverPlutoItem = (payload, limit = MAX_DISCOVERY_ITEMS) => {
     if (PLUTO_ID.test(plutoId)) {
       itemsChecked += 1;
       const url = firstHlsUrl(item);
-      if (url) return Object.freeze({ plutoId, contentKind: contentKind(item), itemsChecked });
+      if (url) return Object.freeze({ plutoId,
+        contentKind: contentKindFromItem(item), itemsChecked });
     }
     for (const value of Object.values(item)) {
       if (Array.isArray(value)) queue.push(...value);
@@ -207,9 +251,10 @@ const createPlutoSourceProvider = ({
   }
   const active = enabled === true && parsedBaseUrl !== null;
   const mappingByKey = new Map(mappings.map((entry) => [mediaKey(entry), entry]));
-  const state = { token: '', expiresAt: 0, deviceId: randomUUID(), sessionId: randomUUID() };
+  const state = { token: '', expiresAt: 0, deviceId: randomUUID(), sessionId: randomUUID(),
+    bootBytes: 0, bootItem: null, stitcherUrl: null, stitcherParams: '' };
 
-  const requestJson = async (client, url, { headers = {}, signal } = {}) => {
+  const requestJson = async (client, url, { headers = {}, signal, onResponse } = {}) => {
     let response;
     try {
       response = await client.get(url, {
@@ -222,7 +267,9 @@ const createPlutoSourceProvider = ({
     }
     if (response.status === 404) return null;
     if (!response.ok) throw providerError(ERROR_CODES.HTTP_ERROR);
-    return safeJson(response);
+    const payload = safeJson(response);
+    if (typeof onResponse === 'function') onResponse(response.body.length);
+    return payload;
   };
 
   const boot = async (client, signal) => {
@@ -231,7 +278,7 @@ const createPlutoSourceProvider = ({
     }
     const payload = await requestJson(client, createBootUrl({
       bootUrl: parsedBootUrl, deviceId: state.deviceId, sessionId: state.sessionId,
-    }), { signal });
+    }), { signal, onResponse: (bytes) => { state.bootBytes = bytes; } });
     const token = typeof payload?.sessionToken === 'string' ? payload.sessionToken : '';
     if (!token) throw providerError(ERROR_CODES.INVALID_RESPONSE);
     const tokenExpiry = parseJwtExpiry(token, now);
@@ -241,7 +288,28 @@ const createPlutoSourceProvider = ({
       tokenExpiry > now() ? tokenExpiry : fallbackExpiry,
       now() + MAX_SESSION_TTL_MS
     );
+    state.bootItem = discoverBootItem(payload);
+    state.stitcherUrl = normalizeBaseUrl(payload?.servers?.stitcher);
+    state.stitcherParams = typeof payload?.stitcherParams === 'string' &&
+      payload.stitcherParams.length <= 4096 ? payload.stitcherParams : '';
     return state.token;
+  };
+
+  const buildDiagnosticSessionUrl = (item, token) => {
+    if (!item?.path || !state.stitcherUrl || !token) return null;
+    try {
+      const relativePath = item.path.startsWith('/stitch/') ? `v2${item.path}` : item.path;
+      const url = new URL(relativePath, state.stitcherUrl);
+      for (const [name, value] of new URLSearchParams(state.stitcherParams)) {
+        url.searchParams.set(name, value);
+      }
+      url.searchParams.set('jwt', token);
+      url.searchParams.set('includeExtendedEvents', 'true');
+      url.searchParams.set('masterJWTPassthrough', 'true');
+      return normalizeHttpUrl(url.href);
+    } catch {
+      return null;
+    }
   };
 
   const getCatalog = async (client, token, signal, { discovery = false } = {}) => {
@@ -267,24 +335,41 @@ const createPlutoSourceProvider = ({
   };
 
   const discoverPublicItem = async (runtime = {}) => {
-    if (!active) return Object.freeze({ plutoId: null, contentKind: null, itemsChecked: 0 });
+    const empty = () => Object.freeze({ plutoId: null, contentKind: null,
+      itemsChecked: 0, responseBytes: 0, endpointType: 'boot_epg' });
+    if (!active) return empty();
     const client = clientFrom(runtime);
-    const token = await boot(client, runtime.signal);
+    await boot(client, runtime.signal);
     if (typeof runtime.onStage === 'function') runtime.onStage('boot');
-    const payload = await getCatalog(client, token, runtime.signal, { discovery: true });
-    if (typeof runtime.onStage === 'function') runtime.onStage('catalog');
-    if (payload === null) {
-      return Object.freeze({ plutoId: null, contentKind: null, itemsChecked: 0 });
+    const item = state.bootItem || empty();
+    const maxItems = Number.isInteger(runtime.maxItems) && runtime.maxItems >= 1
+      ? Math.min(runtime.maxItems, MAX_DISCOVERY_ITEMS) : MAX_DISCOVERY_ITEMS;
+    if (item.itemsChecked > maxItems) {
+      return Object.freeze({ plutoId: null, contentKind: null, itemsChecked: maxItems,
+        responseBytes: state.bootBytes, endpointType: 'boot_epg' });
     }
-    return discoverPlutoItem(payload, runtime.maxItems);
+    return Object.freeze({ plutoId: item.plutoId, contentKind: item.contentKind,
+      itemsChecked: Math.min(item.itemsChecked || 0, maxItems),
+      responseBytes: state.bootBytes, endpointType: 'boot_epg' });
   };
 
   const getSources = async (mediaContext, runtime = {}) => {
     if (!active) return [];
-    const mapping = mappingByKey.get(mediaKey(mediaContext));
+    const configuredMapping = mappingByKey.get(mediaKey(mediaContext));
+    const diagnosticId = runtime.diagnosticSessionPlayback === true &&
+      typeof runtime.temporaryPlutoId === 'string' && PLUTO_ID.test(runtime.temporaryPlutoId)
+      ? runtime.temporaryPlutoId : null;
+    const mapping = configuredMapping || (diagnosticId ? { plutoId: diagnosticId } : null);
     if (!mapping) return [];
     const client = clientFrom(runtime);
     const token = await boot(client, runtime.signal);
+    if (runtime.diagnosticSessionPlayback === true &&
+        state.bootItem?.plutoId === mapping.plutoId) {
+      const url = buildDiagnosticSessionUrl(state.bootItem, token);
+      const candidate = url && normalizeEmbedCandidate({ providerId: id, url, headers: {},
+        qualityHint: 'auto', metadata: { sourceType: 'pluto' } });
+      return candidate ? [candidate] : [];
+    }
     const payload = await getCatalog(client, token, runtime.signal);
     if (payload === null) return [];
     const item = findPlutoItem(payload, mapping.plutoId);
@@ -325,6 +410,7 @@ module.exports = {
   MAX_DISCOVERY_ITEMS,
   MAX_MAPPINGS,
   createPlutoSourceProvider,
+  discoverBootItem,
   discoverPlutoItem,
   findPlutoItem,
   firstHlsUrl,
