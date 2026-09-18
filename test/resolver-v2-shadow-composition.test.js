@@ -91,6 +91,21 @@ test('configured HTTP source is registered only when enabled with valid configur
     ['direct_hls']);
 });
 
+test('Pluto is opt-in and requires an injected persistent mapping store', () => {
+  const httpClient = {
+    get: async () => { throw new Error('construction must not request'); },
+    head: async () => { throw new Error('construction must not request'); },
+  };
+  const withoutStore = createShadowPipeline({ httpClient,
+    plutoProvider: { enabled: true } });
+  assert.deepEqual(withoutStore.sourceRegistry.list(), []);
+  const withStore = createShadowPipeline({ httpClient,
+    providerMappingStore: { findActiveMapping: async () => null },
+    plutoProvider: { enabled: true } });
+  assert.deepEqual(withStore.sourceRegistry.list().map(({ descriptor }) => descriptor.id),
+    ['pluto']);
+});
+
 test('shadow composition has no browser, legacy executor, DB or import-time network coupling', () => {
   for (const relative of [
     'shadowResolver.js', 'createShadowPipeline.js', 'resolutionPipeline.js',

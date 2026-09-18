@@ -21,6 +21,8 @@ const { createPrimaryRuntimeGuard } =
   require('./resolverV2/health/primaryRuntimeGuard');
 const { findStreamContent } = require('./streamContent');
 const { createStreamLifecycle, processingError } = require('./streamLifecycle');
+const { createProviderMediaMappingStore } =
+  require('../../db/providerMediaMappings.queries');
 const { isPlaybackTransportConfigured } = require('./playbackHeaders');
 const {
   STREAM_CACHE_TTL_MINUTES,
@@ -51,6 +53,7 @@ const {
   STREAM_HLS_PROXY_ENABLED,
   STREAM_HLS_PROXY_SIGNING_SECRET,
   API_BASE_URL,
+  PLUTO_ENABLED,
 } = require('../../config/env');
 
 const createStreamProcessor = ({
@@ -114,6 +117,7 @@ const createStreamProcessor = ({
     primaryEnabled: mode === 'primary',
     primaryTimeoutMs,
     primaryMetrics: primaryMetricStore,
+    providerMappingStore: PLUTO_ENABLED ? createProviderMediaMappingStore(db) : null,
   }) : null;
   const shadow = shadowResolver || v2Composition?.shadowResolver || null;
   const primary = primaryResolver || v2Composition?.primaryResolver || null;

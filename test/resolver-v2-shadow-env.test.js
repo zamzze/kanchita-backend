@@ -40,6 +40,8 @@ delete process.env.STREAM_RESOLVER_V2_HALF_OPEN_SUCCESS_THRESHOLD;
 delete process.env.STREAM_HLS_PROXY_ENABLED;
 delete process.env.STREAM_HLS_PROXY_SIGNING_SECRET;
 delete process.env.STREAM_TEMPORARY_URL_SAFETY_SECONDS;
+delete process.env.PLUTO_ENABLED;
+delete process.env.PLUTO_REGION;
 
 const env = require('../src/config/env');
 
@@ -189,6 +191,11 @@ test('HLS playback proxy is disabled and secretless by default', () => {
   assert.equal(env.STREAM_HLS_PROXY_SIGNING_SECRET, '');
   assert.equal(env.isExplicitlyEnabled('true'), true);
   assert.equal(env.isExplicitlyEnabled('TRUE'), false);
+});
+
+test('Pluto mapping provider is disabled and LATAM-scoped by default', () => {
+  assert.equal(env.PLUTO_ENABLED, false);
+  assert.equal(env.PLUTO_REGION, 'latam');
 });
 
 test('temporary URL safety window has one bounded shared default', () => {

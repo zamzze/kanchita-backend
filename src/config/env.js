@@ -191,6 +191,10 @@ module.exports = {
   STREAM_RESOLVER_V2_HALF_OPEN_SUCCESS_THRESHOLD: boundedPositiveInteger(
     'STREAM_RESOLVER_V2_HALF_OPEN_SUCCESS_THRESHOLD', 1, 1, 5
   ),
+  PLUTO_ENABLED: isExplicitlyEnabled(process.env.PLUTO_ENABLED),
+  PLUTO_REGION: /^[a-z0-9][a-z0-9_-]{0,31}$/.test(
+    String(process.env.PLUTO_REGION || '').trim().toLowerCase()
+  ) ? String(process.env.PLUTO_REGION).trim().toLowerCase() : 'latam',
   STREAM_HLS_PROXY_ENABLED: isExplicitlyEnabled(process.env.STREAM_HLS_PROXY_ENABLED),
   STREAM_HLS_PROXY_SIGNING_SECRET: process.env.STREAM_HLS_PROXY_SIGNING_SECRET || '',
   SUBDL_ENABLED: process.env.SUBDL_ENABLED !== 'false',

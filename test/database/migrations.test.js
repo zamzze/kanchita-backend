@@ -38,6 +38,7 @@ test('migration files are ordered and checksummed deterministically', async () =
       '006_fast_stream_engine.sql',
       '007_safe_playback_headers.sql',
       '008_temporary_stream_urls.sql',
+      '009_provider_media_mappings.sql',
     ]
   );
   assert.ok(migrations.every(({ checksum }) => /^[a-f0-9]{64}$/.test(checksum)));
@@ -84,6 +85,7 @@ test(
           '006_fast_stream_engine.sql',
           '007_safe_playback_headers.sql',
           '008_temporary_stream_urls.sql',
+          '009_provider_media_mappings.sql',
         ]);
 
         const second = await runMigrations({
@@ -98,6 +100,47 @@ test(
         );
         assert.deepEqual(rows.map((row) => row.version), first.applied);
       });
+
+      await t.test('creates generic provider media mappings with historical identities',
+        async () => {
+          const columns = await pools.empty.query(`
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_schema = current_schema()
+              AND table_name = 'provider_media_mappings'
+            ORDER BY ordinal_position
+          `);
+          assert.deepEqual(columns.rows.map((row) => row.column_name), [
+            'id', 'provider_id', 'region', 'content_type', 'tmdb_id',
+            'season_number', 'episode_number', 'external_id', 'provider_title',
+            'provider_slug', 'match_method', 'match_confidence', 'status', 'metadata',
+            'first_seen_at', 'last_seen_at', 'last_verified_at', 'created_at', 'updated_at',
+          ]);
+          const indexes = await pools.empty.query(`
+            SELECT indexname FROM pg_indexes
+            WHERE schemaname = current_schema()
+              AND tablename = 'provider_media_mappings'
+          `);
+          const names = indexes.rows.map(({ indexname }) => indexname);
+          assert.ok(names.includes('provider_media_mappings_lookup_idx'));
+          assert.ok(names.includes('provider_media_mappings_episode_lookup_idx'));
+          await pools.empty.query(`
+            INSERT INTO provider_media_mappings
+              (provider_id, region, content_type, tmdb_id, external_id)
+            VALUES ('pluto', 'latam', 'movie', 550, 'one'),
+                   ('pluto', 'latam', 'movie', 550, 'two')
+          `);
+          await assert.rejects(pools.empty.query(`
+            INSERT INTO provider_media_mappings
+              (provider_id, region, content_type, tmdb_id, external_id)
+            VALUES ('pluto', 'latam', 'episode', 10, 'missing-season')
+          `), (error) => error.code === '23514');
+          await assert.rejects(pools.empty.query(`
+            INSERT INTO provider_media_mappings
+              (provider_id, region, content_type, tmdb_id, external_id)
+            VALUES ('pluto', 'latam', 'movie', 551, 'one')
+          `), (error) => error.code === '23505');
+        });
 
       await t.test('creates the subtitles contract and enforces uniqueness', async () => {
         const columns = await pools.empty.query(`

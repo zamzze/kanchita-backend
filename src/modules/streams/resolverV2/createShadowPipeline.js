@@ -10,6 +10,7 @@ const { createResolutionPipeline } = require('./resolutionPipeline');
 const { createShadowResolver } = require('./shadowResolver');
 const { createConfiguredHttpSourceProvider } =
   require('./providers/configuredHttpSourceProvider');
+const { createPlutoSourceProvider } = require('./providers/plutoSourceProvider');
 const { createConfiguredHttpResolver } =
   require('./resolvers/configuredHttpResolver');
 const { createV2HealthStore } = require('./health/v2HealthStore');
@@ -52,6 +53,8 @@ const {
   STREAM_HLS_PROXY_ENABLED,
   STREAM_HLS_PROXY_SIGNING_SECRET,
   API_BASE_URL,
+  PLUTO_ENABLED,
+  PLUTO_REGION,
 } = require('../../../config/env');
 
 const createShadowPipeline = ({
@@ -67,6 +70,8 @@ const createShadowPipeline = ({
   resolverEngine,
   pipeline,
   httpProvider = {},
+  plutoProvider = {},
+  providerMappingStore = null,
   httpResolver = {},
   healthStore = null,
   observability = null,
@@ -135,6 +140,21 @@ const createShadowPipeline = ({
     if (configuredProvider.descriptor.active) configuredProviders.push(configuredProvider);
   } catch {
     // Invalid optional provider configuration fails closed without blocking startup.
+  }
+  try {
+    const plutoOptions = {
+      id: 'pluto', enabled: PLUTO_ENABLED, region: PLUTO_REGION,
+      mappingStore: providerMappingStore,
+      ...plutoProvider,
+      http: activeHttpClient,
+    };
+    const pluto = createPlutoSourceProvider(plutoOptions);
+    if (pluto.descriptor.active && providerMappingStore &&
+        !configuredProviders.some(({ descriptor }) => descriptor.id === pluto.descriptor.id)) {
+      configuredProviders.push(pluto);
+    }
+  } catch {
+    // Invalid optional Pluto configuration fails closed without blocking startup.
   }
   const directHlsResolver = createDirectHlsResolver({
     httpClient: activeHttpClient, timeoutMs: runtimeTimeoutMs,

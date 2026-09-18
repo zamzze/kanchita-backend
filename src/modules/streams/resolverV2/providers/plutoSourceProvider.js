@@ -16,6 +16,7 @@ const ERROR_CODES = Object.freeze({
 
 const JSON_CONTENT_TYPE = /^application\/(?:[a-z0-9!#$&^_.+-]+\+)?json(?:\s*;|$)/i;
 const PLUTO_ID = /^[A-Za-z0-9_-]{6,128}$/;
+const REGION = /^[a-z0-9][a-z0-9_-]{0,31}$/;
 const MAX_MAPPINGS = 256;
 const MAX_DISCOVERY_ITEMS = 20;
 const DEFAULT_BOOT_URL = 'https://boot.pluto.tv/v4/start';
@@ -201,6 +202,8 @@ const createPlutoSourceProvider = ({
   maxBytes = DEFAULT_MAX_BYTES,
   maxRedirects = 3,
   mediaMap = [],
+  mappingStore = null,
+  region = 'latam',
   supportsMovies = true,
   supportsEpisodes = true,
   now = Date.now,
@@ -210,6 +213,7 @@ const createPlutoSourceProvider = ({
   const parsedEpisodeBaseUrl = normalizeBaseUrl(episodeBaseUrl);
   const parsedBootUrl = normalizeHttpUrl(bootUrl);
   const mappings = normalizeMediaMap(mediaMap);
+  const normalizedRegion = typeof region === 'string' ? region.trim().toLowerCase() : '';
   if (typeof id !== 'string' || !/^[a-z0-9][a-z0-9_-]{0,127}$/.test(id) ||
       typeof enabled !== 'boolean' || !Number.isInteger(priority) ||
       !Number.isInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > 30_000 ||
@@ -218,6 +222,8 @@ const createPlutoSourceProvider = ({
       !Number.isInteger(maxRedirects) || maxRedirects < 0 || maxRedirects > 10 ||
       typeof supportsMovies !== 'boolean' || typeof supportsEpisodes !== 'boolean' ||
       typeof now !== 'function' || typeof randomUUID !== 'function' ||
+      !REGION.test(normalizedRegion) ||
+      (mappingStore !== null && typeof mappingStore?.findActiveMapping !== 'function') ||
       mappings === null || !parsedBootUrl ||
       (enabled && (!parsedBaseUrl || !parsedEpisodeBaseUrl))) {
     throw providerError(ERROR_CODES.INVALID_CONFIG);
@@ -391,13 +397,24 @@ const createPlutoSourceProvider = ({
       runtime.diagnosticExactItem === true) &&
       typeof runtime.temporaryPlutoId === 'string' && PLUTO_ID.test(runtime.temporaryPlutoId)
       ? runtime.temporaryPlutoId : null;
-    const mapping = configuredMapping || (diagnosticId ? {
+    let mapping = configuredMapping || (diagnosticId ? {
       contentType: mediaContext.contentType,
       tmdbId: mediaContext.tmdbId,
       ...(mediaContext.contentType === 'episode'
         ? { season: mediaContext.season, episode: mediaContext.episode } : {}),
       plutoId: diagnosticId,
     } : null);
+    if (!mapping && mappingStore && mediaContext.contentType === 'movie') {
+      const stored = await mappingStore.findActiveMapping({ providerId: 'pluto',
+        region: normalizedRegion, contentType: 'movie', tmdbId: mediaContext.tmdbId });
+      const activeStored = stored && (stored.status === undefined || stored.status === 'active');
+      const externalId = activeStored && typeof stored.external_id === 'string'
+        ? stored.external_id : activeStored && typeof stored.externalId === 'string'
+          ? stored.externalId : '';
+      if (PLUTO_ID.test(externalId)) {
+        mapping = { contentType: 'movie', tmdbId: mediaContext.tmdbId, plutoId: externalId };
+      }
+    }
     if (!mapping) return [];
     const client = clientFrom(runtime);
     const token = await boot(client, runtime.signal);

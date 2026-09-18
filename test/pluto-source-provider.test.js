@@ -74,6 +74,62 @@ test('Pluto provider performs no network request without an exact mapping', asyn
   assert.equal(requests, 0);
 });
 
+test('Pluto DB mapping hit resolves exact movie while misses stay network-free', async () => {
+  const externalId = '0123456789abcdef01234567';
+  let bootRequests = 0;
+  let itemRequests = 0;
+  let catalogRequests = 0;
+  const lookups = [];
+  const server = await listen((request, response) => {
+    if (request.url.startsWith('/boot')) {
+      bootRequests += 1;
+      response.setHeader('content-type', 'application/json');
+      return response.end(JSON.stringify({ sessionToken: jwt,
+        servers: { stitcher: origin(server) }, stitcherParams: '' }));
+    }
+    if (request.url.startsWith('/v4/vod/items')) {
+      itemRequests += 1;
+      assert.equal(new URL(request.url, origin(server)).searchParams.get('ids'), externalId);
+      response.setHeader('content-type', 'application/json');
+      return response.end(JSON.stringify([{ _id: externalId,
+        stitched: { path: `/stitch/hls/episode/${externalId}/master.m3u8` } }]));
+    }
+    if (/catalog|categor|search|series|season/i.test(request.url)) catalogRequests += 1;
+    response.setHeader('content-type', 'application/vnd.apple.mpegurl');
+    response.end(hls);
+  });
+  try {
+    const client = createSafeHttpClient({ allowPrivateNetworks: true });
+    const mappingStore = { findActiveMapping: async (lookup) => {
+      lookups.push(lookup);
+      return lookup.tmdbId === 550 ? { external_id: externalId, status: 'active' }
+        : lookup.tmdbId === 552 ? { external_id: externalId, status: 'inactive' } : null;
+    } };
+    const provider = createPlutoSourceProvider({ id: 'pluto', enabled: true,
+      region: 'latam', baseUrl: origin(server), bootUrl: `${origin(server)}/boot`,
+      http: client, mappingStore, mediaMap: [] });
+    assert.deepEqual(await provider.getSources({ contentType: 'movie', tmdbId: 551 }), []);
+    assert.deepEqual(await provider.getSources({ contentType: 'movie', tmdbId: 552 }), []);
+    assert.equal(bootRequests, 0);
+    assert.equal(itemRequests, 0);
+    const candidates = await provider.getSources({ contentType: 'movie', tmdbId: 550 });
+    assert.equal(candidates.length, 1);
+    assert.deepEqual(lookups, [
+      { providerId: 'pluto', region: 'latam', contentType: 'movie', tmdbId: 551 },
+      { providerId: 'pluto', region: 'latam', contentType: 'movie', tmdbId: 552 },
+      { providerId: 'pluto', region: 'latam', contentType: 'movie', tmdbId: 550 },
+    ]);
+    const resolved = await createResolverEngine({ registry: createResolverRegistry([
+      createDirectHlsResolver({ httpClient: client }),
+    ]) }).resolve({ mediaContext: { contentType: 'movie', contentId: 'movie-id',
+      tmdbId: 550, title: 'Mapped movie' }, candidates });
+    assert.equal(resolved.streams[0].validated, true);
+    assert.equal(bootRequests, 1);
+    assert.equal(itemRequests, 1);
+    assert.equal(catalogRequests, 0);
+  } finally { await close(server); }
+});
+
 test('Pluto provider boots anonymously, fetches only the exact mapped movie and emits HLS', async () => {
   let bootCount = 0;
   let itemCount = 0;
