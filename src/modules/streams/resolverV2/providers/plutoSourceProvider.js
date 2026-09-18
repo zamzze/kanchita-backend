@@ -20,6 +20,7 @@ const MAX_MAPPINGS = 256;
 const MAX_DISCOVERY_ITEMS = 20;
 const DEFAULT_BOOT_URL = 'https://boot.pluto.tv/v4/start';
 const DEFAULT_BASE_URL = 'https://service-vod.clusters.pluto.tv';
+const DEFAULT_EPISODE_BASE_URL = 'https://api.pluto.tv';
 const DEFAULT_MAX_BYTES = 2 * 1024 * 1024;
 const SESSION_REFRESH_SKEW_MS = 60_000;
 const DEFAULT_SESSION_TTL_MS = 30 * 60 * 1000;
@@ -192,6 +193,7 @@ const createPlutoSourceProvider = ({
   enabled = false,
   priority = 100,
   baseUrl = DEFAULT_BASE_URL,
+  episodeBaseUrl = baseUrl === DEFAULT_BASE_URL ? DEFAULT_EPISODE_BASE_URL : baseUrl,
   bootUrl = DEFAULT_BOOT_URL,
   http,
   timeoutMs = 3_000,
@@ -205,6 +207,7 @@ const createPlutoSourceProvider = ({
   randomUUID = crypto.randomUUID,
 } = {}) => {
   const parsedBaseUrl = normalizeBaseUrl(baseUrl);
+  const parsedEpisodeBaseUrl = normalizeBaseUrl(episodeBaseUrl);
   const parsedBootUrl = normalizeHttpUrl(bootUrl);
   const mappings = normalizeMediaMap(mediaMap);
   if (typeof id !== 'string' || !/^[a-z0-9][a-z0-9_-]{0,127}$/.test(id) ||
@@ -215,7 +218,8 @@ const createPlutoSourceProvider = ({
       !Number.isInteger(maxRedirects) || maxRedirects < 0 || maxRedirects > 10 ||
       typeof supportsMovies !== 'boolean' || typeof supportsEpisodes !== 'boolean' ||
       typeof now !== 'function' || typeof randomUUID !== 'function' ||
-      mappings === null || !parsedBootUrl || (enabled && !parsedBaseUrl)) {
+      mappings === null || !parsedBootUrl ||
+      (enabled && (!parsedBaseUrl || !parsedEpisodeBaseUrl))) {
     throw providerError(ERROR_CODES.INVALID_CONFIG);
   }
   const active = enabled === true && parsedBaseUrl !== null;
@@ -293,16 +297,64 @@ const createPlutoSourceProvider = ({
     }
   };
 
-  const getExactItem = async (client, token, plutoId, signal) => {
-    const basePath = parsedBaseUrl.pathname === '/' ? '' : parsedBaseUrl.pathname;
-    const requestUrl = new URL(`${basePath}/v4/vod/items`, parsedBaseUrl.origin);
-    requestUrl.searchParams.set('ids', plutoId);
+  const getExactItem = async (client, token, mapping, signal) => {
+    const selectedBase = mapping.contentType === 'episode'
+      ? parsedEpisodeBaseUrl : parsedBaseUrl;
+    const basePath = selectedBase.pathname === '/' ? '' : selectedBase.pathname;
+    const requestUrl = mapping.contentType === 'episode'
+      ? new URL(`${basePath}/v2/episodes/${mapping.plutoId}/clips.json`, selectedBase.origin)
+      : new URL(`${basePath}/v4/vod/items`, selectedBase.origin);
+    if (mapping.contentType === 'movie') requestUrl.searchParams.set('ids', mapping.plutoId);
     const payload = await requestJson(client, requestUrl.href, {
       signal,
       headers: { authorization: `Bearer ${token}`, origin: 'https://pluto.tv',
         referer: 'https://pluto.tv/' },
     });
-    return payload === null ? null : exactItemFromPayload(payload, plutoId);
+    if (payload === null) return null;
+    if (mapping.contentType === 'episode') {
+      const hasMetadata = (Array.isArray(payload) && payload.length > 0) ||
+        (payload && typeof payload === 'object' && !Array.isArray(payload) &&
+          Object.keys(payload).length > 0);
+      return hasMetadata ? { id: mapping.plutoId, type: 'episode' } : null;
+    }
+    return exactItemFromPayload(payload, mapping.plutoId);
+  };
+
+  const discoverEpisode = async (runtime = {}) => {
+    const empty = (itemsChecked = 0) => Object.freeze({ plutoId: null, season: null,
+      episode: null, itemsChecked });
+    if (!active || typeof runtime.seriesId !== 'string' ||
+        !PLUTO_ID.test(runtime.seriesId)) return empty();
+    const client = clientFrom(runtime);
+    const token = await boot(client, runtime.signal);
+    if (typeof runtime.onStage === 'function') runtime.onStage('boot');
+    const basePath = parsedBaseUrl.pathname === '/' ? '' : parsedBaseUrl.pathname;
+    const url = new URL(`${basePath}/v4/vod/series/${runtime.seriesId}/seasons`,
+      parsedBaseUrl.origin);
+    url.searchParams.set('offset', String(MAX_DISCOVERY_ITEMS));
+    url.searchParams.set('page', '1');
+    const payload = await requestJson(client, url.href, {
+      signal: runtime.signal,
+      headers: { authorization: `Bearer ${token}`, origin: 'https://pluto.tv',
+        referer: 'https://pluto.tv/' },
+    });
+    const root = payload?.data && typeof payload.data === 'object' ? payload.data : payload;
+    const season = Array.isArray(root?.seasons) ? root.seasons[0] : null;
+    const seasonNumber = Number.isInteger(season?.number) ? season.number : 1;
+    const episodes = Array.isArray(season?.episodes)
+      ? season.episodes.slice(0, MAX_DISCOVERY_ITEMS) : [];
+    let itemsChecked = 0;
+    for (const item of episodes) {
+      itemsChecked += 1;
+      const plutoId = typeof item?._id === 'string' ? item._id
+        : typeof item?.id === 'string' ? item.id : '';
+      if (!PLUTO_ID.test(plutoId)) continue;
+      const episode = Number.isInteger(item?.number) ? item.number
+        : Number.isInteger(item?.episode) ? item.episode
+          : Number.isInteger(item?.episodeNumber) ? item.episodeNumber : itemsChecked;
+      return Object.freeze({ plutoId, season: seasonNumber, episode, itemsChecked });
+    }
+    return empty(itemsChecked);
   };
 
   const clientFrom = (runtime) => {
@@ -335,10 +387,17 @@ const createPlutoSourceProvider = ({
   const getSources = async (mediaContext, runtime = {}) => {
     if (!active) return [];
     const configuredMapping = mappingByKey.get(mediaKey(mediaContext));
-    const diagnosticId = runtime.diagnosticSessionPlayback === true &&
+    const diagnosticId = (runtime.diagnosticSessionPlayback === true ||
+      runtime.diagnosticExactItem === true) &&
       typeof runtime.temporaryPlutoId === 'string' && PLUTO_ID.test(runtime.temporaryPlutoId)
       ? runtime.temporaryPlutoId : null;
-    const mapping = configuredMapping || (diagnosticId ? { plutoId: diagnosticId } : null);
+    const mapping = configuredMapping || (diagnosticId ? {
+      contentType: mediaContext.contentType,
+      tmdbId: mediaContext.tmdbId,
+      ...(mediaContext.contentType === 'episode'
+        ? { season: mediaContext.season, episode: mediaContext.episode } : {}),
+      plutoId: diagnosticId,
+    } : null);
     if (!mapping) return [];
     const client = clientFrom(runtime);
     const token = await boot(client, runtime.signal);
@@ -348,9 +407,10 @@ const createPlutoSourceProvider = ({
       const candidate = createCandidate(url);
       return candidate ? [candidate] : [];
     }
-    const item = await getExactItem(client, token, mapping.plutoId, runtime.signal);
+    const item = await getExactItem(client, token, mapping, runtime.signal);
     if (!item) return [];
-    const path = playbackPathFromItem(item);
+    const path = playbackPathFromItem(item) || (mapping.contentType === 'episode'
+      ? `/stitch/hls/episode/${mapping.plutoId}/master.m3u8` : null);
     const url = buildSessionUrl(path ? { path } : null, token);
     if (!url) return [];
     const candidate = createCandidate(url);
@@ -369,6 +429,7 @@ const createPlutoSourceProvider = ({
       timeoutMs,
       maxCandidates,
     }),
+    discoverEpisode,
     discoverPublicItem,
     getSources,
   });
@@ -377,6 +438,7 @@ const createPlutoSourceProvider = ({
 module.exports = {
   DEFAULT_BASE_URL,
   DEFAULT_BOOT_URL,
+  DEFAULT_EPISODE_BASE_URL,
   ERROR_CODES,
   MAX_DISCOVERY_ITEMS,
   MAX_MAPPINGS,

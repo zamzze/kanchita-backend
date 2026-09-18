@@ -12,6 +12,7 @@ process.env.TMDB_API_KEY ||= 'unused-test-tmdb-key';
 
 const { createSafeHttpClient } = require('../src/modules/streams/http/safeHttpClient');
 const {
+  DIAGNOSTIC_SERIES_ID,
   DIAGNOSTIC_VOD_ID,
   createPlutoProbe,
   formatJson,
@@ -36,7 +37,9 @@ test('Pluto probe CLI requires explicit mapping and emits sanitized summaries', 
     '--pluto-id', 'episode123', '--season', '1', '--episode', '2']).ok, true);
   assert.equal(parseArgs(['--discover']).ok, true);
   assert.equal(parseArgs(['--vod-discover']).ok, true);
+  assert.equal(parseArgs(['--episode-discover']).ok, true);
   assert.equal(parseArgs(['--vod-discover', '--discover']).ok, false);
+  assert.equal(parseArgs(['--episode-discover', '--vod-discover']).ok, false);
   assert.equal(parseArgs(['--vod-discover', '--pluto-id', 'movie123']).ok, false);
   assert.equal(parseArgs(['--discover', '--tmdb-id', '550', '--pluto-id', 'movie123']).ok,
     false);
@@ -79,6 +82,69 @@ test('Pluto probe CLI requires explicit mapping and emits sanitized summaries', 
     }
   } finally { await close(server); }
 });
+
+test('Pluto episode discovery inspects one series then exact-resolves with cached boot',
+  async () => {
+    const episodeId = 'episode-real-001';
+    let bootCount = 0;
+    let seriesCount = 0;
+    let itemCount = 0;
+    let catalogCount = 0;
+    let searchCount = 0;
+    const server = await listen((request, response) => {
+      if (request.url.startsWith('/boot')) {
+        bootCount += 1;
+        response.setHeader('content-type', 'application/json');
+        return response.end(JSON.stringify({ sessionToken: jwt,
+          servers: { stitcher: origin(server) }, stitcherParams: 'private=redacted' }));
+      }
+      if (request.url.startsWith(`/v4/vod/series/${DIAGNOSTIC_SERIES_ID}/seasons`)) {
+        seriesCount += 1;
+        response.setHeader('content-type', 'application/json');
+        return response.end(JSON.stringify({ seasons: [{ number: 2, episodes: [
+          { _id: episodeId, number: 4 },
+        ] }] }));
+      }
+      if (request.url.startsWith(`/v2/episodes/${episodeId}/clips.json`)) {
+        itemCount += 1;
+        response.setHeader('content-type', 'application/json');
+        return response.end(JSON.stringify({ clips: [{ id: 'clip-fixture' }] }));
+      }
+      if (request.url.includes('categories')) catalogCount += 1;
+      if (request.url.includes('search')) searchCount += 1;
+      response.setHeader('content-type', 'application/vnd.apple.mpegurl');
+      response.end('#EXTM3U\n#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="a",LANGUAGE="es-419",NAME="Latino"\n#EXT-X-STREAM-INF:BANDWIDTH=1,RESOLUTION=1280x720,AUDIO="a"\nmedia.m3u8\n');
+    });
+    try {
+      const parsed = parseArgs(['--episode-discover', '--base-url', origin(server),
+        '--boot-url', `${origin(server)}/boot`, '--timeout-ms', '3000']);
+      const result = await createPlutoProbe({
+        httpClient: createSafeHttpClient({ allowPrivateNetworks: true }),
+      }).run(parsed.value);
+      assert.equal(result.status, 'ready');
+      assert.equal(result.show_identifier, DIAGNOSTIC_SERIES_ID);
+      assert.equal(result.season, 2);
+      assert.equal(result.episode, 4);
+      assert.equal(result.pluto_id, episodeId);
+      assert.equal(result.exact_item_request, true);
+      assert.equal(result.requests_with_cached_boot, 1);
+      assert.equal(result.episode_found, true);
+      assert.equal(result.exact_episode_id, true);
+      assert.equal(result.series_requests, 1);
+      assert.equal(result.season_requests, 1);
+      assert.equal(result.hls_valid, true);
+      assert.equal(result.temporary_url, true);
+      assert.equal(result.expiry_detected, true);
+      assert.equal(bootCount, 1);
+      assert.equal(seriesCount, 1);
+      assert.equal(itemCount, 1);
+      assert.equal(catalogCount, 0);
+      assert.equal(searchCount, 0);
+      const output = formatJson(result);
+      assert.doesNotMatch(output,
+        /private=redacted|jwt=|Bearer|sessionToken|master\.m3u8|127\.0\.0\.1/i);
+    } finally { await close(server); }
+  });
 
 test('Pluto VOD discovery uses one bounded exact item and reuses production provider flow',
   async () => {

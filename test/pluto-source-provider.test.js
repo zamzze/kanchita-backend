@@ -25,6 +25,8 @@ const { createShadowPipeline } =
   require('../src/modules/streams/resolverV2/createShadowPipeline');
 const { createPreflightRunner } =
   require('../src/modules/streams/resolverV2/preflight/preflightRunner');
+const { createPrimaryAcceptanceGate } =
+  require('../src/modules/streams/resolverV2/primaryAcceptanceGate');
 const {
   ERROR_CODES,
   createPlutoSourceProvider,
@@ -133,14 +135,27 @@ test('Pluto provider boots anonymously, fetches only the exact mapped movie and 
 
 test('Pluto provider supports explicit episode mapping without title search', async () => {
   let itemRequests = 0;
+  let seriesRequests = 0;
+  let catalogRequests = 0;
+  let searchRequests = 0;
   const server = await listen((request, response) => {
-    response.setHeader('content-type', 'application/json');
-    if (request.url.startsWith('/boot')) return response.end(JSON.stringify({ sessionToken: jwt,
-      servers: { stitcher: origin(server) }, stitcherParams: '' }));
+    if (request.url.startsWith('/boot')) {
+      response.setHeader('content-type', 'application/json');
+      return response.end(JSON.stringify({ sessionToken: jwt,
+        servers: { stitcher: origin(server) }, stitcherParams: '' }));
+    }
+    if (request.url.startsWith('/v2/stitch/hls/episode/episode123/master.m3u8')) {
+      response.setHeader('content-type', 'application/vnd.apple.mpegurl');
+      return response.end(hls);
+    }
+    if (request.url.includes('/series/')) seriesRequests += 1;
+    if (request.url.includes('/categories')) catalogRequests += 1;
+    if (request.url.includes('/search')) searchRequests += 1;
     itemRequests += 1;
-    assert.equal(new URL(request.url, origin(server)).searchParams.get('ids'), 'episode123');
-    response.end(JSON.stringify([{ id: 'episode123', type: 'episode',
-      stitched: { path: '/stitch/hls/episode/episode123/master.m3u8' } }]));
+    assert.equal(new URL(request.url, origin(server)).pathname,
+      '/v2/episodes/episode123/clips.json');
+    response.setHeader('content-type', 'application/json');
+    response.end(JSON.stringify({ clips: [{ id: 'clip123' }] }));
   });
   try {
     const client = createSafeHttpClient({ allowPrivateNetworks: true });
@@ -152,13 +167,64 @@ test('Pluto provider supports explicit episode mapping without title search', as
     });
     assert.deepEqual(await provider.getSources({ contentType: 'episode', tmdbId: 10,
       season: 1, episode: 1 }), []);
+    assert.deepEqual(await provider.getSources({ contentType: 'episode', tmdbId: 10,
+      season: 2, episode: 2 }), []);
+    assert.equal(itemRequests, 0);
     const candidates = await provider.getSources({ contentType: 'episode', tmdbId: 10,
       season: 1, episode: 2 });
     assert.equal(candidates.length, 1);
     assert.match(candidates[0].url, /\/v2\/stitch\/hls\/episode\/episode123\/master\.m3u8/);
+    assert.equal(candidates[0].urlSensitivity, 'temporary_signed');
+    assert.equal(typeof candidates[0].expiresAt, 'string');
     assert.equal(itemRequests, 1);
+    assert.equal(seriesRequests, 0);
+    assert.equal(catalogRequests, 0);
+    assert.equal(searchRequests, 0);
+
+    const registry = createResolverRegistry([createDirectHlsResolver({ httpClient: client })]);
+    const resolved = await createResolverEngine({ registry }).resolve({
+      mediaContext: { contentType: 'episode', contentId: 'episode-content-id', tmdbId: 10,
+        title: 'Fixture episode', season: 1, episode: 2 },
+      candidates,
+    });
+    assert.equal(resolved.streams.length, 1);
+    assert.equal(resolved.streams[0].validated, true);
+    assert.equal(resolved.streams[0].urlSensitivity, 'temporary_signed');
+    assert.equal(createPrimaryAcceptanceGate().evaluate(resolved.streams[0]).code,
+      'PRIMARY_ACCEPTED');
   } finally { await close(server); }
 });
+
+test('Pluto episode discovery is diagnostic-only, first-season and twenty-item bounded',
+  async () => {
+    const firstSeasonEpisodes = Array.from({ length: 21 }, (_, index) => ({
+      _id: index === 19 ? 'episode020' : `invalid id ${index}`,
+      number: index + 1,
+    }));
+    let seriesRequests = 0;
+    const server = await listen((request, response) => {
+      response.setHeader('content-type', 'application/json');
+      if (request.url.startsWith('/boot')) return response.end(JSON.stringify({
+        sessionToken: jwt, servers: { stitcher: origin(server) }, stitcherParams: '',
+      }));
+      seriesRequests += 1;
+      assert.match(request.url, /\/v4\/vod\/series\/series123\/seasons/);
+      assert.equal(new URL(request.url, origin(server)).searchParams.get('offset'), '20');
+      response.end(JSON.stringify({ seasons: [
+        { number: 3, episodes: firstSeasonEpisodes },
+        { number: 4, episodes: [{ _id: 'otherseason', number: 1 }] },
+      ] }));
+    });
+    try {
+      const client = createSafeHttpClient({ allowPrivateNetworks: true });
+      const provider = createPlutoSourceProvider({ enabled: true, baseUrl: origin(server),
+        bootUrl: `${origin(server)}/boot`, http: client, mediaMap: [] });
+      const result = await provider.discoverEpisode({ seriesId: 'series123' });
+      assert.deepEqual(result, { plutoId: 'episode020', season: 3,
+        episode: 20, itemsChecked: 20 });
+      assert.equal(seriesRequests, 1);
+    } finally { await close(server); }
+  });
 
 test('Pluto status and malformed response semantics fail closed', async () => {
   const server = await listen((request, response) => {

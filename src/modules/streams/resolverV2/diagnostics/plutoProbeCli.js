@@ -9,15 +9,20 @@ const { createPlutoSourceProvider, DEFAULT_BASE_URL, DEFAULT_BOOT_URL } =
 
 // Public LATAM movie URL observed in Pluto's indexed web surface. Diagnostic only.
 const DIAGNOSTIC_VOD_ID = '69d91bb1bf7771122425d2ba';
-const BOOLEAN_FLAGS = new Set(['--json', '--discover', '--vod-discover']);
+// Public LATAM series page observed in Pluto's indexed web surface. Diagnostic only.
+const DIAGNOSTIC_SERIES_ID = '6826044d00cabfe6fec3d143';
+const BOOLEAN_FLAGS = new Set([
+  '--json', '--discover', '--vod-discover', '--episode-discover',
+]);
 const VALUE_FLAGS = new Set([
   '--content-type', '--tmdb-id', '--season', '--episode', '--pluto-id',
   '--base-url', '--boot-url', '--timeout-ms',
 ]);
 
 const parseArgs = (argv = []) => {
-  const options = { json: false, discover: false, vodDiscover: false, contentType: 'movie',
-    baseUrl: DEFAULT_BASE_URL, bootUrl: DEFAULT_BOOT_URL, timeoutMs: 10_000 };
+  const options = { json: false, discover: false, vodDiscover: false,
+    episodeDiscover: false, contentType: 'movie', baseUrl: DEFAULT_BASE_URL,
+    bootUrl: DEFAULT_BOOT_URL, timeoutMs: 10_000 };
   for (let index = 0; index < argv.length; index += 1) {
     const flag = argv[index];
     if (BOOLEAN_FLAGS.has(flag)) {
@@ -40,13 +45,14 @@ const parseArgs = (argv = []) => {
   const timeoutMs = Number(options.timeoutMs);
   const hasExplicitMapping = options.tmdbId !== undefined || options.plutoId !== undefined ||
     options.season !== undefined || options.episode !== undefined;
+  const discoveryModes = [options.discover, options.vodDiscover, options.episodeDiscover]
+    .filter(Boolean).length;
   if (!['movie', 'episode'].includes(options.contentType) ||
       !Number.isInteger(timeoutMs) || timeoutMs < 1000 || timeoutMs > 30000 ||
-      (options.discover && options.vodDiscover) ||
-      ((options.discover || options.vodDiscover) && hasExplicitMapping) ||
-      (!options.discover && !options.vodDiscover && (!Number.isInteger(tmdbId) || tmdbId < 1 ||
+      discoveryModes > 1 || (discoveryModes === 1 && hasExplicitMapping) ||
+      (discoveryModes === 0 && (!Number.isInteger(tmdbId) || tmdbId < 1 ||
         typeof options.plutoId !== 'string' || !options.plutoId.trim())) ||
-      (!options.discover && !options.vodDiscover && options.contentType === 'episode' &&
+      (discoveryModes === 0 && options.contentType === 'episode' &&
         (!Number.isInteger(season) || season < 0 ||
           !Number.isInteger(episode) || episode < 1))) {
     return { ok: false, json: options.json };
@@ -54,11 +60,12 @@ const parseArgs = (argv = []) => {
   return { ok: true, json: options.json, value: Object.freeze({
     discover: options.discover,
     vodDiscover: options.vodDiscover,
+    episodeDiscover: options.episodeDiscover,
     contentType: options.contentType,
-    tmdbId: options.discover || options.vodDiscover ? null : tmdbId,
-    season: options.discover || options.vodDiscover ? null : season,
-    episode: options.discover || options.vodDiscover ? null : episode,
-    plutoId: options.discover || options.vodDiscover ? null : options.plutoId.trim(),
+    tmdbId: discoveryModes ? null : tmdbId,
+    season: discoveryModes ? null : season,
+    episode: discoveryModes ? null : episode,
+    plutoId: discoveryModes ? null : options.plutoId.trim(),
     baseUrl: options.baseUrl,
     bootUrl: options.bootUrl,
     timeoutMs,
@@ -82,12 +89,24 @@ const createPlutoProbe = ({ httpClient, clock = Date.now } = {}) => {
       status: 'failed',
       boot_ok: false,
       discovery_endpoint_type: input.discover ? 'boot_epg'
-        : input.vodDiscover ? 'exact_vod_item' : 'explicit_mapping',
+        : input.vodDiscover ? 'exact_vod_item'
+          : input.episodeDiscover ? 'series_first_season' : 'explicit_mapping',
       response_bytes_read: 0,
       items_inspected: 0,
       pluto_id: null,
       content_kind: null,
+      show_identifier: input.episodeDiscover ? DIAGNOSTIC_SERIES_ID : null,
+      season: null,
+      episode: null,
+      episode_found: false,
+      exact_episode_id: false,
       exact_item_request: input.discover !== true,
+      requests_with_cached_boot: null,
+      catalog_requests: 0,
+      search_requests: 0,
+      series_requests: 0,
+      season_requests: 0,
+      browser_requests: 0,
       hls_found: false,
       hls_valid: false,
       variants: 0,
@@ -99,11 +118,60 @@ const createPlutoProbe = ({ httpClient, clock = Date.now } = {}) => {
       remaining_lifetime_seconds: null,
       latency_ms: 0,
     };
+    const requestCounts = { exactItem: 0, catalog: 0, search: 0, series: 0, season: 0 };
     try {
-      const client = httpClient || createSafeHttpClient({ timeoutMs: input.timeoutMs });
+      const transport = httpClient || createSafeHttpClient({ timeoutMs: input.timeoutMs });
+      const countRequest = (rawUrl) => {
+        let pathname = '';
+        try { pathname = new URL(rawUrl).pathname.toLowerCase(); } catch { return; }
+        if (pathname.includes('/categories')) requestCounts.catalog += 1;
+        if (pathname.includes('/search')) requestCounts.search += 1;
+        if (pathname.includes('/v4/vod/series/')) requestCounts.series += 1;
+        if (/\/v4\/vod\/series\/[^/]+\/seasons\/?$/.test(pathname)) {
+          requestCounts.season += 1;
+        }
+        if (pathname === '/v4/vod/items' ||
+            /\/v2\/episodes\/[^/]+\/clips\.json$/.test(pathname)) {
+          requestCounts.exactItem += 1;
+        }
+      };
+      const client = Object.freeze({
+        get: async (url, options) => {
+          countRequest(url);
+          return transport.get(url, options);
+        },
+        ...(typeof transport.head === 'function'
+          ? { head: (url, options) => transport.head(url, options) } : {}),
+      });
       let mapping = input;
       let provider = null;
-      if (input.vodDiscover) {
+      if (input.episodeDiscover) {
+        const discoveryProvider = createPlutoSourceProvider({
+          id: 'pluto_episode_discovery', enabled: true, baseUrl: input.baseUrl,
+          bootUrl: input.bootUrl, timeoutMs: input.timeoutMs,
+          mediaMap: [], http: client,
+        });
+        provider = discoveryProvider;
+        const discovered = await discoveryProvider.discoverEpisode({
+          seriesId: DIAGNOSTIC_SERIES_ID,
+          onStage: (stage) => {
+            if (stage === 'boot') result.boot_ok = true;
+          },
+        });
+        result.items_inspected = discovered.itemsChecked;
+        result.pluto_id = discovered.plutoId;
+        result.content_kind = 'episode';
+        result.season = discovered.season;
+        result.episode = discovered.episode;
+        if (!discovered.plutoId) {
+          result.status = 'no_public_item';
+          mapping = null;
+        } else {
+          mapping = Object.freeze({ ...input, contentType: 'episode', tmdbId: 1,
+            season: discovered.season, episode: discovered.episode,
+            plutoId: discovered.plutoId });
+        }
+      } else if (input.vodDiscover) {
         mapping = Object.freeze({ ...input, contentType: 'movie', tmdbId: 1,
           season: null, episode: null, plutoId: DIAGNOSTIC_VOD_ID });
         result.pluto_id = DIAGNOSTIC_VOD_ID;
@@ -140,6 +208,8 @@ const createPlutoProbe = ({ httpClient, clock = Date.now } = {}) => {
       } else {
         result.pluto_id = input.plutoId;
         result.content_kind = input.contentType;
+        result.season = input.season;
+        result.episode = input.episode;
       }
       if (mapping) {
         provider ||= createPlutoSourceProvider({
@@ -159,9 +229,14 @@ const createPlutoProbe = ({ httpClient, clock = Date.now } = {}) => {
           season: mapping.season,
           episode: mapping.episode,
         }, { diagnosticSessionPlayback: input.discover === true,
-          temporaryPlutoId: input.discover ? mapping.plutoId : undefined });
+          diagnosticExactItem: input.episodeDiscover === true,
+          temporaryPlutoId: input.discover || input.episodeDiscover
+            ? mapping.plutoId : undefined });
         result.boot_ok = true;
         result.hls_found = candidates.length > 0;
+        result.requests_with_cached_boot = input.discover ? null : requestCounts.exactItem;
+        result.episode_found = mapping.contentType === 'episode' && candidates.length > 0;
+        result.exact_episode_id = result.episode_found && requestCounts.exactItem === 1;
         if (candidates.length) {
           result.session_requirement = new URL(candidates[0].url).search
             ? 'url_temporal' : 'none';
@@ -197,6 +272,10 @@ const createPlutoProbe = ({ httpClient, clock = Date.now } = {}) => {
         : /ABORT|UNSAFE/.test(code) ? 'rejected'
           : /HTTP|CONNECTION|DNS/.test(code) ? 'unreachable' : 'failed';
     } finally {
+      result.catalog_requests = requestCounts.catalog;
+      result.search_requests = requestCounts.search;
+      result.series_requests = requestCounts.series;
+      result.season_requests = requestCounts.season;
       result.latency_ms = Math.max(0, clock() - startedAt);
     }
     return Object.freeze(result);
@@ -211,7 +290,18 @@ const safeOutput = (result) => Object.freeze({
   items_inspected: result.items_inspected,
   pluto_id: result.pluto_id,
   content_kind: result.content_kind,
+  show_identifier: result.show_identifier,
+  season: result.season,
+  episode: result.episode,
+  episode_found: result.episode_found,
+  exact_episode_id: result.exact_episode_id,
   exact_item_request: result.exact_item_request,
+  requests_with_cached_boot: result.requests_with_cached_boot,
+  catalog_requests: result.catalog_requests,
+  search_requests: result.search_requests,
+  series_requests: result.series_requests,
+  season_requests: result.season_requests,
+  browser_requests: result.browser_requests,
   hls_found: result.hls_found,
   hls_valid: result.hls_valid,
   variants: result.variants,
@@ -230,6 +320,7 @@ const formatText = (result) => Object.entries(safeOutput(result))
 const formatJson = (result) => JSON.stringify(safeOutput(result));
 
 module.exports = {
+  DIAGNOSTIC_SERIES_ID,
   DIAGNOSTIC_VOD_ID,
   createPlutoProbe,
   formatJson,
