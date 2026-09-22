@@ -166,6 +166,65 @@ const detectRegexUses = (source) => {
   return uses;
 };
 
+const sourceArgumentFor = (name, args) => name.startsWith('scrapertools.') ? args[0] : args[1];
+const isResponseBodyReference = (value) => /^(?:data|html|source|content|response(?:\.data)?)$/i
+  .test(String(value || '').trim());
+const isScalarReference = (value) => /^[a-z_][a-z0-9_]*$/i.test(String(value || '').trim());
+
+const staticPatternShape = (pattern) => {
+  if (!isStaticString(pattern)) return { staticPattern: false, literalDelimiters: false };
+  const value = String(pattern).trim().replace(/^(?:[rub]{0,2})?(['"])/i, '')
+    .replace(/(['"])$/, '');
+  const captures = [];
+  let escaped = false; let characterClass = false; let start = -1; let depth = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index];
+    if (escaped) { escaped = false; continue; }
+    if (character === '\\') { escaped = true; continue; }
+    if (character === '[') { characterClass = true; continue; }
+    if (character === ']') { characterClass = false; continue; }
+    if (characterClass) continue;
+    if (character === '(' && value[index + 1] !== '?') {
+      if (depth === 0) start = index;
+      depth += 1;
+    } else if (character === ')' && depth > 0) {
+      depth -= 1;
+      if (depth === 0) captures.push([start, index]);
+    }
+  }
+  if (captures.length !== 1) return { staticPattern: true, literalDelimiters: false };
+  const [captureStart, captureEnd] = captures[0];
+  const prefix = value.slice(0, captureStart);
+  const suffix = value.slice(captureEnd + 1);
+  const hasRegexSyntax = (part) => /(^|[^\\])[.*+?\[\](){}|^$]/.test(part) ||
+    /\\[bBdDsSwWAZ]/.test(part);
+  return { staticPattern: true,
+    literalDelimiters: prefix.length > 0 && suffix.length > 0 &&
+      !hasRegexSyntax(prefix) && !hasRegexSyntax(suffix) };
+};
+
+const inspectRegexUseSemantics = (source) => {
+  const uses = []; const matcher = new RegExp(CALL_PATTERN.source, CALL_PATTERN.flags);
+  let match;
+  while ((match = matcher.exec(source)) !== null) {
+    const invocation = readInvocation(source, matcher.lastIndex - 1);
+    const args = splitArguments(invocation);
+    const name = match[1].toLowerCase();
+    const context = contextAround(source, match.index);
+    const classified = classifyRegexUse({ name, args, context });
+    const sourceArgument = sourceArgumentFor(name, args);
+    const shape = staticPatternShape(patternArgumentFor(name, args));
+    uses.push(freeze({ category: classified.category,
+      repeatedCapture: /(?:find_multiple_matches|re\.(?:findall|finditer))$/.test(name),
+      responseBodyInput: isResponseBodyReference(sourceArgument),
+      scalarInput: isScalarReference(sourceArgument) && !isResponseBodyReference(sourceArgument),
+      caseInsensitive: /\(\?i\)|\bre\.(?:i|ignorecase)\b/i.test(invocation || ''),
+      staticPattern: shape.staticPattern, literalDelimiters: shape.literalDelimiters,
+      captureCount: countCaptureGroups(patternArgumentFor(name, args)) }));
+  }
+  return uses;
+};
+
 const groupUses = (channel, uses) => {
   const groups = new Map();
   for (const use of uses) {
@@ -279,5 +338,6 @@ module.exports = {
   REGEX_USE_CATEGORIES,
   classifyRegexUse,
   detectRegexUses,
+  inspectRegexUseSemantics,
   scanChannelRegexGap,
 };
