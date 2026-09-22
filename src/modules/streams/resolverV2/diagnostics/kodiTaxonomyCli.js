@@ -2,7 +2,9 @@
 
 const parseKodiTaxonomyArgs = (argv = []) => {
   if (!Array.isArray(argv)) return { ok: false, json: false };
-  const roots = []; let json = false; let coverage = false; const used = new Set();
+  const roots = []; let json = false; let coverage = false; let architecture = false;
+  let architectureDetails = false;
+  const used = new Set();
   for (let index = 0; index < argv.length; index += 1) {
     const item = argv[index];
     if (item === '--json') {
@@ -13,6 +15,14 @@ const parseKodiTaxonomyArgs = (argv = []) => {
       if (coverage) return { ok: false, json };
       coverage = true; continue;
     }
+    if (item === '--architecture') {
+      if (architecture) return { ok: false, json };
+      architecture = true; continue;
+    }
+    if (item === '--architecture-details') {
+      if (architectureDetails) return { ok: false, json };
+      architectureDetails = true; continue;
+    }
     if (!['--alfa-path', '--balandro-path'].includes(item) || used.has(item) ||
         index + 1 >= argv.length || argv[index + 1].startsWith('--')) {
       return { ok: false, json };
@@ -20,7 +30,13 @@ const parseKodiTaxonomyArgs = (argv = []) => {
     used.add(item);
     roots.push(argv[++index]);
   }
-  return roots.length ? { ok: true, json, coverage, roots } : { ok: false, json };
+  if ((coverage && architecture) || (architectureDetails && !architecture)) {
+    return { ok: false, json };
+  }
+  return roots.length
+    ? { ok: true, json, coverage, ...(architecture ? { architecture: true } : {}),
+      ...(architectureDetails ? { architectureDetails: true } : {}), roots }
+    : { ok: false, json };
 };
 const formatKodiTaxonomyJson = (result) => JSON.stringify(result);
 const formatKodiTaxonomyText = (result) => {
@@ -73,8 +89,33 @@ const formatKodiCoverageText = (taxonomy, coverage, recommendation) => [
   `skipped=${taxonomy.skipped}`,
 ].join('\n');
 
+const createArchitectureOutput = (taxonomy, architecture, details = null) => Object.freeze({
+  taxonomy: coverageTaxonomySummary(taxonomy),
+  architecture: details || architecture,
+});
+const formatKodiArchitectureJson = (taxonomy, architecture, details = null) =>
+  JSON.stringify(createArchitectureOutput(taxonomy, architecture, details));
+const formatKodiArchitectureText = (_taxonomy, architecture, details = null) => {
+  if (!details) {
+    return [
+      `architecture.total=${architecture.total}`,
+      ...Object.entries(architecture)
+        .filter(([key]) => key !== 'total')
+        .map(([key, value]) => `${key}=${value}`),
+    ].join('\n');
+  }
+  return [
+    `architecture.total=${details.counts.total}`,
+    ...Object.entries(details.serversByArchitecture)
+      .flatMap(([family, ids]) => [`${family}=${details.counts[family]}`, ...ids]),
+  ].join('\n');
+};
+
 module.exports = {
+  createArchitectureOutput,
   createCoverageOutput,
+  formatKodiArchitectureJson,
+  formatKodiArchitectureText,
   formatKodiCoverageJson,
   formatKodiCoverageText,
   formatKodiTaxonomyJson,

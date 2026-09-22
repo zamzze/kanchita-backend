@@ -1,6 +1,7 @@
 'use strict';
 
-const { parseKodiTaxonomyArgs, formatKodiCoverageJson, formatKodiCoverageText,
+const { parseKodiTaxonomyArgs, formatKodiArchitectureJson, formatKodiArchitectureText,
+  formatKodiCoverageJson, formatKodiCoverageText,
   formatKodiTaxonomyJson, formatKodiTaxonomyText } =
   require('../src/modules/streams/resolverV2/diagnostics/kodiTaxonomyCli');
 
@@ -14,8 +15,18 @@ const main = (argv = process.argv.slice(2)) => {
   const { scanKodiTaxonomy } =
     require('../src/modules/streams/resolverV2/diagnostics/kodiTaxonomyScanner');
   try {
-    const result = scanKodiTaxonomy({ roots: parsed.roots });
-    if (parsed.coverage) {
+    const result = scanKodiTaxonomy({ roots: parsed.roots,
+      architecture: parsed.architecture });
+    if (parsed.architecture) {
+      const { createArchitectureDetails, createArchitectureSummary } =
+        require('../src/modules/streams/resolverV2/diagnostics/kodiArchitecture');
+      const architecture = createArchitectureSummary(result.records);
+      const details = parsed.architectureDetails
+        ? createArchitectureDetails(result.records) : null;
+      process.stdout.write(`${parsed.json
+        ? formatKodiArchitectureJson(result, architecture, details)
+        : formatKodiArchitectureText(result, architecture, details)}\n`);
+    } else if (parsed.coverage) {
       const { createCoverageSummary, recommendNextCapability } =
         require('../src/modules/streams/resolverV2/diagnostics/capabilityCoverage');
       const coverage = createCoverageSummary(result.records);
