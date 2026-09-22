@@ -22,7 +22,9 @@ const MAX_OBJECT_ENTRIES = 32;
 const MAX_METADATA_DEPTH = 6;
 const MAX_METADATA_ITEMS = 128;
 const VARIABLE_NAME = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
-const SIMPLE_PATH = /^[A-Za-z][A-Za-z0-9_]{0,63}(?:\.[A-Za-z][A-Za-z0-9_]{0,63}){0,7}$/;
+const SIMPLE_PATH_SEGMENT = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
+const ARRAY_INDEX_SEGMENT = /^(?:0|[1-9]\d?)$/;
+const MAX_ARRAY_INDEX = 31;
 const ATTRIBUTE_NAME = /^[a-z][a-z0-9_:-]{0,63}$/;
 const TAG_NAME = /^[a-z][a-z0-9-]{0,31}$/;
 const HTML_CONTENT_TYPE = /^(?:text\/html|application\/xhtml\+xml)(?:\s*;|$)/i;
@@ -147,8 +149,11 @@ const normalizeExtractStep = (step) => {
       !VARIABLE_NAME.test(step.saveAs) || !['html', 'json'].includes(step.parser)) return null;
   if (step.parser === 'json') {
     const allowed = new Set(['type', 'from', 'parser', 'path', 'saveAs']);
-    if (Object.keys(step).some((key) => !allowed.has(key)) ||
-        typeof step.path !== 'string' || !SIMPLE_PATH.test(step.path)) return null;
+    const segments = typeof step.path === 'string' ? step.path.split('.') : [];
+    if (Object.keys(step).some((key) => !allowed.has(key)) || segments.length < 1 ||
+        segments.length > 8 || segments.some((segment) => FORBIDDEN_KEYS.has(segment) ||
+          !SIMPLE_PATH_SEGMENT.test(segment) &&
+          (!ARRAY_INDEX_SEGMENT.test(segment) || Number(segment) > MAX_ARRAY_INDEX))) return null;
     return Object.freeze({ type: 'extract', from: step.from, parser: 'json',
       path: step.path, saveAs: step.saveAs });
   }
@@ -292,9 +297,16 @@ const scalar = (value) => ['string', 'number', 'boolean'].includes(typeof value)
 const extractJson = (payload, path) => {
   let current = payload;
   for (const segment of path.split('.')) {
-    if (!isPlainObject(current) || FORBIDDEN_KEYS.has(segment) ||
-        !Object.hasOwn(current, segment)) return null;
-    current = current[segment];
+    if (FORBIDDEN_KEYS.has(segment)) return null;
+    if (Array.isArray(current)) {
+      if (!ARRAY_INDEX_SEGMENT.test(segment) || Number(segment) > MAX_ARRAY_INDEX ||
+          !Object.hasOwn(current, Number(segment))) return null;
+      current = current[Number(segment)];
+    } else {
+      if (!isPlainObject(current) || !SIMPLE_PATH_SEGMENT.test(segment) ||
+          !Object.hasOwn(current, segment)) return null;
+      current = current[segment];
+    }
   }
   return scalar(current);
 };

@@ -117,6 +117,44 @@ test('JSON path extraction feeds emit without a general expression language', as
   } finally { await close(server); }
 });
 
+test('JSON extraction supports only bounded dot array indexes', async () => {
+  const server = await listen((_request, response) => {
+    response.setHeader('content-type', 'application/json');
+    response.end(JSON.stringify({
+      streamingPlaylists: [{ playlistUrl: 'https://media.example.test/array.m3u8' }],
+      files: [{ fileUrl: 'https://media.example.test/file.mp4' }],
+    }));
+  });
+  try {
+    for (const [path, expected] of [
+      ['streamingPlaylists.0.playlistUrl', 'https://media.example.test/array.m3u8'],
+      ['files.0.fileUrl', 'https://media.example.test/file.mp4'],
+    ]) {
+      const workflow = [
+        { type: 'request', method: 'GET', path: '/api', saveAs: 'payload' },
+        { type: 'extract', from: 'payload', parser: 'json', path, saveAs: 'mediaUrl' },
+        { type: 'emit', url: '{mediaUrl}' },
+      ];
+      const result = await make(origin(server), workflow).getSources(mediaContext,
+        { providerMediaRef: providerMediaRef() });
+      assert.equal(result[0].url, expected);
+    }
+  } finally { await close(server); }
+});
+
+test('JSON extraction rejects unsafe and expressive array paths', () => {
+  const request = { type: 'request', method: 'GET', path: '/api', saveAs: 'payload' };
+  for (const path of ['streamingPlaylists.-1.playlistUrl',
+    'streamingPlaylists.*.playlistUrl', 'streamingPlaylists[0].playlistUrl',
+    'streamingPlaylists.32.playlistUrl', '__proto__.url', 'constructor.url',
+    'prototype.url']) {
+    assert.throws(() => createHttpWorkflowSourceProvider({ id: 'workflow_a', enabled: true,
+      baseUrl: 'https://source.example.test', workflow: [request,
+        { type: 'extract', from: 'payload', parser: 'json', path, saveAs: 'url' }] }),
+    { code: ERROR_CODES.INVALID_WORKFLOW });
+  }
+});
+
 test('HTML text extraction is bounded and can feed an emitted URL', async () => {
   const server = await listen((_request, response) => {
     response.setHeader('content-type', 'text/html');
