@@ -29,6 +29,20 @@ const resolver = (id, overrides = {}) => ({ id, type: 'configured_http', enabled
   domains: [`${id.replaceAll('_', '-')}.example.test`], ...overrides });
 const hlsResolver = { resolve: async () => [] };
 const fakeHttp = { get: async () => {}, head: async () => {} };
+const mappedSource = (id, baseUrl, overrides = {}) => ({
+  id, type: 'mapped_http_workflow', enabled: true, region: 'global', baseUrl,
+  workflow: [
+    { type: 'request', method: 'GET', path: '/item/{externalId}', saveAs: 'payload' },
+    { type: 'extract', from: 'payload', parser: 'json', path: 'data.url', saveAs: 'url' },
+    { type: 'emit', url: '{url}', languageHint: 'es-419' },
+  ],
+  ...overrides,
+});
+const mappingRef = (externalId) => Object.freeze({ mappingId: 1,
+  providerId: 'workflow_a', region: 'global', contentType: 'movie', tmdbId: 1,
+  externalId, seasonNumber: null, episodeNumber: null, providerTitle: null,
+  providerSlug: null, matchMethod: 'manual', matchConfidence: 100,
+  metadata: Object.freeze({}), lastVerifiedAt: null });
 
 test('builder maps zero, one and N entries through approved factories', () => {
   for (const count of [0, 1, 3]) {
@@ -65,6 +79,83 @@ test('builder preserves priority, media support and deterministic registry order
     ['resolver_a', 'resolver_b', 'resolver_c', 'direct_hls']);
   assert.deepEqual(first.sourceRegistry.listForMedia({ contentType: 'movie', contentId: 'x',
     tmdbId: 1, title: 'X' }).map((item) => item.descriptor.id), ['source_b', 'source_c']);
+});
+
+test('builder creates one mapped source and preserves its public descriptor', () => {
+  const catalog = loaded({ version: 1, sources: [mappedSource('workflow_a',
+    'https://workflow.example.test', { priority: 77, supportsMovies: true,
+      supportsEpisodes: false, timeoutMs: 2500, maxCandidates: 4 })] });
+  const runtime = buildResolverV2CatalogRuntime({ catalog, http: fakeHttp, hlsResolver,
+    mappingResolver: { resolve: async () => [] } });
+  assert.equal(runtime.sources.length, 1);
+  assert.deepEqual(runtime.sources[0].descriptor, {
+    id: 'workflow_a', active: true, priority: 77, supportsMovies: true,
+    supportsEpisodes: false, languages: [], strategy: 'http', timeoutMs: 2500,
+    maxCandidates: 4,
+  });
+  assert.equal(runtime.summary.sourcesRegistered, 1);
+});
+
+test('mapped catalog source returns empty without mappings and does not use HTTP', async () => {
+  const mappingCalls = [];
+  const catalog = loaded({ version: 1, sources: [mappedSource('workflow_a',
+    'https://workflow.example.test')] });
+  const runtime = buildResolverV2CatalogRuntime({ catalog,
+    http: { request: async () => { throw new Error('HTTP must not run without mappings'); } },
+    hlsResolver, mappingResolver: { resolve: async (input) => {
+      mappingCalls.push(input);
+      return [];
+    } } });
+  const media = Object.freeze({ contentType: 'movie', contentId: 'movie-1', tmdbId: 1,
+    title: 'Fixture' });
+  assert.deepEqual(await runtime.sources[0].getSources(media, {}), []);
+  assert.equal(mappingCalls.length, 1);
+  assert.equal(mappingCalls[0].mediaContext, media);
+});
+
+test('mapped runtime passes exact media context and resolves local workflow mappings', async (t) => {
+  const requests = [];
+  const fixture = http.createServer((request, response) => {
+    requests.push(request.url);
+    response.writeHead(200, { 'Content-Type': 'application/json' });
+    response.end(JSON.stringify({ data: request.url.endsWith('/a') ? {}
+      : { url: 'https://media.example.test/ready.m3u8' } }));
+  });
+  await new Promise((resolve) => fixture.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise((resolve) => fixture.close(resolve)));
+  const baseUrl = `http://127.0.0.1:${fixture.address().port}`;
+  const calls = [];
+  const mappingResolver = { resolve: async (input) => {
+    calls.push(input);
+    return [mappingRef('a'), mappingRef('b')];
+  } };
+  const catalog = loaded({ version: 1, sources: [mappedSource('workflow_a', baseUrl)] });
+  const runtime = buildResolverV2CatalogRuntime({ catalog,
+    http: createSafeHttpClient({ allowPrivateNetworks: true }), hlsResolver, mappingResolver });
+  const media = Object.freeze({ contentType: 'movie', contentId: 'movie-1', tmdbId: 1,
+    title: 'Fixture' });
+  const candidates = await runtime.sources[0].getSources(media, {});
+  assert.equal(calls[0].mediaContext, media);
+  assert.deepEqual(requests, ['/item/a', '/item/b']);
+  assert.equal(candidates.length, 1);
+  assert.equal(candidates[0].providerId, 'workflow_a');
+  assert.equal(candidates[0].url, 'https://media.example.test/ready.m3u8');
+});
+
+test('mapped source skips safely without resolver and duplicate IDs remain protected', () => {
+  const payload = { version: 1, sources: [
+    mappedSource('workflow_a', 'https://workflow.example.test'),
+    source('sibling'),
+  ] };
+  const catalog = loaded(payload);
+  const missing = buildResolverV2CatalogRuntime({ catalog, http: fakeHttp, hlsResolver });
+  assert.deepEqual(missing.sources.map(({ descriptor }) => descriptor.id), ['sibling']);
+  assert.deepEqual(missing.summary.errorCodes,
+    ['MAPPED_SOURCE_MAPPING_RESOLVER_UNAVAILABLE']);
+  const duplicate = buildResolverV2CatalogRuntime({ catalog, http: fakeHttp, hlsResolver,
+    existingSourceIds: ['workflow_a'], mappingResolver: { resolve: async () => [] } });
+  assert.deepEqual(duplicate.sources.map(({ descriptor }) => descriptor.id), ['sibling']);
+  assert.deepEqual(duplicate.summary.errorCodes, ['CATALOG_DUPLICATE_SOURCE']);
 });
 
 test('existing env IDs and direct_hls cannot be replaced by catalog entries', () => {

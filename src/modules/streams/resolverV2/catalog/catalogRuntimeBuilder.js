@@ -6,6 +6,10 @@ const { createPeerTubeSourceProvider } = require('../providers/peerTubeSourcePro
 const { createPlutoSourceProvider } = require('../providers/plutoSourceProvider');
 const { createConfiguredHtmlSourceProvider } =
   require('../providers/configuredHtmlSourceProvider');
+const { createHttpWorkflowSourceProvider } =
+  require('../providers/httpWorkflowSourceProvider');
+const { createMappedSourceProviderAdapter } =
+  require('../providers/mappedSourceProviderAdapter');
 const { createConfiguredHttpResolver } = require('../resolvers/configuredHttpResolver');
 const { createConfiguredHtmlResolver } = require('../resolvers/configuredHtmlResolver');
 const { CATALOG_CODES } = require('./catalogErrors');
@@ -17,6 +21,7 @@ const buildResolverV2CatalogRuntime = ({
   env = process.env,
   existingSourceIds = [],
   existingResolverIds = [],
+  mappingResolver = null,
 } = {}) => {
   const sources = [];
   const resolvers = [];
@@ -26,10 +31,16 @@ const buildResolverV2CatalogRuntime = ({
   const entries = catalog?.loaded === true ? catalog : { sources: [], resolvers: [] };
   for (const entry of entries.sources || []) {
     if (!entry.enabled) continue;
-    if (!['configured_http', 'peertube', 'configured_html', 'pluto'].includes(entry.type)) {
+    if (!['configured_http', 'peertube', 'configured_html', 'pluto',
+      'mapped_http_workflow'].includes(entry.type)) {
       errors.push(CATALOG_CODES.INVALID_SOURCE); continue;
     }
     if (sourceIds.has(entry.id)) { errors.push(CATALOG_CODES.DUPLICATE_SOURCE); continue; }
+    if (entry.type === 'mapped_http_workflow' &&
+        (!mappingResolver || typeof mappingResolver.resolve !== 'function')) {
+      errors.push(CATALOG_CODES.MAPPING_RESOLVER_UNAVAILABLE);
+      continue;
+    }
     const token = entry.authTokenEnv ? env[entry.authTokenEnv] : null;
     if (entry.authTokenEnv && (typeof token !== 'string' || !token.trim())) {
       errors.push(CATALOG_CODES.MISSING_SECRET);
@@ -40,7 +51,7 @@ const buildResolverV2CatalogRuntime = ({
         : entry.type === 'pluto' ? createPlutoSourceProvider
         : entry.type === 'configured_html' ? createConfiguredHtmlSourceProvider
           : createConfiguredHttpSourceProvider;
-      const source = factory({
+      const sourceOptions = {
         id: entry.id, enabled: true, priority: entry.priority, baseUrl: entry.baseUrl,
         timeoutMs: entry.timeoutMs, maxCandidates: entry.maxCandidates,
         supportsMovies: entry.supportsMovies, supportsEpisodes: entry.supportsEpisodes,
@@ -55,9 +66,20 @@ const buildResolverV2CatalogRuntime = ({
             selectors: entry.selectors,
             allowedCandidateDomains: entry.allowedCandidateDomains,
             authToken: token || null,
+          } : entry.type === 'mapped_http_workflow' ? {
+            maxBytes: entry.maxBytes,
+            maxRedirects: entry.maxRedirects,
+            maxSteps: entry.maxSteps,
+            workflow: entry.workflow,
           } : { headers: token ? { authorization: `Bearer ${token}` } : {} }),
         http,
-      });
+      };
+      const innerSource = entry.type === 'mapped_http_workflow'
+        ? createHttpWorkflowSourceProvider(sourceOptions) : factory(sourceOptions);
+      const source = entry.type === 'mapped_http_workflow'
+        ? createMappedSourceProviderAdapter({ provider: innerSource, mappingResolver,
+          region: entry.region, maxMappingAttempts: entry.maxMappingAttempts })
+        : innerSource;
       if (!source.descriptor.active) throw new Error('inactive');
       sourceIds.add(entry.id);
       sources.push(source);

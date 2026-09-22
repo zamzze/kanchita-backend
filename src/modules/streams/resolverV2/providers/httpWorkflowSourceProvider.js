@@ -118,6 +118,14 @@ const normalizeTemplateObject = (value, allowlist = null) => {
 };
 
 const normalizeSelector = (value) => {
+  if (isPlainObject(value) &&
+      Object.keys(value).every((key) => ['tag', 'requiredAttribute'].includes(key)) &&
+      (value.tag === null || typeof value.tag === 'string' && TAG_NAME.test(value.tag)) &&
+      (value.requiredAttribute === null || typeof value.requiredAttribute === 'string' &&
+        ATTRIBUTE_NAME.test(value.requiredAttribute)) &&
+      (value.tag !== null || value.requiredAttribute !== null)) {
+    return Object.freeze({ tag: value.tag, requiredAttribute: value.requiredAttribute });
+  }
   if (typeof value !== 'string' || value.length > 128) return null;
   const normalized = value.trim().toLowerCase();
   let match = /^([a-z][a-z0-9-]{0,31})$/.exec(normalized);
@@ -174,17 +182,17 @@ const normalizeEmitStep = (step) => {
     'languageHint', 'qualityHint', 'metadata']);
   if (!isPlainObject(step) || Object.keys(step).some((key) => !allowed.has(key))) return null;
   const url = normalizeTemplate(step.url);
-  const referer = step.referer === undefined ? null : normalizeTemplate(step.referer);
-  const origin = step.origin === undefined ? null : normalizeTemplate(step.origin);
-  const languageHint = step.languageHint === undefined ? null
+  const referer = step.referer == null ? null : normalizeTemplate(step.referer);
+  const origin = step.origin == null ? null : normalizeTemplate(step.origin);
+  const languageHint = step.languageHint == null ? null
     : normalizeTemplate(step.languageHint);
-  const qualityHint = step.qualityHint === undefined ? null : normalizeTemplate(step.qualityHint);
+  const qualityHint = step.qualityHint == null ? null : normalizeTemplate(step.qualityHint);
   const headers = normalizeTemplateObject(step.headers, PLAYBACK_HEADER_ALLOWLIST);
-  const metadata = step.metadata === undefined ? null : cloneJsonLike(step.metadata);
-  if (!url || step.referer !== undefined && !referer || step.origin !== undefined && !origin ||
-      step.languageHint !== undefined && !languageHint ||
-      step.qualityHint !== undefined && !qualityHint || !headers ||
-      step.metadata !== undefined && (!isPlainObject(step.metadata) || metadata === undefined)) {
+  const metadata = step.metadata == null ? null : cloneJsonLike(step.metadata);
+  if (!url || step.referer != null && !referer || step.origin != null && !origin ||
+      step.languageHint != null && !languageHint ||
+      step.qualityHint != null && !qualityHint || !headers ||
+      step.metadata != null && (!isPlainObject(step.metadata) || metadata === undefined)) {
     return null;
   }
   return Object.freeze({ type: 'emit', url, referer, origin, languageHint, qualityHint,

@@ -191,6 +191,7 @@ const createShadowPipeline = ({
       if (loadedCatalog?.loaded === true) {
         const built = catalogRuntimeBuilder({ catalog: loadedCatalog, http: activeHttpClient,
           hlsResolver: directHlsResolver, env: catalogEnv,
+          mappingResolver: providerMappingResolver,
           existingSourceIds: configuredProviders.map(({ descriptor }) => descriptor.id),
           existingResolverIds: configuredResolvers.map(({ descriptor }) => descriptor.id) });
         configuredProviders.push(...built.sources);

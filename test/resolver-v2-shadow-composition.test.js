@@ -111,6 +111,28 @@ test('Pluto is opt-in and accepts the mapping resolver with legacy store compati
     ['pluto']);
 });
 
+test('catalog mapped workflow reuses the injected mapping resolver and skips without it', () => {
+  const entry = { id: 'workflow_a', type: 'mapped_http_workflow', enabled: true,
+    region: 'global', baseUrl: 'https://workflow.example.test', workflow: [
+      { type: 'request', method: 'GET', path: '/item/{externalId}', saveAs: 'payload' },
+    ] };
+  const options = { catalogEnabled: true, catalogPath: 'catalog.json',
+    catalogReadFile: () => JSON.stringify({ version: 1, sources: [entry] }),
+    httpClient: { request: async () => { throw new Error('construction must not request'); },
+      get: async () => { throw new Error('construction must not request'); },
+      head: async () => { throw new Error('construction must not request'); } },
+    healthEnabled: false };
+  const mappingResolver = { resolve: async () => [] };
+  const configured = createShadowPipeline({ ...options, providerMappingResolver: mappingResolver });
+  assert.deepEqual(configured.sourceRegistry.list().map(({ descriptor }) => descriptor.id),
+    ['workflow_a']);
+  assert.equal(configured.sourceRegistry.list().length, 1);
+  const skipped = createShadowPipeline(options);
+  assert.deepEqual(skipped.sourceRegistry.list(), []);
+  assert.deepEqual(skipped.catalogSummary.errorCodes,
+    ['MAPPED_SOURCE_MAPPING_RESOLVER_UNAVAILABLE']);
+});
+
 test('shadow composition has no browser, legacy executor, DB or import-time network coupling', () => {
   for (const relative of [
     'shadowResolver.js', 'createShadowPipeline.js', 'resolutionPipeline.js',

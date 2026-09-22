@@ -8,12 +8,19 @@ const { normalizeDomains, normalizePatterns } = require('../resolvers/configured
 const { normalizeSelectors } = require('../html/staticHtmlExtractor');
 const { normalizeMediaPathTemplate } = require('../html/mediaPathTemplate');
 const { normalizePublicDomains } = require('../html/htmlConfig');
+const {
+  HARD_MAX_STEPS,
+  normalizeWorkflow,
+} = require('../providers/httpWorkflowSourceProvider');
+const { HARD_MAX_MAPPING_ATTEMPTS } =
+  require('../providers/mappedSourceProviderAdapter');
 const { CATALOG_CODES, catalogError } = require('./catalogErrors');
 
 const DEFAULT_LIMITS = Object.freeze({
   sources: 32, resolvers: 64, domains: 16, aliases: 16, pathPrefixes: 16,
 });
 const ID = /^[a-z0-9][a-z0-9_-]{0,127}$/;
+const REGION = /^[a-z0-9][a-z0-9_-]{0,31}$/;
 const SECRET_ENV = /^STREAM_RESOLVER_V2_SECRET_[A-Z0-9_]{1,96}$/;
 const DANGEROUS_FIELDS = Object.freeze([
   'headers', 'modulePath', 'script', 'code', 'browser', 'requiresBrowser',
@@ -54,6 +61,29 @@ const normalizeSource = (entry) => {
   const maxCandidates = integer(entry.maxCandidates, 8, 1, 32);
   const supportsMovies = boolean(entry.supportsMovies, true);
   const supportsEpisodes = boolean(entry.supportsEpisodes, true);
+  if (entry.type === 'mapped_http_workflow') {
+    const allowed = new Set(['id', 'type', 'enabled', 'priority', 'region', 'baseUrl',
+      'timeoutMs', 'maxBytes', 'maxRedirects', 'maxCandidates', 'maxSteps',
+      'maxMappingAttempts', 'supportsMovies', 'supportsEpisodes', 'workflow']);
+    if (Object.keys(entry).some((key) => !allowed.has(key))) return null;
+    const region = typeof entry.region === 'string' ? entry.region.trim().toLowerCase() : '';
+    const baseUrl = typeof entry.baseUrl === 'string' && normalizeBaseUrl(entry.baseUrl)
+      ? normalizeBaseUrl(entry.baseUrl).toString().replace(/\/$/, '') : null;
+    const maxBytes = integer(entry.maxBytes, 512 * 1024, 1, 2 * 1024 * 1024);
+    const maxRedirects = integer(entry.maxRedirects, 3, 0, 10);
+    const maxSteps = integer(entry.maxSteps, 5, 1, HARD_MAX_STEPS);
+    const maxMappingAttempts = integer(entry.maxMappingAttempts, 3, 1,
+      HARD_MAX_MAPPING_ATTEMPTS);
+    const workflow = maxSteps === null ? null : normalizeWorkflow(entry.workflow, maxSteps);
+    if (!id || enabled === null || priority === null || timeoutMs === null ||
+        maxBytes === null || maxRedirects === null || maxCandidates === null ||
+        maxSteps === null || maxMappingAttempts === null || supportsMovies === null ||
+        supportsEpisodes === null || !REGION.test(region) || !workflow ||
+        (enabled && !baseUrl)) return null;
+    return Object.freeze({ id, type: 'mapped_http_workflow', enabled, priority, region,
+      baseUrl: baseUrl || '', timeoutMs, maxBytes, maxRedirects, maxCandidates,
+      maxSteps, maxMappingAttempts, supportsMovies, supportsEpisodes, workflow });
+  }
   if (entry.type === 'peertube') {
     const allowed = new Set(['id', 'type', 'enabled', 'priority', 'baseUrl', 'timeoutMs',
       'maxCandidates', 'mediaMap', 'supportsMovies', 'supportsEpisodes']);

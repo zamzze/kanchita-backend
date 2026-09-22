@@ -10,6 +10,7 @@ const {
   HARD_MAX_CANDIDATES,
   HARD_MAX_STEPS,
   createHttpWorkflowSourceProvider,
+  normalizeWorkflow,
 } = require('../src/modules/streams/resolverV2/providers/httpWorkflowSourceProvider');
 
 const listen = (handler) => new Promise((resolve) => {
@@ -27,6 +28,18 @@ const providerMediaRef = (overrides = {}) => Object.freeze({
 const make = (baseUrl, workflow, options = {}) => createHttpWorkflowSourceProvider({
   id: 'workflow_a', enabled: true, baseUrl, workflow,
   http: createSafeHttpClient({ allowPrivateNetworks: true }), ...options,
+});
+
+test('normalized workflow can be validated again without changing its contract', () => {
+  const workflow = [
+    { type: 'request', method: 'GET', path: '/item/{externalId}', saveAs: 'page' },
+    { type: 'extract', from: 'page', parser: 'html', selector: 'iframe',
+      attribute: 'src', saveAs: 'embedUrl' },
+    { type: 'emit', url: '{embedUrl}' },
+  ];
+  const normalized = normalizeWorkflow(workflow, HARD_MAX_STEPS);
+  assert.ok(normalized);
+  assert.deepEqual(normalizeWorkflow(normalized, HARD_MAX_STEPS), normalized);
 });
 
 test('GET HTML extraction emits a normalized immutable candidate', async () => {
