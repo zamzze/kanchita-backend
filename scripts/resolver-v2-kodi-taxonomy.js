@@ -1,6 +1,7 @@
 'use strict';
 
 const { parseKodiTaxonomyArgs, formatKodiArchitectureJson, formatKodiArchitectureText,
+  formatKodiChannelCoverageV2Json, formatKodiChannelCoverageV2Text,
   formatKodiCoverageJson, formatKodiCoverageText,
   formatKodiTaxonomyJson, formatKodiTaxonomyText } =
   require('../src/modules/streams/resolverV2/diagnostics/kodiTaxonomyCli');
@@ -12,9 +13,19 @@ const main = (argv = process.argv.slice(2)) => {
     process.exitCode = 2;
     return;
   }
-  const { scanKodiTaxonomy } =
-    require('../src/modules/streams/resolverV2/diagnostics/kodiTaxonomyScanner');
   try {
+    if (parsed.channelCoverageV2) {
+      const { scanTopLevelChannelCoverageV2 } =
+        require('../src/modules/streams/resolverV2/diagnostics/kodiChannelCoverageV2');
+      const coverage = scanTopLevelChannelCoverageV2({ root: parsed.roots[0] });
+      process.stdout.write(`${parsed.json
+        ? formatKodiChannelCoverageV2Json(coverage)
+        : formatKodiChannelCoverageV2Text(coverage)}\n`);
+      process.exitCode = 0;
+      return;
+    }
+    const { scanKodiTaxonomy } =
+      require('../src/modules/streams/resolverV2/diagnostics/kodiTaxonomyScanner');
     const result = scanKodiTaxonomy({ roots: parsed.roots,
       architecture: parsed.architecture,
       architectureExplain: parsed.architectureExplain === true ||

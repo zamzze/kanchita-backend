@@ -6,6 +6,7 @@ const parseKodiTaxonomyArgs = (argv = []) => {
   let architectureDetails = false;
   let architectureExplain = false;
   let architectureCoverageV2 = false;
+  let channelCoverageV2 = false;
   const used = new Set();
   for (let index = 0; index < argv.length; index += 1) {
     const item = argv[index];
@@ -33,6 +34,10 @@ const parseKodiTaxonomyArgs = (argv = []) => {
       if (architectureCoverageV2) return { ok: false, json };
       architectureCoverageV2 = true; continue;
     }
+    if (item === '--channel-coverage-v2') {
+      if (channelCoverageV2) return { ok: false, json };
+      channelCoverageV2 = true; continue;
+    }
     if (!['--alfa-path', '--balandro-path'].includes(item) || used.has(item) ||
         index + 1 >= argv.length || argv[index + 1].startsWith('--')) {
       return { ok: false, json };
@@ -42,14 +47,16 @@ const parseKodiTaxonomyArgs = (argv = []) => {
   }
   if ((coverage && architecture) || (architectureDetails && !architecture) ||
       (architectureExplain && !architectureDetails) ||
-      (architectureCoverageV2 && (!architecture || !architectureDetails))) {
+      (architectureCoverageV2 && (!architecture || !architectureDetails)) ||
+      (channelCoverageV2 && (coverage || architecture))) {
     return { ok: false, json };
   }
-  return roots.length
+  return roots.length && (!channelCoverageV2 || roots.length === 1)
     ? { ok: true, json, coverage, ...(architecture ? { architecture: true } : {}),
       ...(architectureDetails ? { architectureDetails: true } : {}),
       ...(architectureExplain ? { architectureExplain: true } : {}),
-      ...(architectureCoverageV2 ? { architectureCoverageV2: true } : {}), roots }
+      ...(architectureCoverageV2 ? { architectureCoverageV2: true } : {}),
+      ...(channelCoverageV2 ? { channelCoverageV2: true } : {}), roots }
     : { ok: false, json };
 };
 const formatKodiTaxonomyJson = (result) => JSON.stringify(result);
@@ -173,11 +180,49 @@ const formatKodiArchitectureText = (_taxonomy, architecture, details = null,
   return lines.join('\n');
 };
 
+const createChannelCoverageV2Output = (coverage) => Object.freeze({
+  channelCoverageV2: coverage,
+});
+const formatKodiChannelCoverageV2Json = (coverage) =>
+  JSON.stringify(createChannelCoverageV2Output(coverage));
+const formatKodiChannelCoverageV2Text = (coverage) => {
+  const lines = [
+    `channelCoverageV2.runtimeCommit=${coverage.runtimeCommit}`,
+    `channelCoverageV2.topLevelFiles=${coverage.population.topLevelFiles}`,
+    `channelCoverageV2.channels=${coverage.population.channels}`,
+    `channelCoverageV2.emptyInitFiles=${coverage.population.emptyInitFiles}`,
+  ];
+  for (const [pattern, count] of Object.entries(coverage.summary.byPattern)) {
+    lines.push(`channelCoverageV2.pattern.${pattern}=${count}`);
+  }
+  for (const [assessment, count] of Object.entries(coverage.summary.byAssessment)) {
+    lines.push(`channelCoverageV2.assessment.${assessment}=${count}`);
+  }
+  for (const gap of coverage.summary.missingCapabilities) {
+    lines.push(`channelCoverageV2.gap.${gap.missingCapability}=${gap.affectedChannels}`);
+  }
+  for (const item of coverage.channels) {
+    lines.push('', `channel=${item.channel}`, `files=${item.files}`, `pattern=${item.pattern}`,
+      `identitySignals=${JSON.stringify(item.identitySignals)}`,
+      `catalogSignals=${JSON.stringify(item.catalogSignals)}`,
+      `episodeSignals=${JSON.stringify(item.episodeSignals)}`,
+      `sourceSignals=${JSON.stringify(item.sourceSignals)}`,
+      `requiredCapabilities=${JSON.stringify(item.requiredCapabilities)}`,
+      `missingCapabilities=${JSON.stringify(item.missingCapabilities)}`,
+      `assessment=${item.assessment}`, `confidence=${item.confidence}`,
+      `reason=${item.reason}`);
+  }
+  return lines.join('\n');
+};
+
 module.exports = {
   createArchitectureOutput,
+  createChannelCoverageV2Output,
   createCoverageOutput,
   formatKodiArchitectureJson,
   formatKodiArchitectureText,
+  formatKodiChannelCoverageV2Json,
+  formatKodiChannelCoverageV2Text,
   formatKodiCoverageJson,
   formatKodiCoverageText,
   formatKodiTaxonomyJson,
