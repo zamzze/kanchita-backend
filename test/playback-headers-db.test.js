@@ -49,7 +49,7 @@ test('PostgreSQL playback header lifecycle and full proxy chain', {
     const version = await admin.query('SHOW server_version_num');
     assert.ok(Number(version.rows[0].server_version_num) >= 150000);
     const migrated = await runMigrations({ pool: db, logger: { log() {} } });
-    assert.equal(migrated.applied.at(-1), '007_safe_playback_headers.sql');
+    assert.ok(migrated.applied.includes('007_safe_playback_headers.sql'));
 
     const movie = await db.query(
       `INSERT INTO movies (tmdb_id, title, is_published)

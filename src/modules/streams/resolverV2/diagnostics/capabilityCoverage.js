@@ -32,9 +32,11 @@ const normalizeCapabilities = (entry) => {
 };
 const signatureFor = (capabilities) => capabilities.slice().sort().join('+');
 
-const classifyServerCoverage = (entry, { playbackHeaders = false } = {}) => {
+const classifyServerCoverage = (entry, { headerTransportReady = false } = {}) => {
   const matchedCapabilities = normalizeCapabilities(entry);
   const set = new Set(matchedCapabilities);
+  const transportReady = headerTransportReady === true;
+  const hasHeaderBound = set.has('playback_header_bound') || set.has('header_bound');
   let coverage = 'unknown';
   let blockingCapabilities = [];
   if (set.has('drm_or_protected')) {
@@ -49,13 +51,14 @@ const classifyServerCoverage = (entry, { playbackHeaders = false } = {}) => {
   } else if (set.has('cookie_session')) {
     coverage = 'requires_session';
     blockingCapabilities = ['cookie_session'];
-  } else if (!playbackHeaders &&
-      (set.has('playback_header_bound') || set.has('header_bound'))) {
+  } else if (!transportReady && hasHeaderBound) {
     coverage = 'resolution_only';
     blockingCapabilities = ['playback_header_bound', 'header_bound']
       .filter((item) => set.has(item));
+  } else if (transportReady && hasHeaderBound && set.has('unknown')) {
+    coverage = 'unknown';
   } else if (matchedCapabilities.some((item) =>
-    createV2CapabilityMatrix({ playbackHeaders })[item]?.state ===
+    createV2CapabilityMatrix({ headerTransportReady: transportReady })[item]?.state ===
       CAPABILITY_STATES.SUPPORTED_PRIMARY)) {
     coverage = 'primary';
   }

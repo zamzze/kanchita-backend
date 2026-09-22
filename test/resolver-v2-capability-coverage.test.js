@@ -36,7 +36,7 @@ test('capability matrix separates primary, resolution-only and unsupported layer
   }
   for (const name of ['header_bound', 'playback_header_bound']) {
     assert.equal(V2_CAPABILITY_MATRIX[name].state, SUPPORTED_RESOLUTION_ONLY);
-    assert.equal(createV2CapabilityMatrix({ playbackHeaders: true })[name].state,
+    assert.equal(createV2CapabilityMatrix({ headerTransportReady: true })[name].state,
       SUPPORTED_PRIMARY);
   }
   for (const name of ['cookie_session', 'javascript_transform', 'browser_required',
@@ -45,12 +45,55 @@ test('capability matrix separates primary, resolution-only and unsupported layer
   }
 });
 
-test('header-bound coverage becomes primary only when playback transport is enabled', () => {
+test('header-bound coverage becomes primary only when playback transport is ready', () => {
   assert.equal(classifyServerCoverage(entry(['header_bound'])).coverage, 'resolution_only');
-  assert.equal(classifyServerCoverage(entry(['header_bound']), { playbackHeaders: true }).coverage,
-    'primary');
+  assert.equal(classifyServerCoverage(entry(['header_bound']),
+    { headerTransportReady: false }).coverage, 'resolution_only');
+  assert.equal(classifyServerCoverage(entry(['header_bound']),
+    { headerTransportReady: true }).coverage, 'primary');
   assert.equal(createCoverageSummary([entry(['playback_header_bound'])],
-    { playbackHeaders: true }).primaryCompatible, 1);
+    { headerTransportReady: true }).primaryCompatible, 1);
+});
+
+test('header transport readiness does not override other primary blockers', () => {
+  const options = { headerTransportReady: true };
+  const cases = [
+    [['header_bound', 'cookie_session'], 'requires_session'],
+    [['header_bound', 'javascript_transform'], 'requires_javascript'],
+    [['header_bound', 'browser_required'], 'requires_browser'],
+    [['header_bound', 'anti_bot'], 'requires_browser'],
+    [['header_bound', 'drm_or_protected'], 'protected'],
+    [['header_bound', 'unknown'], 'unknown'],
+    [['header_bound', 'direct_hls'], 'primary'],
+  ];
+  for (const [classifications, expected] of cases) {
+    assert.equal(classifyServerCoverage(entry(classifications), options).coverage, expected);
+  }
+  assert.equal(classifyServerCoverage(entry(['header_bound']),
+    { headerTransportReady: 'true' }).coverage, 'resolution_only');
+});
+
+test('coverage summary exposes the bounded diagnostic delta for ready header transport', () => {
+  const entries = [
+    entry(['direct_hls']),
+    entry(['header_bound']),
+    entry(['playback_header_bound', 'direct_http']),
+    entry(['header_bound', 'cookie_session']),
+    entry(['header_bound', 'javascript_transform']),
+    entry(['header_bound', 'unknown']),
+  ];
+  const disabled = createCoverageSummary(entries);
+  const enabled = createCoverageSummary(entries, { headerTransportReady: true });
+  assert.deepEqual(
+    { primary: disabled.primaryCompatible, resolutionOnly: disabled.resolutionOnly,
+      session: disabled.requiresSession, javascript: disabled.requiresJavascript,
+      unknown: disabled.unknown },
+    { primary: 1, resolutionOnly: 3, session: 1, javascript: 1, unknown: 0 });
+  assert.deepEqual(
+    { primary: enabled.primaryCompatible, resolutionOnly: enabled.resolutionOnly,
+      session: enabled.requiresSession, javascript: enabled.requiresJavascript,
+      unknown: enabled.unknown },
+    { primary: 3, resolutionOnly: 0, session: 1, javascript: 1, unknown: 1 });
 });
 
 test('coverage classification follows deterministic blocker precedence', () => {

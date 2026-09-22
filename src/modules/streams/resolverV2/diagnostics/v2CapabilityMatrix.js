@@ -9,27 +9,30 @@ const CAPABILITY_STATES = Object.freeze({
 const capability = (state, noteCode = null) => Object.freeze({ state, noteCode });
 const { SUPPORTED_PRIMARY, SUPPORTED_RESOLUTION_ONLY, NOT_SUPPORTED } = CAPABILITY_STATES;
 
-const createV2CapabilityMatrix = ({ playbackHeaders = false } = {}) => Object.freeze({
-  direct_hls: capability(SUPPORTED_PRIMARY),
-  direct_http: capability(SUPPORTED_PRIMARY),
-  json_api: capability(SUPPORTED_PRIMARY),
-  static_html: capability(SUPPORTED_PRIMARY),
-  iframe_http: capability(SUPPORTED_PRIMARY),
-  multi_hop_iframe: capability(SUPPORTED_PRIMARY),
-  header_bound: playbackHeaders
-    ? capability(SUPPORTED_PRIMARY) : capability(SUPPORTED_RESOLUTION_ONLY,
-      'PLAYBACK_HEADERS_NOT_TRANSPORTED'),
-  playback_header_bound: capability(
-    playbackHeaders ? SUPPORTED_PRIMARY : SUPPORTED_RESOLUTION_ONLY,
-    playbackHeaders ? null : 'PLAYBACK_HEADERS_NOT_TRANSPORTED'),
-  navigation_header_bound: capability(SUPPORTED_PRIMARY, 'NAVIGATION_HEADERS_ONLY'),
-  cookie_session: capability(NOT_SUPPORTED),
-  javascript_transform: capability(NOT_SUPPORTED),
-  browser_required: capability(NOT_SUPPORTED),
-  anti_bot: capability(NOT_SUPPORTED),
-  drm_or_protected: capability(NOT_SUPPORTED),
-  unknown: capability(NOT_SUPPORTED),
-});
+const createV2CapabilityMatrix = ({ headerTransportReady = false } = {}) => {
+  const transportReady = headerTransportReady === true;
+  return Object.freeze({
+    direct_hls: capability(SUPPORTED_PRIMARY),
+    direct_http: capability(SUPPORTED_PRIMARY),
+    json_api: capability(SUPPORTED_PRIMARY),
+    static_html: capability(SUPPORTED_PRIMARY),
+    iframe_http: capability(SUPPORTED_PRIMARY),
+    multi_hop_iframe: capability(SUPPORTED_PRIMARY),
+    header_bound: transportReady
+      ? capability(SUPPORTED_PRIMARY) : capability(SUPPORTED_RESOLUTION_ONLY,
+        'PLAYBACK_HEADERS_NOT_TRANSPORTED'),
+    playback_header_bound: capability(
+      transportReady ? SUPPORTED_PRIMARY : SUPPORTED_RESOLUTION_ONLY,
+      transportReady ? null : 'PLAYBACK_HEADERS_NOT_TRANSPORTED'),
+    navigation_header_bound: capability(SUPPORTED_PRIMARY, 'NAVIGATION_HEADERS_ONLY'),
+    cookie_session: capability(NOT_SUPPORTED),
+    javascript_transform: capability(NOT_SUPPORTED),
+    browser_required: capability(NOT_SUPPORTED),
+    anti_bot: capability(NOT_SUPPORTED),
+    drm_or_protected: capability(NOT_SUPPORTED),
+    unknown: capability(NOT_SUPPORTED),
+  });
+};
 const V2_CAPABILITY_MATRIX = createV2CapabilityMatrix();
 
 const CAPABILITY_NAMES = Object.freeze(Object.keys(V2_CAPABILITY_MATRIX));
