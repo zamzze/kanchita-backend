@@ -8,6 +8,7 @@ const parseKodiTaxonomyArgs = (argv = []) => {
   let architectureCoverageV2 = false;
   let channelCoverageV2 = false;
   let channelRegexGap = false;
+  let channelCapabilityPayoff = false;
   const used = new Set();
   for (let index = 0; index < argv.length; index += 1) {
     const item = argv[index];
@@ -43,6 +44,10 @@ const parseKodiTaxonomyArgs = (argv = []) => {
       if (channelRegexGap) return { ok: false, json };
       channelRegexGap = true; continue;
     }
+    if (item === '--channel-capability-payoff') {
+      if (channelCapabilityPayoff) return { ok: false, json };
+      channelCapabilityPayoff = true; continue;
+    }
     if (!['--alfa-path', '--balandro-path'].includes(item) || used.has(item) ||
         index + 1 >= argv.length || argv[index + 1].startsWith('--')) {
       return { ok: false, json };
@@ -54,16 +59,19 @@ const parseKodiTaxonomyArgs = (argv = []) => {
       (architectureExplain && !architectureDetails) ||
       (architectureCoverageV2 && (!architecture || !architectureDetails)) ||
       (channelRegexGap && !channelCoverageV2) ||
+      (channelCapabilityPayoff && (coverage || architecture || channelCoverageV2 ||
+        channelRegexGap)) ||
       (channelCoverageV2 && (coverage || architecture))) {
     return { ok: false, json };
   }
-  return roots.length && (!channelCoverageV2 || roots.length === 1)
+  return roots.length && (!(channelCoverageV2 || channelCapabilityPayoff) || roots.length === 1)
     ? { ok: true, json, coverage, ...(architecture ? { architecture: true } : {}),
       ...(architectureDetails ? { architectureDetails: true } : {}),
       ...(architectureExplain ? { architectureExplain: true } : {}),
       ...(architectureCoverageV2 ? { architectureCoverageV2: true } : {}),
       ...(channelCoverageV2 ? { channelCoverageV2: true } : {}),
-      ...(channelRegexGap ? { channelRegexGap: true } : {}), roots }
+      ...(channelRegexGap ? { channelRegexGap: true } : {}),
+      ...(channelCapabilityPayoff ? { channelCapabilityPayoff: true } : {}), roots }
     : { ok: false, json };
 };
 const formatKodiTaxonomyJson = (result) => JSON.stringify(result);
@@ -250,15 +258,43 @@ const formatKodiChannelRegexGapText = (gap) => {
   return lines.join('\n');
 };
 
+const createChannelCapabilityPayoffOutput = (payoff) => Object.freeze({
+  channelCapabilityPayoff: payoff,
+});
+const formatKodiChannelCapabilityPayoffJson = (payoff) =>
+  JSON.stringify(createChannelCapabilityPayoffOutput(payoff));
+const formatKodiChannelCapabilityPayoffText = (payoff) => {
+  const lines = [`channelCapabilityPayoff.channels=${payoff.population.channels}`];
+  for (const item of payoff.candidateSets) {
+    const key = item.capabilities.join('+');
+    lines.push('', `capabilitySet=${key}`, `fullyUnblocked=${item.fullyUnblocked}`,
+      `partiallyReduced=${item.partiallyReduced}`, `unchanged=${item.unchanged}`,
+      `blockedByExcludedCapabilities=${item.blockedByExcludedCapabilities}`,
+      `fullyUnblockedChannels=${JSON.stringify(item.channels.fullyUnblocked)}`,
+      `partiallyReducedChannels=${JSON.stringify(item.channels.partiallyReduced)}`);
+  }
+  for (const item of payoff.marginalPayoff) {
+    lines.push('', `marginalSet=${item.capabilities.join('+')}`,
+      `marginalAdded=${item.addedCapability}`,
+      `marginalOver=${item.overCapabilities.join('+') || 'none'}`,
+      `additionalFullyUnblocked=${item.additionalFullyUnblocked}`,
+      `additionalChannels=${JSON.stringify(item.channels)}`);
+  }
+  return lines.join('\n');
+};
+
 module.exports = {
   createArchitectureOutput,
   createChannelCoverageV2Output,
+  createChannelCapabilityPayoffOutput,
   createChannelRegexGapOutput,
   createCoverageOutput,
   formatKodiArchitectureJson,
   formatKodiArchitectureText,
   formatKodiChannelCoverageV2Json,
   formatKodiChannelCoverageV2Text,
+  formatKodiChannelCapabilityPayoffJson,
+  formatKodiChannelCapabilityPayoffText,
   formatKodiChannelRegexGapJson,
   formatKodiChannelRegexGapText,
   formatKodiCoverageJson,

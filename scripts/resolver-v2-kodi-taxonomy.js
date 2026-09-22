@@ -1,6 +1,7 @@
 'use strict';
 
 const { parseKodiTaxonomyArgs, formatKodiArchitectureJson, formatKodiArchitectureText,
+  formatKodiChannelCapabilityPayoffJson, formatKodiChannelCapabilityPayoffText,
   formatKodiChannelCoverageV2Json, formatKodiChannelCoverageV2Text,
   formatKodiChannelRegexGapJson, formatKodiChannelRegexGapText,
   formatKodiCoverageJson, formatKodiCoverageText,
@@ -15,6 +16,16 @@ const main = (argv = process.argv.slice(2)) => {
     return;
   }
   try {
+    if (parsed.channelCapabilityPayoff) {
+      const { scanChannelCapabilityPayoff } =
+        require('../src/modules/streams/resolverV2/diagnostics/kodiChannelCapabilityPayoff');
+      const payoff = scanChannelCapabilityPayoff({ root: parsed.roots[0] });
+      process.stdout.write(`${parsed.json
+        ? formatKodiChannelCapabilityPayoffJson(payoff)
+        : formatKodiChannelCapabilityPayoffText(payoff)}\n`);
+      process.exitCode = 0;
+      return;
+    }
     if (parsed.channelCoverageV2) {
       const { scanTopLevelChannelCoverageV2 } =
         require('../src/modules/streams/resolverV2/diagnostics/kodiChannelCoverageV2');
