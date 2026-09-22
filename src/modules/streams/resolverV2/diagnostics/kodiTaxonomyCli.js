@@ -7,6 +7,7 @@ const parseKodiTaxonomyArgs = (argv = []) => {
   let architectureExplain = false;
   let architectureCoverageV2 = false;
   let channelCoverageV2 = false;
+  let channelRegexGap = false;
   const used = new Set();
   for (let index = 0; index < argv.length; index += 1) {
     const item = argv[index];
@@ -38,6 +39,10 @@ const parseKodiTaxonomyArgs = (argv = []) => {
       if (channelCoverageV2) return { ok: false, json };
       channelCoverageV2 = true; continue;
     }
+    if (item === '--channel-regex-gap') {
+      if (channelRegexGap) return { ok: false, json };
+      channelRegexGap = true; continue;
+    }
     if (!['--alfa-path', '--balandro-path'].includes(item) || used.has(item) ||
         index + 1 >= argv.length || argv[index + 1].startsWith('--')) {
       return { ok: false, json };
@@ -48,6 +53,7 @@ const parseKodiTaxonomyArgs = (argv = []) => {
   if ((coverage && architecture) || (architectureDetails && !architecture) ||
       (architectureExplain && !architectureDetails) ||
       (architectureCoverageV2 && (!architecture || !architectureDetails)) ||
+      (channelRegexGap && !channelCoverageV2) ||
       (channelCoverageV2 && (coverage || architecture))) {
     return { ok: false, json };
   }
@@ -56,7 +62,8 @@ const parseKodiTaxonomyArgs = (argv = []) => {
       ...(architectureDetails ? { architectureDetails: true } : {}),
       ...(architectureExplain ? { architectureExplain: true } : {}),
       ...(architectureCoverageV2 ? { architectureCoverageV2: true } : {}),
-      ...(channelCoverageV2 ? { channelCoverageV2: true } : {}), roots }
+      ...(channelCoverageV2 ? { channelCoverageV2: true } : {}),
+      ...(channelRegexGap ? { channelRegexGap: true } : {}), roots }
     : { ok: false, json };
 };
 const formatKodiTaxonomyJson = (result) => JSON.stringify(result);
@@ -215,14 +222,45 @@ const formatKodiChannelCoverageV2Text = (coverage) => {
   return lines.join('\n');
 };
 
+const createChannelRegexGapOutput = (gap) => Object.freeze({ channelRegexGap: gap });
+const formatKodiChannelRegexGapJson = (gap) => JSON.stringify(createChannelRegexGapOutput(gap));
+const formatKodiChannelRegexGapText = (gap) => {
+  const lines = [
+    `channelRegexGap.currentGap=${gap.population.currentGapChannels}`,
+    `channelRegexGap.regexUses=${gap.population.regexUses}`,
+  ];
+  for (const [category, count] of Object.entries(gap.byRegexUse)) {
+    lines.push(`channelRegexGap.category.${category}=${count}`);
+  }
+  for (const [bucket, count] of Object.entries(gap.hypotheticalReduction)) {
+    lines.push(`channelRegexGap.reduction.${bucket}=${count}`);
+  }
+  lines.push(`channelRegexGap.proxyOrGeoOverlap=${JSON.stringify(gap.proxyOrGeoOverlap)}`,
+    `channelRegexGap.unknownChannels=${JSON.stringify(gap.unknownChannels)}`);
+  for (const item of gap.directMp4) {
+    lines.push('', `directMp4.channel=${item.channel}`, `directMp4.role=${item.role}`,
+      `directMp4.observedSignals=${JSON.stringify(item.observedSignals)}`);
+  }
+  for (const record of gap.records) {
+    lines.push('', `channel=${record.channel}`, `category=${record.category}`,
+      `count=${record.count}`, `observedSignals=${JSON.stringify(record.observedSignals)}`,
+      `possibleCurrentPrimitive=${record.possibleCurrentPrimitive || 'none'}`,
+      `missingPrimitive=${record.missingPrimitive || 'none'}`, `reason=${record.reason}`);
+  }
+  return lines.join('\n');
+};
+
 module.exports = {
   createArchitectureOutput,
   createChannelCoverageV2Output,
+  createChannelRegexGapOutput,
   createCoverageOutput,
   formatKodiArchitectureJson,
   formatKodiArchitectureText,
   formatKodiChannelCoverageV2Json,
   formatKodiChannelCoverageV2Text,
+  formatKodiChannelRegexGapJson,
+  formatKodiChannelRegexGapText,
   formatKodiCoverageJson,
   formatKodiCoverageText,
   formatKodiTaxonomyJson,

@@ -2,6 +2,7 @@
 
 const { parseKodiTaxonomyArgs, formatKodiArchitectureJson, formatKodiArchitectureText,
   formatKodiChannelCoverageV2Json, formatKodiChannelCoverageV2Text,
+  formatKodiChannelRegexGapJson, formatKodiChannelRegexGapText,
   formatKodiCoverageJson, formatKodiCoverageText,
   formatKodiTaxonomyJson, formatKodiTaxonomyText } =
   require('../src/modules/streams/resolverV2/diagnostics/kodiTaxonomyCli');
@@ -18,6 +19,16 @@ const main = (argv = process.argv.slice(2)) => {
       const { scanTopLevelChannelCoverageV2 } =
         require('../src/modules/streams/resolverV2/diagnostics/kodiChannelCoverageV2');
       const coverage = scanTopLevelChannelCoverageV2({ root: parsed.roots[0] });
+      if (parsed.channelRegexGap) {
+        const { scanChannelRegexGap } =
+          require('../src/modules/streams/resolverV2/diagnostics/kodiChannelRegexGap');
+        const gap = scanChannelRegexGap({ root: parsed.roots[0], coverage });
+        process.stdout.write(`${parsed.json
+          ? formatKodiChannelRegexGapJson(gap)
+          : formatKodiChannelRegexGapText(gap)}\n`);
+        process.exitCode = 0;
+        return;
+      }
       process.stdout.write(`${parsed.json
         ? formatKodiChannelCoverageV2Json(coverage)
         : formatKodiChannelCoverageV2Text(coverage)}\n`);
