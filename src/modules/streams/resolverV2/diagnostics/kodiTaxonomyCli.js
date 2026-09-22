@@ -4,6 +4,7 @@ const parseKodiTaxonomyArgs = (argv = []) => {
   if (!Array.isArray(argv)) return { ok: false, json: false };
   const roots = []; let json = false; let coverage = false; let architecture = false;
   let architectureDetails = false;
+  let architectureExplain = false;
   const used = new Set();
   for (let index = 0; index < argv.length; index += 1) {
     const item = argv[index];
@@ -23,6 +24,10 @@ const parseKodiTaxonomyArgs = (argv = []) => {
       if (architectureDetails) return { ok: false, json };
       architectureDetails = true; continue;
     }
+    if (item === '--architecture-explain') {
+      if (architectureExplain) return { ok: false, json };
+      architectureExplain = true; continue;
+    }
     if (!['--alfa-path', '--balandro-path'].includes(item) || used.has(item) ||
         index + 1 >= argv.length || argv[index + 1].startsWith('--')) {
       return { ok: false, json };
@@ -30,12 +35,14 @@ const parseKodiTaxonomyArgs = (argv = []) => {
     used.add(item);
     roots.push(argv[++index]);
   }
-  if ((coverage && architecture) || (architectureDetails && !architecture)) {
+  if ((coverage && architecture) || (architectureDetails && !architecture) ||
+      (architectureExplain && !architectureDetails)) {
     return { ok: false, json };
   }
   return roots.length
     ? { ok: true, json, coverage, ...(architecture ? { architecture: true } : {}),
-      ...(architectureDetails ? { architectureDetails: true } : {}), roots }
+      ...(architectureDetails ? { architectureDetails: true } : {}),
+      ...(architectureExplain ? { architectureExplain: true } : {}), roots }
     : { ok: false, json };
 };
 const formatKodiTaxonomyJson = (result) => JSON.stringify(result);
@@ -89,13 +96,23 @@ const formatKodiCoverageText = (taxonomy, coverage, recommendation) => [
   `skipped=${taxonomy.skipped}`,
 ].join('\n');
 
-const createArchitectureOutput = (taxonomy, architecture, details = null) => Object.freeze({
+const architecturePayload = (architecture, details, explanation) => {
+  if (!details) return architecture;
+  return Object.freeze({
+    ...details,
+    ...(explanation ? { unknownExplanation: explanation } : {}),
+  });
+};
+const createArchitectureOutput = (taxonomy, architecture, details = null,
+  explanation = null) => Object.freeze({
   taxonomy: coverageTaxonomySummary(taxonomy),
-  architecture: details || architecture,
+  architecture: architecturePayload(architecture, details, explanation),
 });
-const formatKodiArchitectureJson = (taxonomy, architecture, details = null) =>
-  JSON.stringify(createArchitectureOutput(taxonomy, architecture, details));
-const formatKodiArchitectureText = (_taxonomy, architecture, details = null) => {
+const formatKodiArchitectureJson = (taxonomy, architecture, details = null,
+  explanation = null) =>
+  JSON.stringify(createArchitectureOutput(taxonomy, architecture, details, explanation));
+const formatKodiArchitectureText = (_taxonomy, architecture, details = null,
+  explanation = null) => {
   if (!details) {
     return [
       `architecture.total=${architecture.total}`,
@@ -104,11 +121,20 @@ const formatKodiArchitectureText = (_taxonomy, architecture, details = null) => 
         .map(([key, value]) => `${key}=${value}`),
     ].join('\n');
   }
-  return [
+  const lines = [
     `architecture.total=${details.counts.total}`,
     ...Object.entries(details.serversByArchitecture)
       .flatMap(([family, ids]) => [`${family}=${details.counts[family]}`, ...ids]),
-  ].join('\n');
+  ];
+  if (explanation) {
+    for (const item of explanation) {
+      lines.push('', `server=${item.server}`, `files=${item.files}`,
+        `matchedSignals=${JSON.stringify(item.matchedSignals)}`,
+        `observedSignals=${JSON.stringify(item.observedSignals)}`,
+        `reason=${item.reason}`);
+    }
+  }
+  return lines.join('\n');
 };
 
 module.exports = {

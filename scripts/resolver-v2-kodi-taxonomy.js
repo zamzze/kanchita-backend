@@ -16,16 +16,20 @@ const main = (argv = process.argv.slice(2)) => {
     require('../src/modules/streams/resolverV2/diagnostics/kodiTaxonomyScanner');
   try {
     const result = scanKodiTaxonomy({ roots: parsed.roots,
-      architecture: parsed.architecture });
+      architecture: parsed.architecture,
+      architectureExplain: parsed.architectureExplain === true });
     if (parsed.architecture) {
-      const { createArchitectureDetails, createArchitectureSummary } =
+      const { createArchitectureDetails, createArchitectureSummary,
+        createUnknownArchitectureExplanation } =
         require('../src/modules/streams/resolverV2/diagnostics/kodiArchitecture');
       const architecture = createArchitectureSummary(result.records);
       const details = parsed.architectureDetails
         ? createArchitectureDetails(result.records) : null;
+      const explanation = parsed.architectureExplain
+        ? createUnknownArchitectureExplanation(result.records) : null;
       process.stdout.write(`${parsed.json
-        ? formatKodiArchitectureJson(result, architecture, details)
-        : formatKodiArchitectureText(result, architecture, details)}\n`);
+        ? formatKodiArchitectureJson(result, architecture, details, explanation)
+        : formatKodiArchitectureText(result, architecture, details, explanation)}\n`);
     } else if (parsed.coverage) {
       const { createCoverageSummary, recommendNextCapability } =
         require('../src/modules/streams/resolverV2/diagnostics/capabilityCoverage');

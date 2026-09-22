@@ -26,9 +26,50 @@ const SIGNAL_RULES = Object.freeze([
   ['direct_mp4', /\.mp4(?:\?|['"\s]|$)|video\/mp4/i],
 ]);
 
+const OBSERVATION_RULES = Object.freeze([
+  ['httptools.downloadpage', /httptools\.downloadpage/i],
+  ['requests.get', /requests?\.get\s*\(/i],
+  ['requests.post', /requests?\.post\s*\(/i],
+  ['urllib.urlopen', /(?:urllib(?:2)?\.)?urlopen\s*\(/i],
+  ['scrapertools.cache_page', /scrapertools\.cache_page/i],
+  ['html.parser', /beautifulsoup|html\.parser|scrapertools\.get_match/i],
+  ['regex.re', /\bre\.(?:compile|findall|finditer|match|search|sub)\s*\(/i],
+  ['regex.scrapertools', /scrapertools\.(?:find_multiple_matches|find_single_match)/i],
+  ['servertools.resolve_video_urls', /servertools\.resolve_video_urls/i],
+  ['servertools.find_video_items', /servertools\.find_video_items/i],
+  ['servertools.get_server_from_url', /servertools\.get_server_from_url/i],
+  ['media.m3u8', /\.m3u8(?:\?|['"\s]|$)|mpegurl/i],
+  ['media.mp4', /\.mp4(?:\?|['"\s]|$)|video\/mp4/i],
+  ['headers.referer', /referer/i],
+  ['headers.origin', /['"]origin['"]\s*:/i],
+  ['headers.cookie', /(?:['"]cookie['"]\s*:|cookie\s*=)/i],
+  ['headers.generic', /(?:request_)?headers?\s*=/i],
+  ['cookies.set_cookie', /set-cookie/i],
+  ['json.loads', /json\.(?:load|loads|decode)/i],
+  ['json.response', /response\.json/i],
+  ['helper.m3u8server.Client', /m3u8server\.Client\s*\(|from\s+(?:[\w.]+\.)?m3u8server\s+import\s+Client/i],
+  ['download.file_host_semantics', /\b(?:download|downloads|filehost|file_factory|premium_account)\b/i],
+]);
+
 const detectArchitectureSignals = (text) => Object.freeze(SIGNAL_RULES
   .filter(([, pattern]) => pattern.test(String(text)))
   .map(([name]) => name));
+
+const detectArchitectureObservations = (text) => {
+  const observations = OBSERVATION_RULES
+    .filter(([, pattern]) => pattern.test(String(text)))
+    .map(([name]) => name);
+  const hasHttpPrimitive = observations.some((name) => [
+    'httptools.downloadpage', 'requests.get', 'requests.post', 'urllib.urlopen',
+    'scrapertools.cache_page',
+  ].includes(name));
+  const hasServertoolsDelegation = observations.some((name) =>
+    name.startsWith('servertools.'));
+  if (hasServertoolsDelegation && !hasHttpPrimitive) {
+    observations.push('delegation.servertools_only');
+  }
+  return Object.freeze([...new Set(observations)].sort());
+};
 
 const deriveArchitectureFamily = ({ classifications = [], signals = [] } = {}) => {
   const capabilitySet = new Set(Array.isArray(classifications) ? classifications : []);
@@ -88,11 +129,51 @@ const createArchitectureDetails = (records = []) => {
   });
 };
 
+const createUnknownArchitectureExplanation = (records = []) => {
+  if (!Array.isArray(records)) {
+    throw Object.assign(new Error('KODI_ARCHITECTURE_INVALID_INPUT'),
+      { code: 'KODI_ARCHITECTURE_INVALID_INPUT' });
+  }
+  const unknownIds = new Set(records.filter((record) => record?.kind === 'server' &&
+    record.architectureFamily === 'UNKNOWN' && typeof record.id === 'string' && record.id)
+    .map(({ id }) => id));
+  const grouped = new Map();
+  for (const record of records) {
+    if (record?.kind !== 'server' || !unknownIds.has(record.id)) continue;
+    if (!grouped.has(record.id)) {
+      grouped.set(record.id, { files: 0, matchedSignals: new Set(),
+        observedSignals: new Set(), hasClassifiedSibling: false });
+    }
+    const group = grouped.get(record.id);
+    group.files += 1;
+    if (record.architectureFamily === 'UNKNOWN') {
+      for (const signal of Array.isArray(record.architectureSignals)
+        ? record.architectureSignals : []) group.matchedSignals.add(signal);
+    } else {
+      group.hasClassifiedSibling = true;
+    }
+    for (const signal of Array.isArray(record.architectureObservations)
+      ? record.architectureObservations : []) group.observedSignals.add(signal);
+  }
+  return Object.freeze([...grouped.entries()].sort(([left], [right]) =>
+    left.localeCompare(right)).map(([server, group]) => Object.freeze({
+    server,
+    files: group.files,
+    matchedSignals: Object.freeze([...group.matchedSignals].sort()),
+    observedSignals: Object.freeze([...group.observedSignals].sort()),
+    reason: group.hasClassifiedSibling
+      ? 'UNKNOWN_FILE_WITH_CLASSIFIED_SIBLING' : 'NO_ARCHITECTURE_RULE_MATCH',
+  })));
+};
+
 module.exports = {
   ARCHITECTURE_FAMILIES,
+  OBSERVATION_RULES,
   SIGNAL_RULES,
   createArchitectureDetails,
   createArchitectureSummary,
+  createUnknownArchitectureExplanation,
   deriveArchitectureFamily,
+  detectArchitectureObservations,
   detectArchitectureSignals,
 };

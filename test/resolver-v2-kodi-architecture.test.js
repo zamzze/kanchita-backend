@@ -9,7 +9,9 @@ const {
   ARCHITECTURE_FAMILIES,
   createArchitectureDetails,
   createArchitectureSummary,
+  createUnknownArchitectureExplanation,
   deriveArchitectureFamily,
+  detectArchitectureObservations,
   detectArchitectureSignals,
 } = require('../src/modules/streams/resolverV2/diagnostics/kodiArchitecture');
 const { scanKodiTaxonomy } =
@@ -134,6 +136,78 @@ test('architecture details deduplicate and sort server IDs within every family',
   assert.match(text, /UNKNOWN=3\nalpha\nzeta$/);
   const json = JSON.parse(formatKodiArchitectureJson(taxonomy, summary, details));
   assert.deepEqual(json.architecture, details);
+});
+
+test('UNKNOWN explanation reports only allowlisted static observations', () => {
+  const source = `
+    page = httptools.downloadpage(target, headers={'Referer': origin})
+    values = re.findall(pattern, page.data)
+    servertools.resolve_video_urls(candidate)
+    helper = m3u8server.Client(config)
+  `;
+  assert.deepEqual(detectArchitectureObservations(source), [
+    'headers.generic', 'headers.referer', 'helper.m3u8server.Client',
+    'httptools.downloadpage', 'regex.re', 'servertools.resolve_video_urls',
+  ]);
+  assert.deepEqual(detectArchitectureObservations(
+    'servertools.get_server_from_url(url)'), [
+    'delegation.servertools_only', 'servertools.get_server_from_url',
+  ]);
+
+  const records = [
+    { kind: 'server', id: 'zeta', architectureFamily: 'UNKNOWN',
+      architectureSignals: [], architectureObservations: ['regex.re'] },
+    { kind: 'server', id: 'alpha', architectureFamily: 'UNKNOWN',
+      architectureSignals: ['uses_referer'],
+      architectureObservations: ['headers.referer', 'httptools.downloadpage'] },
+    { kind: 'server', id: 'alpha', architectureFamily: 'UNKNOWN',
+      architectureSignals: ['uses_referer'], architectureObservations: ['regex.re'] },
+    { kind: 'server', id: 'alpha', architectureFamily: 'HTTP_API',
+      architectureSignals: ['json_endpoint'], architectureObservations: ['json.loads'] },
+    { kind: 'server', id: 'known', architectureFamily: 'HTTP_API',
+      architectureObservations: ['json.loads'] },
+  ];
+  const explanation = createUnknownArchitectureExplanation(records);
+  assert.deepEqual(explanation.map(({ server }) => server), ['alpha', 'zeta']);
+  assert.deepEqual(explanation[0], {
+    server: 'alpha', files: 3, matchedSignals: ['uses_referer'],
+    observedSignals: ['headers.referer', 'httptools.downloadpage', 'json.loads', 'regex.re'],
+    reason: 'UNKNOWN_FILE_WITH_CLASSIFIED_SIBLING',
+  });
+  assert.equal(JSON.stringify(explanation).includes('target'), false);
+});
+
+test('architecture explain requires details and preserves classifications', () => {
+  assert.equal(parseKodiTaxonomyArgs(['--balandro-path', 'C:/tmp/balandro',
+    '--architecture', '--architecture-explain']).ok, false);
+  const parsed = parseKodiTaxonomyArgs(['--balandro-path', 'C:/tmp/balandro',
+    '--architecture', '--architecture-details', '--architecture-explain', '--json']);
+  assert.deepEqual(parsed, {
+    ok: true, json: true, coverage: false, architecture: true,
+    architectureDetails: true, architectureExplain: true,
+    roots: ['C:/tmp/balandro'],
+  });
+
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kanchita-explain-'));
+  const servers = path.join(root, 'addon', 'servers');
+  fs.mkdirSync(servers, { recursive: true });
+  fs.writeFileSync(path.join(servers, 'unknown.py'),
+    `page = httptools.downloadpage('https://private.example/?token=SECRET')`);
+  try {
+    const ordinary = scanKodiTaxonomy({ roots: [root], architecture: true });
+    const explained = scanKodiTaxonomy({ roots: [root], architecture: true,
+      architectureExplain: true });
+    assert.deepEqual(explained.records.map(({ architectureFamily }) => architectureFamily),
+      ordinary.records.map(({ architectureFamily }) => architectureFamily));
+    const details = createArchitectureDetails(explained.records);
+    const explanation = createUnknownArchitectureExplanation(explained.records);
+    const rendered = formatKodiArchitectureJson(explained,
+      createArchitectureSummary(explained.records), details, explanation);
+    assert.doesNotMatch(rendered, /private\.example|token=SECRET|https?:\/\//i);
+    assert.equal(JSON.parse(rendered).architecture.unknownExplanation[0].server, 'unknown');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('architecture diagnostics contain no execution, dynamic loading or network primitives', () => {

@@ -2,7 +2,8 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { deriveArchitectureFamily, detectArchitectureSignals } = require('./kodiArchitecture');
+const { deriveArchitectureFamily, detectArchitectureObservations,
+  detectArchitectureSignals } = require('./kodiArchitecture');
 
 const CAPABILITIES = Object.freeze([
   'direct_hls', 'direct_http', 'json_api', 'static_html', 'iframe_http',
@@ -87,10 +88,11 @@ const discoverFolders = (root, maximumDepth = 4) => {
 };
 
 const scanKodiTaxonomy = ({ roots = [], maxFiles = MAX_FILES,
-  maxFileBytes = MAX_FILE_BYTES, architecture = false } = {}) => {
+  maxFileBytes = MAX_FILE_BYTES, architecture = false, architectureExplain = false } = {}) => {
   if (!Array.isArray(roots) || !Number.isInteger(maxFiles) || maxFiles < 1 ||
       maxFiles > MAX_FILES || !Number.isInteger(maxFileBytes) ||
-      maxFileBytes < 1 || maxFileBytes > MAX_FILE_BYTES || typeof architecture !== 'boolean') {
+      maxFileBytes < 1 || maxFileBytes > MAX_FILE_BYTES || typeof architecture !== 'boolean' ||
+      typeof architectureExplain !== 'boolean' || (architectureExplain && !architecture)) {
     throw Object.assign(new Error('KODI_TAXONOMY_INVALID_INPUT'),
       { code: 'KODI_TAXONOMY_INVALID_INPUT' });
   }
@@ -140,6 +142,8 @@ const scanKodiTaxonomy = ({ roots = [], maxFiles = MAX_FILES,
               signals: architectureSignals,
             }),
             architectureSignals,
+            ...(architectureExplain
+              ? { architectureObservations: detectArchitectureObservations(text) } : {}),
           } : {}),
         }));
       }
