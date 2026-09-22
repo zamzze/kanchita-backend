@@ -9,7 +9,10 @@ const {
   ERROR_CODES,
   HARD_MAX_CANDIDATES,
   HARD_MAX_STEPS,
+  MAX_TEXT_CAPTURE_LENGTH,
+  MAX_TEXT_DELIMITER_LENGTH,
   createHttpWorkflowSourceProvider,
+  extractText,
   normalizeWorkflow,
 } = require('../src/modules/streams/resolverV2/providers/httpWorkflowSourceProvider');
 
@@ -40,6 +43,94 @@ test('normalized workflow can be validated again without changing its contract',
   const normalized = normalizeWorkflow(workflow, HARD_MAX_STEPS);
   assert.ok(normalized);
   assert.deepEqual(normalizeWorkflow(normalized, HARD_MAX_STEPS), normalized);
+
+  const textWorkflow = [
+    { type: 'request', method: 'GET', path: '/item/{externalId}', saveAs: 'page' },
+    { type: 'extract', from: 'page', parser: 'text', start: 'PLAYER="', end: '"',
+      saveAs: 'playerId' },
+    { type: 'request', method: 'GET', path: '/player/{playerId}', saveAs: 'payload' },
+  ];
+  const normalizedText = normalizeWorkflow(textWorkflow, HARD_MAX_STEPS);
+  assert.ok(normalizedText);
+  assert.deepEqual(normalizeWorkflow(normalizedText, HARD_MAX_STEPS), normalizedText);
+});
+
+test('bounded text capture is literal, first-match only and fail-closed on misses', () => {
+  assert.equal(extractText('before STARToneEND STARTtwoEND', 'START', 'END'), 'one');
+  assert.equal(extractText('abc DATA-ID="12345" xyz', 'DATA-ID="', '"'), '12345');
+  assert.equal(extractText('prefix [a-z]+(literal).* suffix', '[a-z]+(', ').*'), 'literal');
+  assert.equal(extractText('no delimiters', 'START', 'END'), null);
+  assert.equal(extractText('START without suffix', 'START', 'END'), null);
+  assert.equal(extractText('END before START only', 'START', 'END'), null);
+  assert.equal(extractText('STARTEND', 'START', 'END'), null);
+  assert.equal(extractText({}, 'START', 'END'), null);
+  assert.equal(extractText([], 'START', 'END'), null);
+});
+
+test('bounded text capture accepts the exact output limit and rejects overflow', () => {
+  const exact = 'x'.repeat(MAX_TEXT_CAPTURE_LENGTH);
+  assert.equal(extractText(`A${exact}Z`, 'A', 'Z'), exact);
+  assert.throws(() => extractText(`A${exact}xZ`, 'A', 'Z'),
+    { code: ERROR_CODES.CAPTURE_TOO_LARGE });
+});
+
+test('text delimiters reject empty, oversized, templated and unknown configuration', () => {
+  const request = { type: 'request', method: 'GET', path: '/item', saveAs: 'page' };
+  const valid = { type: 'extract', from: 'page', parser: 'text', start: 'A', end: 'Z',
+    saveAs: 'value' };
+  const invalid = [
+    { ...valid, start: '' }, { ...valid, end: '' },
+    { ...valid, start: 'x'.repeat(MAX_TEXT_DELIMITER_LENGTH + 1) },
+    { ...valid, end: 'x'.repeat(MAX_TEXT_DELIMITER_LENGTH + 1) },
+    { ...valid, start: '{dynamicPrefix}' }, { ...valid, end: '{dynamicSuffix}' },
+    { ...valid, expression: '.*' },
+  ];
+  for (const step of invalid) {
+    assert.equal(normalizeWorkflow([request, step], HARD_MAX_STEPS), null);
+    assert.throws(() => createHttpWorkflowSourceProvider({ id: 'workflow_a', enabled: true,
+      baseUrl: 'https://source.example.test', workflow: [request, step] }),
+    { code: ERROR_CODES.INVALID_WORKFLOW });
+  }
+});
+
+test('text extraction uses a bounded response body and preserves literal template output',
+  async () => {
+    const server = await listen((request, response) => {
+      response.setHeader('content-type', 'text/plain; charset=utf-8');
+      response.end(request.url === '/item/external-123'
+        ? 'prefix PLAYER="fixture-7" suffix' : 'missing');
+    });
+    const workflow = [
+      { type: 'request', method: 'GET', path: '/item/{externalId}', saveAs: 'page' },
+      { type: 'extract', from: 'page', parser: 'text', start: 'PLAYER="', end: '"',
+        saveAs: 'playerId' },
+      { type: 'emit', url: `https://media.example.test/{playerId}.m3u8` },
+    ];
+    try {
+      const result = await make(origin(server), workflow).getSources(mediaContext,
+        { providerMediaRef: providerMediaRef() });
+      assert.equal(result[0].url, 'https://media.example.test/fixture-7.m3u8');
+      const miss = await make(origin(server), workflow).getSources(mediaContext,
+        { providerMediaRef: providerMediaRef({ externalId: 'missing' }) });
+      assert.deepEqual(miss, []);
+    } finally { await close(server); }
+  });
+
+test('text extraction never coerces object or array response bodies', async () => {
+  for (const body of [{ value: 'STARTunsafeEND' }, ['STARTunsafeEND']]) {
+    const provider = createHttpWorkflowSourceProvider({ id: 'workflow_a', enabled: true,
+      baseUrl: 'https://source.example.test', http: { request: async () => ({ status: 200,
+        ok: true, url: 'https://source.example.test/item',
+        headers: { 'content-type': 'text/plain' }, body }) },
+      workflow: [
+        { type: 'request', method: 'GET', path: '/item', saveAs: 'page' },
+        { type: 'extract', from: 'page', parser: 'text', start: 'START', end: 'END',
+          saveAs: 'value' },
+        { type: 'emit', url: 'https://media.example.test/{value}.m3u8' },
+      ] });
+    assert.deepEqual(await provider.getSources(mediaContext,
+      { providerMediaRef: providerMediaRef() }), []);
+  }
 });
 
 test('GET HTML extraction emits a normalized immutable candidate', async () => {

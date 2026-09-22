@@ -84,6 +84,39 @@ test('mapped HTTP workflow source normalizes its complete bounded contract', () 
   assert.equal(Object.isFrozen(entry.workflow), true);
 });
 
+test('mapped HTTP workflow accepts bounded literal text extraction', () => {
+  const workflow = [
+    { type: 'request', method: 'GET', path: '/item/{externalId}', saveAs: 'page' },
+    { type: 'extract', from: 'page', parser: 'text', start: 'PLAYER="', end: '"',
+      saveAs: 'playerId' },
+    { type: 'request', method: 'GET', path: '/player/{playerId}', saveAs: 'payload' },
+    { type: 'extract', from: 'payload', parser: 'json', path: 'url', saveAs: 'hls' },
+    { type: 'emit', url: '{hls}' },
+  ];
+  const entry = normalizeCatalog({ version: 1,
+    sources: [mappedWorkflow({ workflow, maxSteps: 5 })] }).sources[0];
+  assert.equal(entry.workflow[1].parser, 'text');
+  assert.equal(entry.workflow[1].start, 'PLAYER="');
+  assert.equal(entry.workflow[1].end, '"');
+  assert.equal(Object.isFrozen(entry.workflow[1]), true);
+});
+
+test('catalog rejects unsafe or malformed bounded text extraction', () => {
+  const request = { type: 'request', method: 'GET', path: '/item', saveAs: 'page' };
+  const valid = { type: 'extract', from: 'page', parser: 'text', start: 'A', end: 'Z',
+    saveAs: 'value' };
+  const invalid = [
+    { ...valid, start: '' }, { ...valid, end: '' },
+    { ...valid, start: 'x'.repeat(257) }, { ...valid, end: 'x'.repeat(257) },
+    { ...valid, start: '{dynamic}' }, { ...valid, end: '{dynamic}' },
+    { ...valid, regex: '.*' },
+  ];
+  const catalog = normalizeCatalog({ version: 1, sources: invalid.map((step, index) =>
+    mappedWorkflow({ id: `text_invalid_${index}`, workflow: [request, step] })) });
+  assert.equal(catalog.sources.length, 0);
+  assert.ok(catalog.summary.errorCodes.every((code) => code === 'CATALOG_INVALID_SOURCE'));
+});
+
 test('mapped workflow rejects invalid URL, region, bounds and unknown keys', () => {
   const entries = [
     mappedWorkflow({ id: 'bad_url', baseUrl: 'ftp://workflow.example.test' }),

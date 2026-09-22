@@ -142,6 +142,56 @@ test('mapped runtime passes exact media context and resolves local workflow mapp
   assert.equal(candidates[0].url, 'https://media.example.test/ready.m3u8');
 });
 
+test('mapped runtime performs bounded text capture before a second deterministic request',
+  async (t) => {
+    const requests = [];
+    const fixture = http.createServer((request, response) => {
+      requests.push(request.url);
+      if (request.url === '/item/external-7') {
+        response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        response.end('<main>PLAYER-ID="public-player-7"</main>');
+        return;
+      }
+      if (request.url === '/player/public-player-7') {
+        response.writeHead(200, { 'Content-Type': 'application/json' });
+        response.end('{"url":"https://media.example.test/text-flow.m3u8"}');
+        return;
+      }
+      response.writeHead(404).end();
+    });
+    await new Promise((resolve) => fixture.listen(0, '127.0.0.1', resolve));
+    t.after(() => new Promise((resolve) => fixture.close(resolve)));
+    const baseUrl = `http://127.0.0.1:${fixture.address().port}`;
+    const workflow = [
+      { type: 'request', method: 'GET', path: '/item/{externalId}', saveAs: 'page' },
+      { type: 'extract', from: 'page', parser: 'text', start: 'PLAYER-ID="', end: '"',
+        saveAs: 'playerId' },
+      { type: 'request', method: 'GET', path: '/player/{playerId}', saveAs: 'payload' },
+      { type: 'extract', from: 'payload', parser: 'json', path: 'url', saveAs: 'hls' },
+      { type: 'emit', url: '{hls}' },
+    ];
+    const mappingCalls = [];
+    const mappingResolver = { resolve: async (input) => {
+      mappingCalls.push(input);
+      return [mappingRef('external-7')];
+    } };
+    const catalog = loaded({ version: 1, sources: [mappedSource('workflow_a', baseUrl,
+      { workflow, maxSteps: 5 })] });
+    const runtime = buildResolverV2CatalogRuntime({ catalog,
+      http: createSafeHttpClient({ allowPrivateNetworks: true }), hlsResolver, mappingResolver });
+    const media = Object.freeze({ contentType: 'movie', contentId: 'movie-1', tmdbId: 1,
+      title: 'Fixture' });
+    const candidates = await runtime.sources[0].getSources(media, {});
+    assert.equal(mappingCalls.length, 1);
+    assert.equal(mappingCalls[0].mediaContext, media);
+    assert.deepEqual(requests, ['/item/external-7', '/player/public-player-7']);
+    assert.equal(candidates.length, 1);
+    assert.equal(candidates[0].providerId, 'workflow_a');
+    assert.equal(candidates[0].url, 'https://media.example.test/text-flow.m3u8');
+    assert.deepEqual(candidates[0].headers, {});
+    assert.doesNotMatch(JSON.stringify(candidates), /PLAYER-ID|public-player-7|authorization|cookie/i);
+  });
+
 test('mapped source skips safely without resolver and duplicate IDs remain protected', () => {
   const payload = { version: 1, sources: [
     mappedSource('workflow_a', 'https://workflow.example.test'),

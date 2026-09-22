@@ -10,6 +10,7 @@ const ERROR_CODES = Object.freeze({
   HTTP_ERROR: 'SOURCE_WORKFLOW_HTTP_ERROR',
   INVALID_CONTENT_TYPE: 'SOURCE_WORKFLOW_INVALID_CONTENT_TYPE',
   INVALID_JSON: 'SOURCE_WORKFLOW_INVALID_JSON',
+  CAPTURE_TOO_LARGE: 'SOURCE_WORKFLOW_CAPTURE_TOO_LARGE',
 });
 const DEFAULT_MAX_STEPS = 5;
 const HARD_MAX_STEPS = 8;
@@ -18,6 +19,8 @@ const HARD_MAX_CANDIDATES = 32;
 const DEFAULT_MAX_BYTES = 512 * 1024;
 const MAX_TEMPLATE_LENGTH = 4096;
 const MAX_VARIABLE_LENGTH = 4096;
+const MAX_TEXT_DELIMITER_LENGTH = 256;
+const MAX_TEXT_CAPTURE_LENGTH = MAX_VARIABLE_LENGTH;
 const MAX_OBJECT_ENTRIES = 32;
 const MAX_METADATA_DEPTH = 6;
 const MAX_METADATA_ITEMS = 128;
@@ -29,6 +32,7 @@ const ATTRIBUTE_NAME = /^[a-z][a-z0-9_:-]{0,63}$/;
 const TAG_NAME = /^[a-z][a-z0-9-]{0,31}$/;
 const HTML_CONTENT_TYPE = /^(?:text\/html|application\/xhtml\+xml)(?:\s*;|$)/i;
 const JSON_CONTENT_TYPE = /^application\/(?:[a-z0-9!#$&^_.+-]+\+)?json(?:\s*;|$)/i;
+const TEXT_CONTENT_TYPE = /^(?:text\/[a-z0-9!#$&^_.+-]+|application\/(?:[a-z0-9!#$&^_.+-]+\+json|json|xhtml\+xml|javascript|xml))(?:\s*;|$)/i;
 const REQUEST_HEADER_ALLOWLIST = new Set([
   'accept', 'accept-language', 'content-type', 'origin', 'referer', 'user-agent',
   'x-requested-with',
@@ -154,7 +158,9 @@ const normalizeRequestStep = (step) => {
 
 const normalizeExtractStep = (step) => {
   if (!isPlainObject(step) || !VARIABLE_NAME.test(step.from) ||
-      !VARIABLE_NAME.test(step.saveAs) || !['html', 'json'].includes(step.parser)) return null;
+      !VARIABLE_NAME.test(step.saveAs) || !['html', 'json', 'text'].includes(step.parser)) {
+    return null;
+  }
   if (step.parser === 'json') {
     const allowed = new Set(['type', 'from', 'parser', 'path', 'saveAs']);
     const segments = typeof step.path === 'string' ? step.path.split('.') : [];
@@ -164,6 +170,15 @@ const normalizeExtractStep = (step) => {
           (!ARRAY_INDEX_SEGMENT.test(segment) || Number(segment) > MAX_ARRAY_INDEX))) return null;
     return Object.freeze({ type: 'extract', from: step.from, parser: 'json',
       path: step.path, saveAs: step.saveAs });
+  }
+  if (step.parser === 'text') {
+    const allowed = new Set(['type', 'from', 'parser', 'start', 'end', 'saveAs']);
+    const validDelimiter = (value) => typeof value === 'string' && value.length >= 1 &&
+      value.length <= MAX_TEXT_DELIMITER_LENGTH && !/[{}]/.test(value);
+    if (Object.keys(step).some((key) => !allowed.has(key)) ||
+        !validDelimiter(step.start) || !validDelimiter(step.end)) return null;
+    return Object.freeze({ type: 'extract', from: step.from, parser: 'text',
+      start: step.start, end: step.end, saveAs: step.saveAs });
   }
   const allowed = new Set(['type', 'from', 'parser', 'selector', 'attribute', 'text', 'saveAs']);
   const selector = normalizeSelector(step.selector);
@@ -319,6 +334,18 @@ const extractJson = (payload, path) => {
   return scalar(current);
 };
 
+const extractText = (source, start, end) => {
+  if (typeof source !== 'string') return null;
+  const startIndex = source.indexOf(start);
+  if (startIndex < 0) return null;
+  const valueStart = startIndex + start.length;
+  const endIndex = source.indexOf(end, valueStart);
+  if (endIndex < 0 || endIndex === valueStart) return null;
+  const value = source.slice(valueStart, endIndex);
+  if (value.length > MAX_TEXT_CAPTURE_LENGTH) throw providerError(ERROR_CODES.CAPTURE_TOO_LARGE);
+  return value;
+};
+
 const immutableCandidate = (candidate) => {
   return deepFreeze(candidate);
 };
@@ -422,7 +449,7 @@ const createHttpWorkflowSourceProvider = ({
             throw providerError(ERROR_CODES.INVALID_CONTENT_TYPE);
           }
           value = extractHtml(response.body.toString('utf8'), step, response.url);
-        } else {
+        } else if (step.parser === 'json') {
           if (typeof contentType !== 'string' || !JSON_CONTENT_TYPE.test(contentType.trim())) {
             throw providerError(ERROR_CODES.INVALID_CONTENT_TYPE);
           }
@@ -431,6 +458,13 @@ const createHttpWorkflowSourceProvider = ({
             throw providerError(ERROR_CODES.INVALID_JSON);
           }
           value = extractJson(payload, step.path);
+        } else {
+          if (typeof contentType !== 'string' || !TEXT_CONTENT_TYPE.test(contentType.trim())) {
+            throw providerError(ERROR_CODES.INVALID_CONTENT_TYPE);
+          }
+          const body = Buffer.isBuffer(response.body) ? response.body.toString('utf8')
+            : typeof response.body === 'string' ? response.body : null;
+          value = extractText(body, step.start, step.end);
         }
         if (value === null) return [];
         variables[step.saveAs] = value;
@@ -468,7 +502,10 @@ module.exports = {
   ERROR_CODES,
   HARD_MAX_CANDIDATES,
   HARD_MAX_STEPS,
+  MAX_TEXT_CAPTURE_LENGTH,
+  MAX_TEXT_DELIMITER_LENGTH,
   createHttpWorkflowSourceProvider,
+  extractText,
   normalizeWorkflow,
   renderTemplate,
 };
