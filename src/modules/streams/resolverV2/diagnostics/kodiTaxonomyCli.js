@@ -5,6 +5,7 @@ const parseKodiTaxonomyArgs = (argv = []) => {
   const roots = []; let json = false; let coverage = false; let architecture = false;
   let architectureDetails = false;
   let architectureExplain = false;
+  let architectureCoverageV2 = false;
   const used = new Set();
   for (let index = 0; index < argv.length; index += 1) {
     const item = argv[index];
@@ -28,6 +29,10 @@ const parseKodiTaxonomyArgs = (argv = []) => {
       if (architectureExplain) return { ok: false, json };
       architectureExplain = true; continue;
     }
+    if (item === '--architecture-coverage-v2') {
+      if (architectureCoverageV2) return { ok: false, json };
+      architectureCoverageV2 = true; continue;
+    }
     if (!['--alfa-path', '--balandro-path'].includes(item) || used.has(item) ||
         index + 1 >= argv.length || argv[index + 1].startsWith('--')) {
       return { ok: false, json };
@@ -36,13 +41,15 @@ const parseKodiTaxonomyArgs = (argv = []) => {
     roots.push(argv[++index]);
   }
   if ((coverage && architecture) || (architectureDetails && !architecture) ||
-      (architectureExplain && !architectureDetails)) {
+      (architectureExplain && !architectureDetails) ||
+      (architectureCoverageV2 && (!architecture || !architectureDetails))) {
     return { ok: false, json };
   }
   return roots.length
     ? { ok: true, json, coverage, ...(architecture ? { architecture: true } : {}),
       ...(architectureDetails ? { architectureDetails: true } : {}),
-      ...(architectureExplain ? { architectureExplain: true } : {}), roots }
+      ...(architectureExplain ? { architectureExplain: true } : {}),
+      ...(architectureCoverageV2 ? { architectureCoverageV2: true } : {}), roots }
     : { ok: false, json };
 };
 const formatKodiTaxonomyJson = (result) => JSON.stringify(result);
@@ -104,15 +111,17 @@ const architecturePayload = (architecture, details, explanation) => {
   });
 };
 const createArchitectureOutput = (taxonomy, architecture, details = null,
-  explanation = null) => Object.freeze({
+  explanation = null, coverageV2 = null) => Object.freeze({
   taxonomy: coverageTaxonomySummary(taxonomy),
   architecture: architecturePayload(architecture, details, explanation),
+  ...(coverageV2 ? { coverageV2 } : {}),
 });
 const formatKodiArchitectureJson = (taxonomy, architecture, details = null,
-  explanation = null) =>
-  JSON.stringify(createArchitectureOutput(taxonomy, architecture, details, explanation));
+  explanation = null, coverageV2 = null) =>
+  JSON.stringify(createArchitectureOutput(taxonomy, architecture, details, explanation,
+    coverageV2));
 const formatKodiArchitectureText = (_taxonomy, architecture, details = null,
-  explanation = null) => {
+  explanation = null, coverageV2 = null) => {
   if (!details) {
     return [
       `architecture.total=${architecture.total}`,
@@ -131,6 +140,33 @@ const formatKodiArchitectureText = (_taxonomy, architecture, details = null,
       lines.push('', `server=${item.server}`, `files=${item.files}`,
         `matchedSignals=${JSON.stringify(item.matchedSignals)}`,
         `observedSignals=${JSON.stringify(item.observedSignals)}`,
+        `reason=${item.reason}`);
+    }
+  }
+  if (coverageV2) {
+    lines.push('', `coverageV2.runtimeCommit=${coverageV2.runtimeCommit}`,
+      `coverageV2.modules=${coverageV2.summary.modules}`,
+      `coverageV2.uniqueServers=${coverageV2.summary.uniqueServers}`);
+    for (const [assessment, count] of Object.entries(coverageV2.summary.byAssessment)) {
+      lines.push(`coverageV2.assessment.${assessment}=${count}`);
+    }
+    for (const [family, row] of Object.entries(coverageV2.byArchitecture)) {
+      lines.push(`coverageV2.architecture.${family}.modules=${row.modules}`,
+        `coverageV2.architecture.${family}.uniqueServers=${row.uniqueServers}`);
+      for (const [assessment, count] of Object.entries(row.byAssessment)) {
+        if (count > 0) lines.push(`coverageV2.architecture.${family}.${assessment}=${count}`);
+      }
+    }
+    for (const blocker of coverageV2.blockingCapabilities) {
+      lines.push(`coverageV2.blocker.${blocker.blockingCapability}=${blocker.affectedUniqueServers}`);
+    }
+    for (const item of coverageV2.servers) {
+      lines.push('', `server=${item.server}`, `architecture=${item.architecture}`,
+        `files=${item.files}`,
+        `requiredCapabilities=${JSON.stringify(item.requiredCapabilities)}`,
+        `availableCapabilities=${JSON.stringify(item.availableCapabilities)}`,
+        `missingCapabilities=${JSON.stringify(item.missingCapabilities)}`,
+        `assessment=${item.assessment}`, `confidence=${item.confidence}`,
         `reason=${item.reason}`);
     }
   }

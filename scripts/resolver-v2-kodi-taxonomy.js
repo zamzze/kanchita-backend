@@ -17,7 +17,8 @@ const main = (argv = process.argv.slice(2)) => {
   try {
     const result = scanKodiTaxonomy({ roots: parsed.roots,
       architecture: parsed.architecture,
-      architectureExplain: parsed.architectureExplain === true });
+      architectureExplain: parsed.architectureExplain === true ||
+        parsed.architectureCoverageV2 === true });
     if (parsed.architecture) {
       const { createArchitectureDetails, createArchitectureSummary,
         createUnknownArchitectureExplanation } =
@@ -27,9 +28,13 @@ const main = (argv = process.argv.slice(2)) => {
         ? createArchitectureDetails(result.records) : null;
       const explanation = parsed.architectureExplain
         ? createUnknownArchitectureExplanation(result.records) : null;
+      const coverageV2 = parsed.architectureCoverageV2
+        ? require('../src/modules/streams/resolverV2/diagnostics/kodiArchitectureCoverageV2')
+          .createArchitectureCoverageV2(result.records)
+        : null;
       process.stdout.write(`${parsed.json
-        ? formatKodiArchitectureJson(result, architecture, details, explanation)
-        : formatKodiArchitectureText(result, architecture, details, explanation)}\n`);
+        ? formatKodiArchitectureJson(result, architecture, details, explanation, coverageV2)
+        : formatKodiArchitectureText(result, architecture, details, explanation, coverageV2)}\n`);
     } else if (parsed.coverage) {
       const { createCoverageSummary, recommendNextCapability } =
         require('../src/modules/streams/resolverV2/diagnostics/capabilityCoverage');
