@@ -39,6 +39,29 @@ test('active lookup has deterministic ordering and inactive updates exact identi
   assert.deepEqual(calls[1].values, ['pluto', 'latam', 'movie', 'external']);
 });
 
+test('active plural lookup returns every mapping in SQL order while singular returns first',
+  async () => {
+    const ordered = [
+      { id: 2, external_id: 'newer', last_verified_at: '2025-01-01T00:00:00Z' },
+      { id: 1, external_id: 'older', last_verified_at: '2024-01-01T00:00:00Z' },
+    ];
+    const calls = [];
+    const store = createProviderMediaMappingStore({ query: async (sql, values) => {
+      calls.push({ sql, values });
+      return { rows: ordered };
+    } });
+    const lookup = { providerId: 'pluto', region: 'latam', contentType: 'movie',
+      tmdbId: 550 };
+    assert.deepEqual(await store.findActiveMappings(lookup), ordered);
+    assert.equal((await store.findActiveMapping(lookup)).external_id, 'newer');
+    assert.equal(calls.length, 2);
+    for (const call of calls) {
+      assert.match(call.sql,
+        /status = 'active'.*last_verified_at DESC NULLS LAST, updated_at DESC, id DESC/s);
+      assert.deepEqual(call.values, ['pluto', 'latam', 'movie', 550, null, null]);
+    }
+  });
+
 test('upsert reports inserted, updated and unchanged without deleting other mappings', async () => {
   const base = { providerId: 'pluto', region: 'latam', contentType: 'movie', tmdbId: 550,
     externalId: '0123456789abcdef01234567', providerTitle: 'Movie', status: 'active' };
@@ -90,6 +113,10 @@ test('PostgreSQL mapping store preserves history and selects active mapping dete
       assert.equal(second.change, 'inserted');
       assert.equal((await store.findMappings({ providerId: 'pluto', region: 'latam',
         contentType: 'movie', tmdbId: 550 })).length, 2);
+      const activeMappings = await store.findActiveMappings({ providerId: 'pluto',
+        region: 'latam', contentType: 'movie', tmdbId: 550 });
+      assert.deepEqual(activeMappings.map(({ external_id }) => external_id),
+        [second.external_id, first.external_id]);
       assert.equal((await store.findActiveMapping({ providerId: 'pluto', region: 'latam',
         contentType: 'movie', tmdbId: 550 })).external_id, second.external_id);
       await store.markInactive({ providerId: 'pluto', region: 'latam', contentType: 'movie',

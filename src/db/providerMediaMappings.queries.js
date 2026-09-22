@@ -83,7 +83,8 @@ const createProviderMediaMappingStore = (db = null) => {
     return rows;
   };
 
-  const findActiveMapping = async (input) => (await queryMappings(input, true))[0] || null;
+  const findActiveMappings = (input) => queryMappings(input, true);
+  const findActiveMapping = async (input) => (await findActiveMappings(input))[0] || null;
   const findMappings = (input) => queryMappings(input, false);
 
   const upsertMapping = async (input) => {
@@ -160,7 +161,8 @@ const createProviderMediaMappingStore = (db = null) => {
     return rows[0] || null;
   };
 
-  return Object.freeze({ findActiveMapping, findMappings, upsertMapping, markInactive });
+  return Object.freeze({ findActiveMapping, findActiveMappings, findMappings,
+    upsertMapping, markInactive });
 };
 
 module.exports = { createProviderMediaMappingStore, normalizeLookup, normalizeMapping };
