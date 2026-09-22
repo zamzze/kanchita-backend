@@ -91,7 +91,7 @@ test('configured HTTP source is registered only when enabled with valid configur
     ['direct_hls']);
 });
 
-test('Pluto is opt-in and requires an injected persistent mapping store', () => {
+test('Pluto is opt-in and accepts the mapping resolver with legacy store compatibility', () => {
   const httpClient = {
     get: async () => { throw new Error('construction must not request'); },
     head: async () => { throw new Error('construction must not request'); },
@@ -103,6 +103,11 @@ test('Pluto is opt-in and requires an injected persistent mapping store', () => 
     providerMappingStore: { findActiveMapping: async () => null },
     plutoProvider: { enabled: true } });
   assert.deepEqual(withStore.sourceRegistry.list().map(({ descriptor }) => descriptor.id),
+    ['pluto']);
+  const withResolver = createShadowPipeline({ httpClient,
+    providerMappingResolver: { resolve: async () => [] },
+    plutoProvider: { enabled: true } });
+  assert.deepEqual(withResolver.sourceRegistry.list().map(({ descriptor }) => descriptor.id),
     ['pluto']);
 });
 

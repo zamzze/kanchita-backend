@@ -71,6 +71,7 @@ const createShadowPipeline = ({
   pipeline,
   httpProvider = {},
   plutoProvider = {},
+  providerMappingResolver = null,
   providerMappingStore = null,
   httpResolver = {},
   healthStore = null,
@@ -144,12 +145,13 @@ const createShadowPipeline = ({
   try {
     const plutoOptions = {
       id: 'pluto', enabled: PLUTO_ENABLED, region: PLUTO_REGION,
+      mappingResolver: providerMappingResolver,
       mappingStore: providerMappingStore,
       ...plutoProvider,
       http: activeHttpClient,
     };
     const pluto = createPlutoSourceProvider(plutoOptions);
-    if (pluto.descriptor.active && providerMappingStore &&
+    if (pluto.descriptor.active && (providerMappingResolver || providerMappingStore) &&
         !configuredProviders.some(({ descriptor }) => descriptor.id === pluto.descriptor.id)) {
       configuredProviders.push(pluto);
     }

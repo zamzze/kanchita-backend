@@ -23,6 +23,8 @@ const { findStreamContent } = require('./streamContent');
 const { createStreamLifecycle, processingError } = require('./streamLifecycle');
 const { createProviderMediaMappingStore } =
   require('../../db/providerMediaMappings.queries');
+const { createProviderMediaMappingResolver } =
+  require('./providerMediaMappingResolver');
 const { isPlaybackTransportConfigured } = require('./playbackHeaders');
 const {
   STREAM_CACHE_TTL_MINUTES,
@@ -109,6 +111,10 @@ const createStreamProcessor = ({
   const primaryMetricStore = primaryMetrics || (mode === 'primary' ? metrics : null);
   const needsComposition = (mode === 'primary' && !primaryResolver) ||
     (mode === 'shadow' && !shadowResolver);
+  const providerMappingStore = needsComposition && PLUTO_ENABLED
+    ? createProviderMediaMappingStore(db) : null;
+  const providerMappingResolver = providerMappingStore
+    ? createProviderMediaMappingResolver({ store: providerMappingStore }) : null;
   const v2Composition = needsComposition ? createShadowPipeline({
     enabled: mode === 'shadow',
     timeoutMs: STREAM_RESOLVER_V2_SHADOW_TIMEOUT_MS,
@@ -117,7 +123,7 @@ const createStreamProcessor = ({
     primaryEnabled: mode === 'primary',
     primaryTimeoutMs,
     primaryMetrics: primaryMetricStore,
-    providerMappingStore: PLUTO_ENABLED ? createProviderMediaMappingStore(db) : null,
+    providerMappingResolver,
   }) : null;
   const shadow = shadowResolver || v2Composition?.shadowResolver || null;
   const primary = primaryResolver || v2Composition?.primaryResolver || null;

@@ -18,6 +18,8 @@ const JSON_CONTENT_TYPE = /^application\/(?:[a-z0-9!#$&^_.+-]+\+)?json(?:\s*;|$)
 const PLUTO_ID = /^[A-Za-z0-9_-]{6,128}$/;
 const REGION = /^[a-z0-9][a-z0-9_-]{0,31}$/;
 const MAX_MAPPINGS = 256;
+const DEFAULT_MAX_MAPPING_ATTEMPTS = 3;
+const HARD_MAX_MAPPING_ATTEMPTS = 8;
 const MAX_DISCOVERY_ITEMS = 20;
 const DEFAULT_BOOT_URL = 'https://boot.pluto.tv/v4/start';
 const DEFAULT_BASE_URL = 'https://service-vod.clusters.pluto.tv';
@@ -202,7 +204,9 @@ const createPlutoSourceProvider = ({
   maxBytes = DEFAULT_MAX_BYTES,
   maxRedirects = 3,
   mediaMap = [],
+  mappingResolver = null,
   mappingStore = null,
+  maxMappingAttempts = DEFAULT_MAX_MAPPING_ATTEMPTS,
   region = 'latam',
   supportsMovies = true,
   supportsEpisodes = true,
@@ -223,7 +227,10 @@ const createPlutoSourceProvider = ({
       typeof supportsMovies !== 'boolean' || typeof supportsEpisodes !== 'boolean' ||
       typeof now !== 'function' || typeof randomUUID !== 'function' ||
       !REGION.test(normalizedRegion) ||
+      (mappingResolver !== null && typeof mappingResolver?.resolve !== 'function') ||
       (mappingStore !== null && typeof mappingStore?.findActiveMapping !== 'function') ||
+      !Number.isInteger(maxMappingAttempts) || maxMappingAttempts < 1 ||
+      maxMappingAttempts > HARD_MAX_MAPPING_ATTEMPTS ||
       mappings === null || !parsedBootUrl ||
       (enabled && (!parsedBaseUrl || !parsedEpisodeBaseUrl))) {
     throw providerError(ERROR_CODES.INVALID_CONFIG);
@@ -397,14 +404,39 @@ const createPlutoSourceProvider = ({
       runtime.diagnosticExactItem === true) &&
       typeof runtime.temporaryPlutoId === 'string' && PLUTO_ID.test(runtime.temporaryPlutoId)
       ? runtime.temporaryPlutoId : null;
-    let mapping = configuredMapping || (diagnosticId ? {
+    const preferredMapping = configuredMapping || (diagnosticId ? {
       contentType: mediaContext.contentType,
       tmdbId: mediaContext.tmdbId,
       ...(mediaContext.contentType === 'episode'
         ? { season: mediaContext.season, episode: mediaContext.episode } : {}),
       plutoId: diagnosticId,
     } : null);
-    if (!mapping && mappingStore && mediaContext.contentType === 'movie') {
+    let candidateMappings = preferredMapping ? [preferredMapping] : [];
+    if (!preferredMapping && mappingResolver) {
+      const refs = await mappingResolver.resolve({ providerId: 'pluto',
+        region: normalizedRegion, mediaContext });
+      if (Array.isArray(refs)) {
+        candidateMappings = refs.slice(0, maxMappingAttempts).flatMap((ref) => {
+          if (!ref || typeof ref !== 'object' || Array.isArray(ref) ||
+              !Number.isSafeInteger(ref.mappingId) || ref.mappingId < 1 ||
+              ref.providerId !== 'pluto' || ref.region !== normalizedRegion ||
+              ref.contentType !== mediaContext.contentType ||
+              ref.tmdbId !== mediaContext.tmdbId ||
+              typeof ref.externalId !== 'string' || !PLUTO_ID.test(ref.externalId) ||
+              (mediaContext.contentType === 'movie' &&
+                (ref.seasonNumber !== null || ref.episodeNumber !== null)) ||
+              (mediaContext.contentType === 'episode' &&
+                (ref.seasonNumber !== mediaContext.season ||
+                  ref.episodeNumber !== mediaContext.episode))) return [];
+          return [{ contentType: ref.contentType, tmdbId: ref.tmdbId,
+            ...(ref.contentType === 'episode'
+              ? { season: ref.seasonNumber, episode: ref.episodeNumber } : {}),
+            plutoId: ref.externalId }];
+        });
+      }
+    }
+    if (!preferredMapping && !mappingResolver && mappingStore &&
+        mediaContext.contentType === 'movie') {
       const stored = await mappingStore.findActiveMapping({ providerId: 'pluto',
         region: normalizedRegion, contentType: 'movie', tmdbId: mediaContext.tmdbId });
       const activeStored = stored && (stored.status === undefined || stored.status === 'active');
@@ -412,26 +444,30 @@ const createPlutoSourceProvider = ({
         ? stored.external_id : activeStored && typeof stored.externalId === 'string'
           ? stored.externalId : '';
       if (PLUTO_ID.test(externalId)) {
-        mapping = { contentType: 'movie', tmdbId: mediaContext.tmdbId, plutoId: externalId };
+        candidateMappings = [{ contentType: 'movie', tmdbId: mediaContext.tmdbId,
+          plutoId: externalId }];
       }
     }
-    if (!mapping) return [];
+    if (candidateMappings.length === 0) return [];
     const client = clientFrom(runtime);
     const token = await boot(client, runtime.signal);
     if (runtime.diagnosticSessionPlayback === true &&
-        state.bootItem?.plutoId === mapping.plutoId) {
+        state.bootItem?.plutoId === candidateMappings[0].plutoId) {
       const url = buildSessionUrl(state.bootItem, token);
       const candidate = createCandidate(url);
       return candidate ? [candidate] : [];
     }
-    const item = await getExactItem(client, token, mapping, runtime.signal);
-    if (!item) return [];
-    const path = playbackPathFromItem(item) || (mapping.contentType === 'episode'
-      ? `/stitch/hls/episode/${mapping.plutoId}/master.m3u8` : null);
-    const url = buildSessionUrl(path ? { path } : null, token);
-    if (!url) return [];
-    const candidate = createCandidate(url);
-    return candidate ? [candidate].slice(0, maxCandidates) : [];
+    for (const mapping of candidateMappings) {
+      const item = await getExactItem(client, token, mapping, runtime.signal);
+      if (!item) continue;
+      const path = playbackPathFromItem(item) || (mapping.contentType === 'episode'
+        ? `/stitch/hls/episode/${mapping.plutoId}/master.m3u8` : null);
+      const url = buildSessionUrl(path ? { path } : null, token);
+      if (!url) continue;
+      const candidate = createCandidate(url);
+      if (candidate) return [candidate].slice(0, maxCandidates);
+    }
+    return [];
   };
 
   return Object.freeze({
@@ -456,8 +492,10 @@ module.exports = {
   DEFAULT_BASE_URL,
   DEFAULT_BOOT_URL,
   DEFAULT_EPISODE_BASE_URL,
+  DEFAULT_MAX_MAPPING_ATTEMPTS,
   ERROR_CODES,
   MAX_DISCOVERY_ITEMS,
+  HARD_MAX_MAPPING_ATTEMPTS,
   MAX_MAPPINGS,
   createPlutoSourceProvider,
   discoverBootItem,

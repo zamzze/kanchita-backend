@@ -2,8 +2,10 @@
 
 const http = require('node:http');
 const fs = require('node:fs');
+const crypto = require('node:crypto');
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
+const { Pool } = require('pg');
 
 process.env.PORT ||= '3000';
 process.env.DB_URL ||= 'postgresql://test.invalid/test';
@@ -27,8 +29,15 @@ const { createPreflightRunner } =
   require('../src/modules/streams/resolverV2/preflight/preflightRunner');
 const { createPrimaryAcceptanceGate } =
   require('../src/modules/streams/resolverV2/primaryAcceptanceGate');
+const { runMigrations } = require('../database/migrate');
+const { createProviderMediaMappingStore } =
+  require('../src/db/providerMediaMappings.queries');
+const { createProviderMediaMappingResolver } =
+  require('../src/modules/streams/providerMediaMappingResolver');
 const {
+  DEFAULT_MAX_MAPPING_ATTEMPTS,
   ERROR_CODES,
+  HARD_MAX_MAPPING_ATTEMPTS,
   createPlutoSourceProvider,
   normalizeMediaMap,
 } = require('../src/modules/streams/resolverV2/providers/plutoSourceProvider');
@@ -43,6 +52,24 @@ const hls = '#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1,RESOLUTION=1920x1080\nmedia.
 const jwt = 'header.' + Buffer.from(JSON.stringify({
   exp: Math.floor(Date.now() / 1000) + 3600,
 })).toString('base64url') + '.sig';
+const TEST_DB_URL = process.env.TEST_DB_URL;
+const mappingRef = (externalId, overrides = {}) => ({
+  mappingId: 1,
+  providerId: 'pluto',
+  region: 'latam',
+  contentType: 'movie',
+  tmdbId: 550,
+  externalId,
+  seasonNumber: null,
+  episodeNumber: null,
+  providerTitle: null,
+  providerSlug: null,
+  matchMethod: 'manual',
+  matchConfidence: 100,
+  metadata: {},
+  lastVerifiedAt: null,
+  ...overrides,
+});
 
 test('Pluto media map is explicit, bounded and first-valid-wins', () => {
   const map = normalizeMediaMap([
@@ -128,6 +155,240 @@ test('Pluto DB mapping hit resolves exact movie while misses stay network-free',
     assert.equal(itemRequests, 1);
     assert.equal(catalogRequests, 0);
   } finally { await close(server); }
+});
+
+test('Pluto mapping resolver preserves identity and missing mappings remain network-free',
+  async () => {
+    let requests = 0;
+    const lookups = [];
+    const mappingResolver = { resolve: async (lookup) => {
+      lookups.push(structuredClone(lookup));
+      return lookup.mediaContext.tmdbId === 550 ? [mappingRef('movie123')] : [];
+    } };
+    const server = await listen((request, response) => {
+      requests += 1;
+      response.setHeader('content-type', 'application/json');
+      if (request.url.startsWith('/boot')) return response.end(JSON.stringify({
+        sessionToken: jwt, servers: { stitcher: origin(server) }, stitcherParams: '',
+      }));
+      assert.equal(new URL(request.url, origin(server)).searchParams.get('ids'), 'movie123');
+      response.end(JSON.stringify([{ _id: 'movie123',
+        stitched: { path: '/stitch/hls/episode/movie123/master.m3u8' } }]));
+    });
+    try {
+      const provider = createPlutoSourceProvider({ id: 'pluto', enabled: true,
+        baseUrl: origin(server), bootUrl: `${origin(server)}/boot`,
+        http: createSafeHttpClient({ allowPrivateNetworks: true }), mappingResolver,
+        mappingStore: { findActiveMapping: async () => {
+          throw new Error('legacy store must not run when mappingResolver is present');
+        } } });
+      assert.deepEqual(await provider.getSources({ contentType: 'movie', tmdbId: 551 }), []);
+      assert.equal(requests, 0);
+      assert.equal((await provider.getSources({ contentType: 'movie', tmdbId: 550 })).length, 1);
+      assert.deepEqual(lookups, [
+        { providerId: 'pluto', region: 'latam',
+          mediaContext: { contentType: 'movie', tmdbId: 551 } },
+        { providerId: 'pluto', region: 'latam',
+          mediaContext: { contentType: 'movie', tmdbId: 550 } },
+      ]);
+      assert.equal(requests, 2);
+    } finally { await close(server); }
+  });
+
+test('PostgreSQL mapping resolves through Pluto exact item into an EmbedCandidate', {
+  skip: TEST_DB_URL ? false : 'Set TEST_DB_URL to run Pluto mapping integration test',
+}, async () => {
+  const externalId = '0123456789abcdef01234567';
+  const schema = `kanchita_pluto_mapping_${crypto.randomBytes(6).toString('hex')}`;
+  const admin = new Pool({ connectionString: TEST_DB_URL });
+  let db;
+  const server = await listen((request, response) => {
+    response.setHeader('content-type', 'application/json');
+    if (request.url.startsWith('/boot')) return response.end(JSON.stringify({
+      sessionToken: jwt, servers: { stitcher: origin(server) }, stitcherParams: '',
+    }));
+    assert.equal(new URL(request.url, origin(server)).searchParams.get('ids'), externalId);
+    response.end(JSON.stringify([{ _id: externalId,
+      stitched: { path: `/stitch/hls/episode/${externalId}/master.m3u8` } }]));
+  });
+  try {
+    await admin.query(`CREATE SCHEMA "${schema}"`);
+    db = new Pool({ connectionString: TEST_DB_URL,
+      options: `-c search_path=${schema},public` });
+    await runMigrations({ pool: db, logger: { log() {} } });
+    const store = createProviderMediaMappingStore(db);
+    await store.upsertMapping({ providerId: 'pluto', region: 'latam', contentType: 'movie',
+      tmdbId: 550, externalId, matchMethod: 'manual', status: 'active' });
+    const provider = createPlutoSourceProvider({ id: 'pluto', enabled: true,
+      baseUrl: origin(server), bootUrl: `${origin(server)}/boot`,
+      http: createSafeHttpClient({ allowPrivateNetworks: true }),
+      mappingResolver: createProviderMediaMappingResolver({ store }) });
+    const candidates = await provider.getSources({ contentType: 'movie', tmdbId: 550 });
+    assert.equal(candidates.length, 1);
+    assert.equal(candidates[0].providerId, 'pluto');
+    assert.equal(candidates[0].urlSensitivity, 'temporary_signed');
+  } finally {
+    if (db) await db.end();
+    await admin.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`).catch(() => {});
+    await admin.end();
+    await close(server);
+  }
+});
+
+test('Pluto tries ordered mappings sequentially with one boot and first-valid success',
+  async () => {
+    const itemIds = [];
+    let bootRequests = 0;
+    const refs = [mappingRef('missing1', { mappingId: 1 }),
+      mappingRef('nohls01', { mappingId: 2 }),
+      mappingRef('success1', { mappingId: 3 })];
+    const server = await listen((request, response) => {
+      if (request.url.startsWith('/boot')) {
+        bootRequests += 1;
+        response.setHeader('content-type', 'application/json');
+        return response.end(JSON.stringify({ sessionToken: jwt,
+          servers: { stitcher: origin(server) }, stitcherParams: '' }));
+      }
+      const itemId = new URL(request.url, origin(server)).searchParams.get('ids');
+      itemIds.push(itemId);
+      if (itemId === 'missing1') { response.statusCode = 404; return response.end(); }
+      response.setHeader('content-type', 'application/json');
+      if (itemId === 'nohls01') return response.end(JSON.stringify([{ _id: itemId }]));
+      response.end(JSON.stringify([{ _id: itemId,
+        stitched: { path: `/stitch/hls/episode/${itemId}/master.m3u8` } }]));
+    });
+    try {
+      const provider = createPlutoSourceProvider({ id: 'pluto', enabled: true,
+        baseUrl: origin(server), bootUrl: `${origin(server)}/boot`,
+        http: createSafeHttpClient({ allowPrivateNetworks: true }),
+        mappingResolver: { resolve: async () => refs } });
+      const candidates = await provider.getSources({ contentType: 'movie', tmdbId: 550 });
+      assert.equal(candidates.length, 1);
+      assert.match(candidates[0].url, /success1/);
+      assert.deepEqual(itemIds, ['missing1', 'nohls01', 'success1']);
+      assert.equal(bootRequests, 1);
+    } finally { await close(server); }
+  });
+
+test('Pluto mapping attempt budget is bounded and malformed refs cause no item request',
+  async () => {
+    const itemIds = [];
+    const refs = [mappingRef('invalid1', { mappingId: 0 }),
+      mappingRef('first01', { mappingId: 2 }), mappingRef('second1', { mappingId: 3 }),
+      mappingRef('beyond1', { mappingId: 4 })];
+    const server = await listen((request, response) => {
+      response.setHeader('content-type', 'application/json');
+      if (request.url.startsWith('/boot')) return response.end(JSON.stringify({
+        sessionToken: jwt, servers: { stitcher: origin(server) }, stitcherParams: '',
+      }));
+      itemIds.push(new URL(request.url, origin(server)).searchParams.get('ids'));
+      response.statusCode = 404;
+      response.end();
+    });
+    try {
+      const provider = createPlutoSourceProvider({ id: 'pluto', enabled: true,
+        baseUrl: origin(server), bootUrl: `${origin(server)}/boot`,
+        http: createSafeHttpClient({ allowPrivateNetworks: true }), maxMappingAttempts: 3,
+        mappingResolver: { resolve: async () => refs } });
+      assert.deepEqual(await provider.getSources({ contentType: 'movie', tmdbId: 550 }), []);
+      assert.deepEqual(itemIds, ['first01', 'second1']);
+      assert.equal(DEFAULT_MAX_MAPPING_ATTEMPTS, 3);
+      assert.equal(HARD_MAX_MAPPING_ATTEMPTS, 8);
+      for (const maxMappingAttempts of [0, 9, 1.5, Infinity, '3']) {
+        assert.throws(() => createPlutoSourceProvider({ enabled: false,
+          maxMappingAttempts }), { code: ERROR_CODES.INVALID_CONFIG });
+      }
+      assert.throws(() => createPlutoSourceProvider({ enabled: false,
+        mappingResolver: {} }), { code: ERROR_CODES.INVALID_CONFIG });
+    } finally { await close(server); }
+  });
+
+test('Pluto mapping resolver supports exact episodes without catalog hierarchy requests',
+  async () => {
+    const paths = [];
+    const lookups = [];
+    const server = await listen((request, response) => {
+      paths.push(new URL(request.url, origin(server)).pathname);
+      response.setHeader('content-type', 'application/json');
+      if (request.url.startsWith('/boot')) return response.end(JSON.stringify({
+        sessionToken: jwt, servers: { stitcher: origin(server) }, stitcherParams: '',
+      }));
+      assert.equal(paths.at(-1), '/v2/episodes/episode123/clips.json');
+      response.end(JSON.stringify({ clips: [{ id: 'clip123' }] }));
+    });
+    try {
+      const provider = createPlutoSourceProvider({ id: 'pluto', enabled: true,
+        baseUrl: origin(server), bootUrl: `${origin(server)}/boot`,
+        http: createSafeHttpClient({ allowPrivateNetworks: true }),
+        mappingResolver: { resolve: async (lookup) => {
+          lookups.push(structuredClone(lookup));
+          return [mappingRef('episode123', { contentType: 'episode', tmdbId: 10,
+            seasonNumber: 1, episodeNumber: 2 })];
+        } } });
+      const candidates = await provider.getSources({ contentType: 'episode', tmdbId: 10,
+        season: 1, episode: 2 });
+      assert.equal(candidates.length, 1);
+      assert.match(candidates[0].url, /\/v2\/stitch\/hls\/episode\/episode123/);
+      assert.deepEqual(lookups, [{ providerId: 'pluto', region: 'latam',
+        mediaContext: { contentType: 'episode', tmdbId: 10, season: 1, episode: 2 } }]);
+      assert.equal(paths.filter((path) => /catalog|search|series|season/i.test(path)).length, 0);
+    } finally { await close(server); }
+  });
+
+test('Pluto mediaMap and diagnostic IDs take precedence over mapping resolver', async () => {
+  const itemIds = [];
+  let resolverCalls = 0;
+  const server = await listen((request, response) => {
+    response.setHeader('content-type', 'application/json');
+    if (request.url.startsWith('/boot')) return response.end(JSON.stringify({
+      sessionToken: jwt, servers: { stitcher: origin(server) }, stitcherParams: '',
+    }));
+    const itemId = new URL(request.url, origin(server)).searchParams.get('ids');
+    itemIds.push(itemId);
+    response.end(JSON.stringify([{ _id: itemId,
+      stitched: { path: `/stitch/hls/episode/${itemId}/master.m3u8` } }]));
+  });
+  try {
+    const options = { id: 'pluto', enabled: true, baseUrl: origin(server),
+      bootUrl: `${origin(server)}/boot`, http: createSafeHttpClient({ allowPrivateNetworks: true }),
+      mappingResolver: { resolve: async () => { resolverCalls += 1;
+        return [mappingRef('resolver1')]; } } };
+    const configured = createPlutoSourceProvider({ ...options,
+      mediaMap: [{ contentType: 'movie', tmdbId: 550, plutoId: 'mapped01' }] });
+    assert.equal((await configured.getSources({ contentType: 'movie', tmdbId: 550 })).length, 1);
+    const diagnostic = createPlutoSourceProvider(options);
+    assert.equal((await diagnostic.getSources({ contentType: 'movie', tmdbId: 550 },
+      { diagnosticExactItem: true, temporaryPlutoId: 'diag001' })).length, 1);
+    assert.deepEqual(itemIds, ['mapped01', 'diag001']);
+    assert.equal(resolverCalls, 0);
+  } finally { await close(server); }
+});
+
+test('Pluto stops mapping fallback on hard HTTP and malformed JSON failures', async () => {
+  for (const [mode, expectedCode] of [
+    ['forbidden', ERROR_CODES.HTTP_ERROR], ['badjson', ERROR_CODES.INVALID_JSON],
+  ]) {
+    const itemIds = [];
+    const server = await listen((request, response) => {
+      response.setHeader('content-type', 'application/json');
+      if (request.url.startsWith('/boot')) return response.end(JSON.stringify({
+        sessionToken: jwt, servers: { stitcher: origin(server) }, stitcherParams: '',
+      }));
+      itemIds.push(new URL(request.url, origin(server)).searchParams.get('ids'));
+      if (mode === 'forbidden') { response.statusCode = 403; return response.end(); }
+      response.end('{bad');
+    });
+    try {
+      const provider = createPlutoSourceProvider({ id: 'pluto', enabled: true,
+        baseUrl: origin(server), bootUrl: `${origin(server)}/boot`,
+        http: createSafeHttpClient({ allowPrivateNetworks: true }),
+        mappingResolver: { resolve: async () => [mappingRef('first01'),
+          mappingRef('second1', { mappingId: 2 })] } });
+      await assert.rejects(provider.getSources({ contentType: 'movie', tmdbId: 550 }),
+        { code: expectedCode });
+      assert.deepEqual(itemIds, ['first01']);
+    } finally { await close(server); }
+  }
 });
 
 test('Pluto provider boots anonymously, fetches only the exact mapped movie and emits HLS', async () => {
@@ -342,7 +603,7 @@ test('Pluto provider propagates timeout and abort through SafeHttpClient', async
     const provider = createPlutoSourceProvider({
       id: 'pluto_slow', enabled: true, baseUrl: origin(server),
       bootUrl: `${origin(server)}/boot`, http: client, timeoutMs: 100,
-      mediaMap: [{ contentType: 'movie', tmdbId: 1, plutoId: 'movie123' }],
+      mappingResolver: { resolve: async () => [mappingRef('movie123', { tmdbId: 1 })] },
     });
     await assert.rejects(provider.getSources({ contentType: 'movie', tmdbId: 1 }),
       { code: 'HTTP_TIMEOUT' });
@@ -352,7 +613,7 @@ test('Pluto provider propagates timeout and abort through SafeHttpClient', async
     const aborted = createPlutoSourceProvider({
       id: 'pluto_abort', enabled: true, baseUrl: origin(server),
       bootUrl: `${origin(server)}/boot`, http: client,
-      mediaMap: [{ contentType: 'movie', tmdbId: 1, plutoId: 'movie123' }],
+      mappingResolver: { resolve: async () => [mappingRef('movie123', { tmdbId: 1 })] },
     });
     await assert.rejects(aborted.getSources({ contentType: 'movie', tmdbId: 1 },
       { signal: controller.signal }), { code: 'HTTP_ABORTED' });
