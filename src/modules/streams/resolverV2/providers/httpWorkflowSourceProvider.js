@@ -22,6 +22,9 @@ const MAX_VARIABLE_LENGTH = 4096;
 const MAX_TEXT_DELIMITER_LENGTH = 256;
 const MAX_TEXT_CAPTURE_LENGTH = MAX_VARIABLE_LENGTH;
 const MAX_OBJECT_ENTRIES = 32;
+const DEFAULT_MAX_ITEMS = 8;
+const HARD_MAX_ITEMS = 32;
+const MAX_COLLECTION_FIELDS = 16;
 const MAX_METADATA_DEPTH = 6;
 const MAX_METADATA_ITEMS = 128;
 const VARIABLE_NAME = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
@@ -87,6 +90,17 @@ const normalizeTemplate = (value) => {
   return /[{}]/.test(withoutPlaceholders) ? null : value;
 };
 
+const normalizeItemTemplate = (value) => {
+  if (typeof value !== 'string' || value.length > MAX_TEMPLATE_LENGTH) return null;
+  const scalarTemplate = value.replace(/\{item\.([A-Za-z][A-Za-z0-9_]*)\}/g, '{$1}');
+  if (!normalizeTemplate(scalarTemplate) ||
+      /\{([A-Za-z][A-Za-z0-9_]*)\}/.test(value)) return null;
+  return value;
+};
+
+const renderItemTemplate = (template, item) => renderTemplate(
+  template.replace(/\{item\.([A-Za-z][A-Za-z0-9_]*)\}/g, '{$1}'), item);
+
 const templateNames = (value) => [...value.matchAll(/\{([A-Za-z][A-Za-z0-9_]*)\}/g)]
   .map((match) => match[1]);
 
@@ -105,13 +119,13 @@ const renderTemplate = (template, variables) => {
   return valid && output.length <= MAX_TEMPLATE_LENGTH * 2 ? output : null;
 };
 
-const normalizeTemplateObject = (value, allowlist = null) => {
+const normalizeTemplateObject = (value, allowlist = null, normalize = normalizeTemplate) => {
   if (value === undefined) return Object.freeze({});
   if (!isPlainObject(value) || Object.keys(value).length > MAX_OBJECT_ENTRIES) return null;
   const output = {};
   for (const [rawName, rawValue] of Object.entries(value)) {
     const name = rawName.trim().toLowerCase();
-    const template = normalizeTemplate(rawValue);
+    const template = normalize(rawValue);
     if (!ATTRIBUTE_NAME.test(name) || FORBIDDEN_KEYS.has(name) ||
         (allowlist && !allowlist.has(name)) || !template || /[\r\n]/.test(rawName + rawValue)) {
       return null;
@@ -119,6 +133,15 @@ const normalizeTemplateObject = (value, allowlist = null) => {
     output[name] = template;
   }
   return Object.freeze(output);
+};
+
+const normalizeJsonPath = (path) => {
+  const segments = typeof path === 'string' ? path.split('.') : [];
+  return segments.length >= 1 && segments.length <= 8 &&
+    segments.every((segment) => !FORBIDDEN_KEYS.has(segment) &&
+      (SIMPLE_PATH_SEGMENT.test(segment) ||
+        ARRAY_INDEX_SEGMENT.test(segment) && Number(segment) <= MAX_ARRAY_INDEX))
+    ? path : null;
 };
 
 const normalizeSelector = (value) => {
@@ -163,11 +186,8 @@ const normalizeExtractStep = (step) => {
   }
   if (step.parser === 'json') {
     const allowed = new Set(['type', 'from', 'parser', 'path', 'saveAs']);
-    const segments = typeof step.path === 'string' ? step.path.split('.') : [];
-    if (Object.keys(step).some((key) => !allowed.has(key)) || segments.length < 1 ||
-        segments.length > 8 || segments.some((segment) => FORBIDDEN_KEYS.has(segment) ||
-          !SIMPLE_PATH_SEGMENT.test(segment) &&
-          (!ARRAY_INDEX_SEGMENT.test(segment) || Number(segment) > MAX_ARRAY_INDEX))) return null;
+    if (Object.keys(step).some((key) => !allowed.has(key)) ||
+        !normalizeJsonPath(step.path)) return null;
     return Object.freeze({ type: 'extract', from: step.from, parser: 'json',
       path: step.path, saveAs: step.saveAs });
   }
@@ -192,17 +212,36 @@ const normalizeExtractStep = (step) => {
     attribute, text: useText, saveAs: step.saveAs });
 };
 
-const normalizeEmitStep = (step) => {
-  const allowed = new Set(['type', 'url', 'referer', 'origin', 'headers',
+const normalizeExtractManyStep = (step) => {
+  const allowed = new Set(['type', 'from', 'parser', 'path', 'fields', 'saveAs', 'maxItems']);
+  if (!isPlainObject(step) || Object.keys(step).some((key) => !allowed.has(key)) ||
+      !VARIABLE_NAME.test(step.from) || !VARIABLE_NAME.test(step.saveAs) ||
+      step.parser !== 'json' || !normalizeJsonPath(step.path) ||
+      !isPlainObject(step.fields)) return null;
+  const entries = Object.entries(step.fields);
+  if (entries.length < 1 || entries.length > MAX_COLLECTION_FIELDS ||
+      entries.some(([name, path]) => !VARIABLE_NAME.test(name) ||
+        FORBIDDEN_KEYS.has(name) || !normalizeJsonPath(path))) return null;
+  const maxItems = step.maxItems === undefined ? DEFAULT_MAX_ITEMS : step.maxItems;
+  if (!Number.isInteger(maxItems) || maxItems < 1 || maxItems > HARD_MAX_ITEMS) return null;
+  return Object.freeze({ type: 'extractMany', from: step.from, parser: 'json',
+    path: step.path, fields: Object.freeze(Object.fromEntries(entries)),
+    saveAs: step.saveAs, maxItems });
+};
+
+const normalizeEmitStep = (step, each = false) => {
+  const allowed = new Set(['type', ...(each ? ['from'] : []), 'url', 'referer', 'origin', 'headers',
     'languageHint', 'qualityHint', 'metadata']);
   if (!isPlainObject(step) || Object.keys(step).some((key) => !allowed.has(key))) return null;
-  const url = normalizeTemplate(step.url);
-  const referer = step.referer == null ? null : normalizeTemplate(step.referer);
-  const origin = step.origin == null ? null : normalizeTemplate(step.origin);
+  if (each && !VARIABLE_NAME.test(step.from)) return null;
+  const normalize = each ? normalizeItemTemplate : normalizeTemplate;
+  const url = normalize(step.url);
+  const referer = step.referer == null ? null : normalize(step.referer);
+  const origin = step.origin == null ? null : normalize(step.origin);
   const languageHint = step.languageHint == null ? null
-    : normalizeTemplate(step.languageHint);
-  const qualityHint = step.qualityHint == null ? null : normalizeTemplate(step.qualityHint);
-  const headers = normalizeTemplateObject(step.headers, PLAYBACK_HEADER_ALLOWLIST);
+    : normalize(step.languageHint);
+  const qualityHint = step.qualityHint == null ? null : normalize(step.qualityHint);
+  const headers = normalizeTemplateObject(step.headers, PLAYBACK_HEADER_ALLOWLIST, normalize);
   const metadata = step.metadata == null ? null : cloneJsonLike(step.metadata);
   if (!url || step.referer != null && !referer || step.origin != null && !origin ||
       step.languageHint != null && !languageHint ||
@@ -210,7 +249,8 @@ const normalizeEmitStep = (step) => {
       step.metadata != null && (!isPlainObject(step.metadata) || metadata === undefined)) {
     return null;
   }
-  return Object.freeze({ type: 'emit', url, referer, origin, languageHint, qualityHint,
+  return Object.freeze({ type: each ? 'emitEach' : 'emit', ...(each ? { from: step.from } : {}),
+    url, referer, origin, languageHint, qualityHint,
     headers, metadata: metadata === null ? null : deepFreeze(metadata) });
 };
 
@@ -220,13 +260,16 @@ const normalizeWorkflow = (workflow, maxSteps) => {
   const available = new Set(['externalId', 'tmdbId', 'season', 'episode',
     'contentType', 'region']);
   const responses = new Set();
+  const collections = new Set();
   const assigned = new Set(available);
   for (const rawStep of workflow) {
     const type = typeof rawStep?.type === 'string' ? rawStep.type.toLowerCase() : '';
     const step = type === 'request' ? normalizeRequestStep({ ...rawStep, type,
       method: typeof rawStep.method === 'string' ? rawStep.method.toUpperCase() : rawStep.method })
       : type === 'extract' ? normalizeExtractStep({ ...rawStep, type })
-        : type === 'emit' ? normalizeEmitStep({ ...rawStep, type }) : null;
+        : type === 'extractmany' ? normalizeExtractManyStep({ ...rawStep, type })
+          : type === 'emit' ? normalizeEmitStep({ ...rawStep, type })
+            : type === 'emiteach' ? normalizeEmitStep({ ...rawStep, type }, true) : null;
     if (!step) return null;
     const templates = step.type === 'request'
       ? [step.path, ...Object.values(step.query), ...Object.values(step.headers),
@@ -241,11 +284,13 @@ const normalizeWorkflow = (workflow, maxSteps) => {
       responses.add(step.saveAs);
       assigned.add(step.saveAs);
     }
-    if (step.type === 'extract') {
+    if (step.type === 'extract' || step.type === 'extractMany') {
       if (!responses.has(step.from) || assigned.has(step.saveAs)) return null;
-      available.add(step.saveAs);
+      if (step.type === 'extract') available.add(step.saveAs);
+      else collections.add(step.saveAs);
       assigned.add(step.saveAs);
     }
+    if (step.type === 'emitEach' && !collections.has(step.from)) return null;
     output.push(step);
   }
   return Object.freeze(output);
@@ -317,7 +362,7 @@ const extractHtml = (html, definition, baseUrl) => {
 const scalar = (value) => ['string', 'number', 'boolean'].includes(typeof value) &&
   String(value).length <= MAX_VARIABLE_LENGTH ? value : null;
 
-const extractJson = (payload, path) => {
+const lookupJsonPath = (payload, path) => {
   let current = payload;
   for (const segment of path.split('.')) {
     if (FORBIDDEN_KEYS.has(segment)) return null;
@@ -331,7 +376,27 @@ const extractJson = (payload, path) => {
       current = current[segment];
     }
   }
-  return scalar(current);
+  return current;
+};
+
+const extractJson = (payload, path) => scalar(lookupJsonPath(payload, path));
+
+const extractMany = (payload, step) => {
+  const source = lookupJsonPath(payload, step.path);
+  if (!Array.isArray(source)) return null;
+  const items = [];
+  for (const sourceItem of source.slice(0, step.maxItems)) {
+    if (!isPlainObject(sourceItem)) continue;
+    const item = Object.create(null);
+    let valid = true;
+    for (const [name, path] of Object.entries(step.fields)) {
+      const value = extractJson(sourceItem, path);
+      if (value === null) { valid = false; break; }
+      item[name] = value;
+    }
+    if (valid) items.push(Object.freeze(item));
+  }
+  return Object.freeze(items);
 };
 
 const extractText = (source, start, end) => {
@@ -348,6 +413,25 @@ const extractText = (source, start, end) => {
 
 const immutableCandidate = (candidate) => {
   return deepFreeze(candidate);
+};
+
+const buildCandidate = (step, variables, id, render = renderTemplate) => {
+  const url = render(step.url, variables);
+  const headers = {};
+  for (const [name, template] of Object.entries(step.headers)) {
+    const value = render(template, variables);
+    if (value === null) return null;
+    headers[name] = value;
+  }
+  const referer = step.referer ? render(step.referer, variables) : null;
+  const origin = step.origin ? render(step.origin, variables) : null;
+  const languageHint = step.languageHint ? render(step.languageHint, variables) : null;
+  const qualityHint = step.qualityHint ? render(step.qualityHint, variables) : null;
+  if (!url || step.referer && !referer || step.origin && !origin ||
+      step.languageHint && !languageHint || step.qualityHint && !qualityHint) return null;
+  const candidate = normalizeEmbedCandidate({ providerId: id, url, referer, origin, headers,
+    languageHint, qualityHint, metadata: step.metadata });
+  return candidate ? immutableCandidate(candidate) : null;
 };
 
 const createHttpWorkflowSourceProvider = ({
@@ -396,6 +480,7 @@ const createHttpWorkflowSourceProvider = ({
       contentType: ref.contentType, region: ref.region,
     });
     const responses = Object.create(null);
+    const collections = Object.create(null);
     const candidates = [];
     const deadlineAt = Math.min(now() + timeoutMs,
       Number.isFinite(runtime.deadlineAt) ? runtime.deadlineAt : Infinity);
@@ -439,7 +524,7 @@ const createHttpWorkflowSourceProvider = ({
         responses[step.saveAs] = response;
         continue;
       }
-      if (step.type === 'extract') {
+      if (step.type === 'extract' || step.type === 'extractMany') {
         const response = responses[step.from];
         if (!response) return [];
         const contentType = response.headers?.['content-type'];
@@ -454,10 +539,15 @@ const createHttpWorkflowSourceProvider = ({
             throw providerError(ERROR_CODES.INVALID_CONTENT_TYPE);
           }
           let payload;
+          if (step.type === 'extractMany' &&
+              (!Buffer.isBuffer(response.body) || response.body.length > maxBytes)) {
+            throw providerError(ERROR_CODES.CAPTURE_TOO_LARGE);
+          }
           try { payload = JSON.parse(response.body.toString('utf8')); } catch {
             throw providerError(ERROR_CODES.INVALID_JSON);
           }
-          value = extractJson(payload, step.path);
+          value = step.type === 'extractMany' ? extractMany(payload, step)
+            : extractJson(payload, step.path);
         } else {
           if (typeof contentType !== 'string' || !TEXT_CONTENT_TYPE.test(contentType.trim())) {
             throw providerError(ERROR_CODES.INVALID_CONTENT_TYPE);
@@ -467,23 +557,25 @@ const createHttpWorkflowSourceProvider = ({
           value = extractText(body, step.start, step.end);
         }
         if (value === null) return [];
-        variables[step.saveAs] = value;
+        if (step.type === 'extractMany') collections[step.saveAs] = value;
+        else variables[step.saveAs] = value;
+        continue;
+      }
+      if (step.type === 'emitEach') {
+        const items = collections[step.from];
+        if (!Array.isArray(items)) return [];
+        for (const item of items) {
+          if (candidates.length >= maxCandidates) break;
+          const candidate = buildCandidate(step, item, id, renderItemTemplate);
+          if (candidate) candidates.push(candidate);
+        }
+        if (candidates.length >= maxCandidates) return Object.freeze(candidates);
         continue;
       }
       if (candidates.length >= maxCandidates) continue;
-      const url = renderTemplate(step.url, variables);
-      const headers = renderObject(step.headers, variables);
-      const referer = step.referer ? renderTemplate(step.referer, variables) : null;
-      const origin = step.origin ? renderTemplate(step.origin, variables) : null;
-      const languageHint = step.languageHint
-        ? renderTemplate(step.languageHint, variables) : null;
-      const qualityHint = step.qualityHint ? renderTemplate(step.qualityHint, variables) : null;
-      if (!url || !headers || step.referer && !referer || step.origin && !origin ||
-          step.languageHint && !languageHint || step.qualityHint && !qualityHint) return [];
-      const candidate = normalizeEmbedCandidate({ providerId: id, url, referer, origin, headers,
-        languageHint, qualityHint, metadata: step.metadata });
+      const candidate = buildCandidate(step, variables, id);
       if (!candidate) return [];
-      candidates.push(immutableCandidate(candidate));
+      candidates.push(candidate);
       if (candidates.length >= maxCandidates) return Object.freeze(candidates);
     }
     return Object.freeze(candidates);
