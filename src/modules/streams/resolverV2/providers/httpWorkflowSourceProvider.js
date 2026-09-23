@@ -12,11 +12,17 @@ const ERROR_CODES = Object.freeze({
   INVALID_JSON: 'SOURCE_WORKFLOW_INVALID_JSON',
   CAPTURE_TOO_LARGE: 'SOURCE_WORKFLOW_CAPTURE_TOO_LARGE',
   AMBIGUOUS_COLLECTION: 'SOURCE_WORKFLOW_AMBIGUOUS_COLLECTION',
+  REQUEST_BUDGET_EXCEEDED: 'SOURCE_WORKFLOW_REQUEST_BUDGET_EXCEEDED',
+  FANOUT_LIMIT_EXCEEDED: 'SOURCE_WORKFLOW_FANOUT_LIMIT_EXCEEDED',
+  COLLECTION_LIMIT_EXCEEDED: 'SOURCE_WORKFLOW_COLLECTION_LIMIT_EXCEEDED',
 });
 const DEFAULT_MAX_STEPS = 5;
 const HARD_MAX_STEPS = 8;
 const DEFAULT_MAX_CANDIDATES = 8;
 const HARD_MAX_CANDIDATES = 32;
+const HARD_MAX_REQUESTS = 8;
+const DEFAULT_MAX_FANOUT = 4;
+const HARD_MAX_FANOUT = 8;
 const DEFAULT_MAX_BYTES = 512 * 1024;
 const MAX_TEMPLATE_LENGTH = 4096;
 const MAX_VARIABLE_LENGTH = 4096;
@@ -32,6 +38,7 @@ const VARIABLE_NAME = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
 const SIMPLE_PATH_SEGMENT = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
 const ARRAY_INDEX_SEGMENT = /^(?:0|[1-9]\d?)$/;
 const MAX_ARRAY_INDEX = 31;
+const ITEM_PLACEHOLDER = /\{item\.([A-Za-z][A-Za-z0-9_]*)\}/g;
 const ATTRIBUTE_NAME = /^[a-z][a-z0-9_:-]{0,63}$/;
 const TAG_NAME = /^[a-z][a-z0-9-]{0,31}$/;
 const HTML_CONTENT_TYPE = /^(?:text\/html|application\/xhtml\+xml)(?:\s*;|$)/i;
@@ -93,14 +100,44 @@ const normalizeTemplate = (value) => {
 
 const normalizeItemTemplate = (value) => {
   if (typeof value !== 'string' || value.length > MAX_TEMPLATE_LENGTH) return null;
-  const scalarTemplate = value.replace(/\{item\.([A-Za-z][A-Za-z0-9_]*)\}/g, '{$1}');
+  const scalarTemplate = value.replace(ITEM_PLACEHOLDER, '{$1}');
   if (!normalizeTemplate(scalarTemplate) ||
       /\{([A-Za-z][A-Za-z0-9_]*)\}/.test(value)) return null;
   return value;
 };
 
+const normalizeMixedTemplate = (value) => {
+  if (typeof value !== 'string' || value.length > MAX_TEMPLATE_LENGTH) return null;
+  const scalarTemplate = value.replace(ITEM_PLACEHOLDER, '{itemValue}');
+  return normalizeTemplate(scalarTemplate) ? value : null;
+};
+
+const itemTemplateNames = (value) => [...value.matchAll(ITEM_PLACEHOLDER)]
+  .map((match) => match[1]);
+
+const renderMixedTemplate = (template, variables, item) => {
+  let output = '';
+  let offset = 0;
+  while (offset < template.length) {
+    const open = template.indexOf('{', offset);
+    if (open < 0) { output += template.slice(offset); break; }
+    output += template.slice(offset, open);
+    const close = template.indexOf('}', open + 1);
+    if (close < 0) return null;
+    const name = template.slice(open + 1, close);
+    const value = name.startsWith('item.') ? item[name.slice(5)] : variables[name];
+    if (!['string', 'number', 'boolean'].includes(typeof value)) return null;
+    const text = String(value);
+    if (!text || text.length > MAX_VARIABLE_LENGTH) return null;
+    output += text;
+    if (output.length > MAX_TEMPLATE_LENGTH * 2) return null;
+    offset = close + 1;
+  }
+  return output.length <= MAX_TEMPLATE_LENGTH * 2 ? output : null;
+};
+
 const renderItemTemplate = (template, item) => renderTemplate(
-  template.replace(/\{item\.([A-Za-z][A-Za-z0-9_]*)\}/g, '{$1}'), item);
+  template.replace(ITEM_PLACEHOLDER, '{$1}'), item);
 
 const templateNames = (value) => [...value.matchAll(/\{([A-Za-z][A-Za-z0-9_]*)\}/g)]
   .map((match) => match[1]);
@@ -164,15 +201,15 @@ const normalizeSelector = (value) => {
   return match ? Object.freeze({ tag: match[1], requiredAttribute: match[2] }) : null;
 };
 
-const normalizeRequestStep = (step) => {
+const normalizeRequestStep = (step, normalize = normalizeTemplate) => {
   const allowed = new Set(['type', 'method', 'path', 'query', 'headers', 'form', 'json', 'saveAs']);
   if (!isPlainObject(step) || Object.keys(step).some((key) => !allowed.has(key)) ||
       !['GET', 'POST'].includes(step.method) || !VARIABLE_NAME.test(step.saveAs)) return null;
-  const path = normalizeTemplate(step.path);
-  const query = normalizeTemplateObject(step.query);
-  const headers = normalizeTemplateObject(step.headers, REQUEST_HEADER_ALLOWLIST);
-  const form = normalizeTemplateObject(step.form);
-  const json = normalizeTemplateObject(step.json);
+  const path = normalize(step.path);
+  const query = normalizeTemplateObject(step.query, null, normalize);
+  const headers = normalizeTemplateObject(step.headers, REQUEST_HEADER_ALLOWLIST, normalize);
+  const form = normalizeTemplateObject(step.form, null, normalize);
+  const json = normalizeTemplateObject(step.json, null, normalize);
   if (!path || !query || !headers || !form || !json ||
       Object.keys(form).length && Object.keys(json).length ||
       step.method === 'GET' && (Object.keys(form).length || Object.keys(json).length)) return null;
@@ -241,6 +278,37 @@ const normalizeParseJsonManyStep = (step) => {
     maxItems: collection.maxItems });
 };
 
+const normalizeRequestEachStep = (step) => {
+  const allowed = new Set(['type', 'from', 'request', 'extract', 'saveAs',
+    'maxFanout', 'maxItemsPerResponse']);
+  if (!isPlainObject(step) || Object.keys(step).some((key) => !allowed.has(key)) ||
+      !VARIABLE_NAME.test(step.from) || !VARIABLE_NAME.test(step.saveAs) ||
+      !isPlainObject(step.request) || !isPlainObject(step.extract)) return null;
+  const requestAllowed = new Set(['method', 'path', 'query', 'headers', 'form', 'json']);
+  const extractAllowed = new Set(['parser', 'path', 'fields']);
+  if (Object.keys(step.request).some((key) => !requestAllowed.has(key)) ||
+      Object.keys(step.extract).some((key) => !extractAllowed.has(key))) return null;
+  const maxFanout = step.maxFanout === undefined ? DEFAULT_MAX_FANOUT : step.maxFanout;
+  const maxItemsPerResponse = step.maxItemsPerResponse === undefined
+    ? DEFAULT_MAX_ITEMS : step.maxItemsPerResponse;
+  if (!Number.isInteger(maxFanout) || maxFanout < 1 || maxFanout > HARD_MAX_FANOUT ||
+      !Number.isInteger(maxItemsPerResponse) || maxItemsPerResponse < 1 ||
+      maxItemsPerResponse > HARD_MAX_ITEMS) return null;
+  const request = normalizeRequestStep({ ...step.request,
+    method: typeof step.request.method === 'string'
+      ? step.request.method.toUpperCase() : step.request.method,
+    type: 'request', saveAs: 'response' },
+    normalizeMixedTemplate);
+  const extract = normalizeExtractManyStep({ ...step.extract, type: 'extractMany',
+    from: 'response', saveAs: 'items', maxItems: maxItemsPerResponse });
+  if (!request || !extract) return null;
+  return Object.freeze({ type: 'requestEach', from: step.from,
+    request: Object.freeze({ method: request.method, path: request.path, query: request.query,
+      headers: request.headers, form: request.form, json: request.json }),
+    extract: Object.freeze({ parser: 'json', path: extract.path, fields: extract.fields }),
+    saveAs: step.saveAs, maxFanout, maxItemsPerResponse });
+};
+
 const normalizeFilterManyStep = (step) => {
   const allowed = new Set(['type', 'from', 'field', 'equals', 'saveAs', 'maxItems']);
   if (!isPlainObject(step) || Object.keys(step).some((key) => !allowed.has(key)) ||
@@ -300,6 +368,7 @@ const normalizeWorkflow = (workflow, maxSteps) => {
   const responses = new Set();
   const collections = new Map();
   const assigned = new Set(available);
+  let hasRequestEach = false;
   for (const rawStep of workflow) {
     const type = typeof rawStep?.type === 'string' ? rawStep.type.toLowerCase() : '';
     const step = type === 'request' ? normalizeRequestStep({ ...rawStep, type,
@@ -307,10 +376,11 @@ const normalizeWorkflow = (workflow, maxSteps) => {
       : type === 'extract' ? normalizeExtractStep({ ...rawStep, type })
         : type === 'extractmany' ? normalizeExtractManyStep({ ...rawStep, type })
           : type === 'parsejsonmany' ? normalizeParseJsonManyStep({ ...rawStep, type })
-            : type === 'filtermany' ? normalizeFilterManyStep({ ...rawStep, type })
-              : type === 'bindone' ? normalizeBindOneStep({ ...rawStep, type })
-                : type === 'emit' ? normalizeEmitStep({ ...rawStep, type })
-                  : type === 'emiteach' ? normalizeEmitStep({ ...rawStep, type }, true) : null;
+            : type === 'requesteach' ? normalizeRequestEachStep({ ...rawStep, type })
+              : type === 'filtermany' ? normalizeFilterManyStep({ ...rawStep, type })
+                : type === 'bindone' ? normalizeBindOneStep({ ...rawStep, type })
+                  : type === 'emit' ? normalizeEmitStep({ ...rawStep, type })
+                    : type === 'emiteach' ? normalizeEmitStep({ ...rawStep, type }, true) : null;
     if (!step) return null;
     const templates = step.type === 'request'
       ? [step.path, ...Object.values(step.query), ...Object.values(step.headers),
@@ -337,6 +407,20 @@ const normalizeWorkflow = (workflow, maxSteps) => {
       collections.set(step.saveAs, new Set(Object.keys(step.fields)));
       assigned.add(step.saveAs);
     }
+    if (step.type === 'requestEach') {
+      const fields = collections.get(step.from);
+      if (!fields || hasRequestEach || assigned.has(step.saveAs)) return null;
+      const templates = [step.request.path, ...Object.values(step.request.query),
+        ...Object.values(step.request.headers), ...Object.values(step.request.form),
+        ...Object.values(step.request.json)];
+      if (templates.some((template) => itemTemplateNames(template)
+        .some((name) => !fields.has(name)) ||
+        templateNames(template.replace(ITEM_PLACEHOLDER, ''))
+          .some((name) => !available.has(name)))) return null;
+      collections.set(step.saveAs, new Set(Object.keys(step.extract.fields)));
+      assigned.add(step.saveAs);
+      hasRequestEach = true;
+    }
     if (step.type === 'filterMany') {
       const fields = collections.get(step.from);
       if (!fields || !fields.has(step.field) || assigned.has(step.saveAs)) return null;
@@ -358,10 +442,10 @@ const normalizeWorkflow = (workflow, maxSteps) => {
   return Object.freeze(output);
 };
 
-const renderObject = (templates, variables) => {
+const renderObject = (templates, variables, render = renderTemplate) => {
   const output = {};
   for (const [name, template] of Object.entries(templates)) {
-    const value = renderTemplate(template, variables);
+    const value = render(template, variables);
     if (value === null) return null;
     output[name] = value;
   }
@@ -565,42 +649,49 @@ const createHttpWorkflowSourceProvider = ({
     const candidates = [];
     const deadlineAt = Math.min(now() + timeoutMs,
       Number.isFinite(runtime.deadlineAt) ? runtime.deadlineAt : Infinity);
+    let requestCount = 0;
+    const executeRequest = async (step, render = renderTemplate) => {
+      const remainingMs = Math.floor(deadlineAt - now());
+      if (remainingMs < 1) throw Object.assign(new Error('HTTP_TIMEOUT'), { code: 'HTTP_TIMEOUT' });
+      const renderedPath = render(step.path, variables);
+      const query = renderObject(step.query, variables, render);
+      const headers = renderObject(step.headers, variables, render);
+      const form = renderObject(step.form, variables, render);
+      const json = renderObject(step.json, variables, render);
+      if (renderedPath === null || !query || !headers || !form || !json) return null;
+      let url;
+      try {
+        if (/^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(renderedPath)) return null;
+        url = new URL(renderedPath, base);
+        if (url.username || url.password || url.origin !== base.origin) return null;
+        for (const [name, value] of Object.entries(query)) url.searchParams.set(name, value);
+      } catch { return null; }
+      let body = null;
+      if (Object.keys(form).length) {
+        body = new URLSearchParams(form).toString();
+        headers['content-type'] = 'application/x-www-form-urlencoded';
+      } else if (Object.keys(json).length) {
+        body = JSON.stringify(json);
+        headers['content-type'] = 'application/json';
+      }
+      if (requestCount >= HARD_MAX_REQUESTS) {
+        throw providerError(ERROR_CODES.REQUEST_BUDGET_EXCEEDED);
+      }
+      requestCount += 1;
+      try {
+        return await client.request(step.method, url.toString(), {
+          headers, body, timeoutMs: remainingMs, maxBytes, maxRedirects,
+          signal: runtime.signal,
+        });
+      } catch (error) {
+        if (typeof error?.code === 'string' && error.code.startsWith('HTTP_')) throw error;
+        throw providerError(ERROR_CODES.REQUEST_FAILED);
+      }
+    };
     for (const step of steps) {
       if (step.type === 'request') {
-        const remainingMs = Math.floor(deadlineAt - now());
-        if (remainingMs < 1) throw Object.assign(new Error('HTTP_TIMEOUT'), { code: 'HTTP_TIMEOUT' });
-        const renderedPath = renderTemplate(step.path, variables);
-        const query = renderObject(step.query, variables);
-        const headers = renderObject(step.headers, variables);
-        const form = renderObject(step.form, variables);
-        const json = renderObject(step.json, variables);
-        if (renderedPath === null || !query || !headers || !form || !json) return [];
-        let url;
-        try {
-          if (/^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(renderedPath)) return [];
-          url = new URL(renderedPath, base);
-          if (url.username || url.password || url.origin !== base.origin) return [];
-          for (const [name, value] of Object.entries(query)) url.searchParams.set(name, value);
-        } catch { return []; }
-        let body = null;
-        if (Object.keys(form).length) {
-          body = new URLSearchParams(form).toString();
-          headers['content-type'] = 'application/x-www-form-urlencoded';
-        } else if (Object.keys(json).length) {
-          body = JSON.stringify(json);
-          headers['content-type'] = 'application/json';
-        }
-        let response;
-        try {
-          response = await client.request(step.method, url.toString(), {
-            headers, body, timeoutMs: remainingMs, maxBytes, maxRedirects,
-            signal: runtime.signal,
-          });
-        } catch (error) {
-          if (typeof error?.code === 'string' && error.code.startsWith('HTTP_')) throw error;
-          throw providerError(ERROR_CODES.REQUEST_FAILED);
-        }
-        if (response.status === 404) return [];
+        const response = await executeRequest(step);
+        if (!response || response.status === 404) return [];
         if (!response.ok) throw providerError(ERROR_CODES.HTTP_ERROR);
         responses[step.saveAs] = response;
         continue;
@@ -655,6 +746,47 @@ const createHttpWorkflowSourceProvider = ({
         if (value === null) return [];
         collections[step.saveAs] = value.items;
         collectionComplete[step.saveAs] = value.complete;
+        continue;
+      }
+      if (step.type === 'requestEach') {
+        const source = collections[step.from];
+        if (!Array.isArray(source)) return [];
+        if (!collectionComplete[step.from] || source.length > step.maxFanout) {
+          throw providerError(ERROR_CODES.FANOUT_LIMIT_EXCEEDED);
+        }
+        const aggregated = [];
+        let complete = true;
+        for (const item of source) {
+          const response = await executeRequest(step.request,
+            (template) => renderMixedTemplate(template, variables, item));
+          if (!response || response.status === 404) { complete = false; continue; }
+          if (!response.ok) throw providerError(ERROR_CODES.HTTP_ERROR);
+          const contentType = response.headers?.['content-type'];
+          if (typeof contentType !== 'string' || !JSON_CONTENT_TYPE.test(contentType.trim())) {
+            complete = false;
+            continue;
+          }
+          if (!Buffer.isBuffer(response.body) || response.body.length > maxBytes) {
+            throw providerError(ERROR_CODES.CAPTURE_TOO_LARGE);
+          }
+          let payload;
+          try { payload = JSON.parse(response.body.toString('utf8')); } catch {
+            complete = false;
+            continue;
+          }
+          const result = extractMany(payload, {
+            path: step.extract.path, fields: step.extract.fields,
+            maxItems: step.maxItemsPerResponse,
+          });
+          if (result === null) { complete = false; continue; }
+          if (aggregated.length + result.items.length > HARD_MAX_ITEMS) {
+            throw providerError(ERROR_CODES.COLLECTION_LIMIT_EXCEEDED);
+          }
+          aggregated.push(...result.items);
+          complete = complete && result.complete;
+        }
+        collections[step.saveAs] = Object.freeze(aggregated);
+        collectionComplete[step.saveAs] = complete;
         continue;
       }
       if (step.type === 'filterMany') {

@@ -4,8 +4,7 @@ const http = require('node:http');
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
 const { createSafeHttpClient } = require('../src/modules/streams/http/safeHttpClient');
-const { createHttpWorkflowSourceProvider, normalizeWorkflow, ERROR_CODES,
-  HARD_MAX_STEPS, extractText } =
+const { normalizeWorkflow, HARD_MAX_STEPS, extractText } =
   require('../src/modules/streams/resolverV2/providers/httpWorkflowSourceProvider');
 const { loadResolverV2Catalog } =
   require('../src/modules/streams/resolverV2/catalog/catalogLoader');
@@ -67,17 +66,13 @@ const workflows = Object.freeze({
   MULTI_STEP_COLLECTION_FANOUT: Object.freeze([
     { type: 'request', method: 'GET', path: '/api/qualities', saveAs: 'response' },
     { type: 'extractMany', from: 'response', parser: 'json', path: 'qualities',
-      fields: { qualityId: 'id' }, saveAs: 'qualities' },
-    // No request-per-item step exists; these remaining steps describe the desired flow only.
-    { type: 'requestEach', from: 'qualities', path: '/quality/{item.qualityId}',
-      saveAs: 'qualityResponses' },
-    { type: 'extractMany', from: 'qualityResponses', parser: 'json', path: 'links',
-      fields: { linkId: 'id' }, saveAs: 'links' },
-    { type: 'requestEach', from: 'links', path: '/link/{item.linkId}',
-      saveAs: 'linkResponses' },
-    { type: 'extractMany', from: 'linkResponses', parser: 'json', path: 'streams',
-      fields: { url: 'url' }, saveAs: 'streams' },
-    { type: 'emitEach', from: 'streams', url: '{item.url}' },
+      fields: { quality: 'quality' }, saveAs: 'qualities' },
+    { type: 'requestEach', from: 'qualities', request: { method: 'POST', path: '/step2',
+      form: { quality: '{item.quality}', external_id: '{externalId}' } },
+    extract: { parser: 'json', path: 'links', fields: { url: 'url', language: 'language' } },
+    saveAs: 'links', maxFanout: 4, maxItemsPerResponse: 8 },
+    { type: 'emitEach', from: 'links', url: '{item.url}',
+      languageHint: '{item.language}' },
   ]),
 });
 
@@ -85,26 +80,28 @@ const conformance = Object.freeze({
   JSON_LIST_TO_STREAMS: Object.freeze({ family: 'JSON_LIST_TO_STREAMS',
     status: 'SUPPORTED', stepsRepresentable: 3,
     firstMissingCapability: null, additionalMissingCapabilities: [],
-    workflowStepCount: 3, maxStepsBlocked: false, embedCandidates: 2, validatedStreams: 2 }),
+    workflowStepCount: 3, maxStepsBlocked: false, httpRequests: 1, fanout: 0,
+    embedCandidates: 2, validatedStreams: 2 }),
   EXACT_EPISODE_API_CHAIN: Object.freeze({ family: 'EXACT_EPISODE_API_CHAIN',
     status: 'SUPPORTED', stepsRepresentable: 7,
     firstMissingCapability: null, additionalMissingCapabilities: [],
-    workflowStepCount: 7, maxStepsBlocked: false, embedCandidates: 1, validatedStreams: 1 }),
+    workflowStepCount: 7, maxStepsBlocked: false, httpRequests: 2, fanout: 0,
+    embedCandidates: 1, validatedStreams: 1 }),
   HTML_SINGLE_EMBED: Object.freeze({ family: 'HTML_SINGLE_EMBED',
     status: 'SUPPORTED', stepsRepresentable: 3,
     firstMissingCapability: null, additionalMissingCapabilities: [],
-    workflowStepCount: 3, maxStepsBlocked: false, embedCandidates: 1, validatedStreams: 1 }),
+    workflowStepCount: 3, maxStepsBlocked: false, httpRequests: 1, fanout: 0,
+    embedCandidates: 1, validatedStreams: 1 }),
   EMBEDDED_JSON_ARRAY_IN_HTML: Object.freeze({ family: 'EMBEDDED_JSON_ARRAY_IN_HTML',
     status: 'SUPPORTED',
     stepsRepresentable: 4, firstMissingCapability: null,
     additionalMissingCapabilities: [], workflowStepCount: 4, maxStepsBlocked: false,
+    httpRequests: 1, fanout: 0,
     embedCandidates: 2, validatedStreams: 2 }),
   MULTI_STEP_COLLECTION_FANOUT: Object.freeze({ family: 'MULTI_STEP_COLLECTION_FANOUT',
-    status: 'PARTIALLY_SUPPORTED',
-    stepsRepresentable: 2, firstMissingCapability: 'BOUNDED_REQUEST_EACH',
-    additionalMissingCapabilities: ['nested_response_aggregation'],
-    workflowStepCount: 7, maxStepsBlocked: false,
-    embedCandidates: 0, validatedStreams: 0 }),
+    status: 'SUPPORTED', stepsRepresentable: 4, firstMissingCapability: null,
+    additionalMissingCapabilities: [], workflowStepCount: 4, maxStepsBlocked: false,
+    httpRequests: 3, fanout: 2, embedCandidates: 2, validatedStreams: 2 }),
 });
 
 const embeddedHtml = (base) => `<script type="application/json">{"sources":` +
@@ -113,6 +110,7 @@ const embeddedHtml = (base) => `<script type="application/json">{"sources":` +
 
 const fixtureServer = async (t) => {
   const requests = [];
+  const step2Bodies = [];
   const server = http.createServer((incoming, response) => {
     requests.push({ method: incoming.method, path: incoming.url });
     const base = `http://127.0.0.1:${server.address().port}`;
@@ -145,8 +143,19 @@ const fixtureServer = async (t) => {
       return undefined;
     }
     if (incoming.url === '/api/qualities') return json({ qualities: [
-      { id: 'low' }, { id: 'high' },
+      { quality: '720p' }, { quality: '1080p' },
     ] });
+    if (incoming.url === '/step2' && incoming.method === 'POST') {
+      let body = '';
+      incoming.on('data', (chunk) => { body += chunk; });
+      incoming.on('end', () => {
+        const fields = Object.fromEntries(new URLSearchParams(body));
+        step2Bodies.push(fields);
+        const suffix = fields.quality === '720p' ? 'a' : 'b';
+        json({ links: [{ url: `${base}/hls/${suffix}.m3u8`, language: 'es-419' }] });
+      });
+      return undefined;
+    }
     if (incoming.url.startsWith('/hls/')) {
       response.writeHead(200, { 'content-type': 'application/vnd.apple.mpegurl' });
       response.end('#EXTM3U\n#EXT-X-TARGETDURATION:4\n#EXTINF:4,\nsegment.ts\n#EXT-X-ENDLIST\n');
@@ -157,7 +166,7 @@ const fixtureServer = async (t) => {
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   t.after(() => new Promise((resolve) => server.close(resolve)));
-  return { baseUrl: `http://127.0.0.1:${server.address().port}`, requests };
+  return { baseUrl: `http://127.0.0.1:${server.address().port}`, requests, step2Bodies };
 };
 
 const mappedSource = async ({ baseUrl, workflow, mediaContext, externalId, client }) => {
@@ -183,6 +192,8 @@ test('conformance matrix has exactly five bounded families and no maxSteps-only 
     assert.equal(result.workflowStepCount, workflows[family].length);
     assert.equal(result.maxStepsBlocked, result.workflowStepCount > HARD_MAX_STEPS);
     assert.ok(result.stepsRepresentable <= result.workflowStepCount);
+    assert.ok(result.httpRequests >= 0 && result.httpRequests <= 8);
+    assert.ok(result.fanout >= 0 && result.fanout <= 8);
     assert.ok(['SUPPORTED', 'PARTIALLY_SUPPORTED', 'UNSUPPORTED'].includes(result.status));
   }
 });
@@ -261,30 +272,27 @@ test('D EMBEDDED_JSON_ARRAY_IN_HTML: bounded capture parses two validated HLS so
     ]);
   });
 
-test('E MULTI_STEP_COLLECTION_FANOUT: array extraction works but cannot request per item',
+test('E MULTI_STEP_COLLECTION_FANOUT: two sequential item requests validate two HLS',
   async (t) => {
     const fixture = await fixtureServer(t);
-    assert.equal(normalizeWorkflow(workflows.MULTI_STEP_COLLECTION_FANOUT,
-      HARD_MAX_STEPS), null);
-    const prefix = workflows.MULTI_STEP_COLLECTION_FANOUT.slice(0, 2);
-    assert.ok(normalizeWorkflow(prefix, HARD_MAX_STEPS));
+    assert.ok(normalizeWorkflow(workflows.MULTI_STEP_COLLECTION_FANOUT, HARD_MAX_STEPS));
     const client = createSafeHttpClient({ allowPrivateNetworks: true });
-    assert.deepEqual(await mappedSource({ baseUrl: fixture.baseUrl, workflow: prefix,
-      mediaContext: movie, externalId: 'unused', client }), []);
-    assert.deepEqual(fixture.requests, [{ method: 'GET', path: '/api/qualities' }]);
-    const attemptedScalarPath = [...prefix,
-      { type: 'bindOne', from: 'qualities', fields: { qualityId: 'qualityId' } },
-      { type: 'request', method: 'GET', path: '/quality/{qualityId}', saveAs: 'quality' }];
-    const provider = createHttpWorkflowSourceProvider({ id: 'workflow_a', enabled: true,
-      baseUrl: fixture.baseUrl, http: client, maxSteps: HARD_MAX_STEPS,
-      workflow: attemptedScalarPath });
-    await assert.rejects(provider.getSources(movie,
-      { providerMediaRef: mapping(movie, 'unused') }),
-    { code: ERROR_CODES.AMBIGUOUS_COLLECTION });
+    const candidates = await mappedSource({ baseUrl: fixture.baseUrl,
+      workflow: workflows.MULTI_STEP_COLLECTION_FANOUT,
+      mediaContext: movie, externalId: 'item-123', client });
+    const result = await validate(client, movie, candidates);
+    assert.equal(candidates.length, conformance.MULTI_STEP_COLLECTION_FANOUT.embedCandidates);
+    assert.equal(result.streams.length, conformance.MULTI_STEP_COLLECTION_FANOUT.validatedStreams);
+    assert.ok(result.streams.every(({ validated, protocol }) => validated && protocol === 'hls'));
+    assert.deepEqual(fixture.step2Bodies, [
+      { quality: '720p', external_id: 'item-123' },
+      { quality: '1080p', external_id: 'item-123' },
+    ]);
     assert.deepEqual(fixture.requests, [
       { method: 'GET', path: '/api/qualities' },
-      { method: 'GET', path: '/api/qualities' },
+      { method: 'POST', path: '/step2' },
+      { method: 'POST', path: '/step2' },
+      { method: 'GET', path: '/hls/a.m3u8' },
+      { method: 'GET', path: '/hls/b.m3u8' },
     ]);
-    assert.equal(conformance.MULTI_STEP_COLLECTION_FANOUT.firstMissingCapability,
-      'BOUNDED_REQUEST_EACH');
   });
