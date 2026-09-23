@@ -145,6 +145,7 @@ test('PostgreSQL union deduplicates mappings and never updates mapping rows',
         ['movie', 101, null, null, 'two', 'active'],
         ['episode', 201, 1, 1, 'ep-one', 'active'],
         ['episode', 201, 1, 2, 'ep-two', 'active'],
+        ['series', 201, null, null, 'show-one', 'active'],
         ['movie', 301, null, null, 'inactive', 'inactive'],
       ]) {
         await db.query(`INSERT INTO provider_media_mappings

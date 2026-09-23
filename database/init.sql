@@ -14,4 +14,5 @@ BEGIN;
 \ir migrations/008_temporary_stream_urls.sql
 \ir migrations/009_provider_media_mappings.sql
 \ir migrations/010_bulk_ingestion_persistence.sql
+\ir migrations/011_series_provider_mappings.sql
 COMMIT;

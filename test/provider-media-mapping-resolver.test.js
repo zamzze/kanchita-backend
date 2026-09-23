@@ -96,11 +96,26 @@ test('episode identity is translated exactly to store lookup and runtime ref', a
   assert.equal(refs[0].episodeNumber, 3);
 });
 
+test('series identity resolves without season or episode and remains distinct', async () => {
+  const showRow = row({ content_type: 'series', tmdb_id: 42,
+    external_id: 'show-external' });
+  const { calls, resolver } = resolverFor([showRow]);
+  const refs = await resolver.resolve({ providerId: 'pluto', region: 'latam',
+    mediaContext: { contentType: 'series', tmdbId: 42 } });
+  assert.deepEqual(calls[0], { providerId: 'pluto', region: 'latam',
+    contentType: 'series', tmdbId: 42, seasonNumber: null, episodeNumber: null });
+  assert.equal(refs[0].contentType, 'series');
+  assert.equal(refs[0].externalId, 'show-external');
+  assert.equal(Object.isFrozen(refs[0]), true);
+});
+
 test('invalid movie and episode identities fail closed without consulting store', async () => {
   const { calls, resolver } = resolverFor([row()]);
   for (const mediaContext of [
     { contentType: 'movie', tmdbId: 550, season: 1 },
     { contentType: 'movie', tmdbId: 550, episode: 1 },
+    { contentType: 'series', tmdbId: 550, season: 1 },
+    { contentType: 'series', tmdbId: 550, episode: 1 },
     { contentType: 'episode', tmdbId: 42, season: -1, episode: 1 },
     { contentType: 'episode', tmdbId: 42, season: 1, episode: 0 },
     { contentType: 'episode', tmdbId: 42, season: 1 },

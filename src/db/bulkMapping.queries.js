@@ -10,11 +10,16 @@ const catalogSql = `SELECT content_type, content_id, tmdb_id, title, original_ti
       NULL::integer AS season_number, NULL::integer AS episode_number
     FROM movies m WHERE m.tmdb_id IS NOT NULL
     UNION ALL
+    SELECT 'series'::text, s.id, s.tmdb_id, s.title, s.original_title,
+      s.release_year, NULL::integer, NULL::integer
+    FROM series s WHERE s.tmdb_id IS NOT NULL
+    UNION ALL
     SELECT 'episode'::text, e.id, s.tmdb_id, s.title, s.original_title,
       s.release_year, e.season_number, e.episode_number
     FROM episodes e JOIN series s ON s.id = e.series_id
     WHERE s.tmdb_id IS NOT NULL
-  ) catalog ORDER BY CASE WHEN content_type = 'movie' THEN 0 ELSE 1 END,
+  ) catalog ORDER BY CASE content_type WHEN 'movie' THEN 0
+    WHEN 'series' THEN 1 ELSE 2 END,
     tmdb_id, season_number NULLS FIRST, episode_number NULLS FIRST, content_id`;
 
 const createBulkMappingStore = (db) => {
@@ -51,8 +56,9 @@ const createBulkMappingStore = (db) => {
         ('provider_mapping',$1::jsonb,'{}'::jsonb) RETURNING *`, [JSON.stringify(config)]);
       const runId = run.rows[0].id;
       const inserted = await client.query(`INSERT INTO ingestion_run_items
-        (run_id,movie_id,episode_id)
+        (run_id,movie_id,series_id,episode_id)
         SELECT $1, CASE WHEN content_type = 'movie' THEN content_id END,
+          CASE WHEN content_type = 'series' THEN content_id END,
           CASE WHEN content_type = 'episode' THEN content_id END
         FROM (${catalogSql} LIMIT $2::integer) selected RETURNING id`,
       [runId, config.limit ?? 100_000]);
@@ -67,8 +73,9 @@ const createBulkMappingStore = (db) => {
   const loadItemMedia = async (runId, itemId) => {
     if (!uuid(runId) || !uuid(itemId)) throw invalid('BULK_MAPPING_INVALID_ITEM');
     const { rows } = await db.query(`SELECT
-      CASE WHEN item.movie_id IS NOT NULL THEN 'movie' ELSE 'episode' END AS content_type,
-      COALESCE(item.movie_id,item.episode_id) AS content_id,
+      CASE WHEN item.movie_id IS NOT NULL THEN 'movie'
+        WHEN item.series_id IS NOT NULL THEN 'series' ELSE 'episode' END AS content_type,
+      COALESCE(item.movie_id,item.series_id,item.episode_id) AS content_id,
       COALESCE(movie.tmdb_id, series.tmdb_id) AS tmdb_id,
       COALESCE(movie.title, series.title) AS title,
       COALESCE(movie.original_title, series.original_title) AS original_title,
@@ -77,12 +84,12 @@ const createBulkMappingStore = (db) => {
       FROM ingestion_run_items item
       LEFT JOIN movies movie ON movie.id=item.movie_id
       LEFT JOIN episodes episode ON episode.id=item.episode_id
-      LEFT JOIN series series ON series.id=episode.series_id
+      LEFT JOIN series series ON series.id=COALESCE(item.series_id,episode.series_id)
       WHERE item.run_id=$1 AND item.id=$2`, [runId, itemId]);
     return rows[0] || null;
   };
   const findActiveMappings = async (media) => {
-    if (!media || !['movie', 'episode'].includes(media.contentType) ||
+    if (!media || !['movie', 'series', 'episode'].includes(media.contentType) ||
         !Number.isSafeInteger(media.tmdbId) || media.tmdbId < 1) {
       throw invalid('BULK_MAPPING_INVALID_MEDIA');
     }

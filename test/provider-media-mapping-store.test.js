@@ -17,6 +17,12 @@ test('mapping input is generic, strict and episode-ready', () => {
     contentType: 'episode', tmdbId: 10, seasonNumber: 1 }), null);
   assert.equal(normalizeLookup({ providerId: 'pluto', region: 'latam',
     contentType: 'movie', tmdbId: 1, seasonNumber: 1 }), null);
+  assert.deepEqual(normalizeLookup({ providerId: 'pluto', region: 'latam',
+    contentType: 'series', tmdbId: 10 }), { providerId: 'pluto', region: 'latam',
+    contentType: 'series', tmdbId: 10, seasonNumber: null,
+    episodeNumber: null, status: null });
+  assert.equal(normalizeLookup({ providerId: 'pluto', region: 'latam',
+    contentType: 'series', tmdbId: 10, seasonNumber: 1 }), null);
   assert.equal(normalizeMapping({ providerId: 'pluto', region: 'latam',
     contentType: 'movie', tmdbId: 0, externalId: 'x' }), null);
 });
@@ -123,6 +129,16 @@ test('PostgreSQL mapping store preserves history and selects active mapping dete
         externalId: second.external_id });
       assert.equal((await store.findActiveMapping({ providerId: 'pluto', region: 'latam',
         contentType: 'movie', tmdbId: 550 })).external_id, first.external_id);
+      const seriesMapping = { providerId: 'pluto', region: 'latam',
+        contentType: 'series', tmdbId: 42, externalId: 'show-42', status: 'active' };
+      const showFirst = await store.upsertMapping(seriesMapping);
+      const showAgain = await store.upsertMapping(seriesMapping);
+      assert.equal(showFirst.change, 'inserted');
+      assert.equal(showAgain.change, 'unchanged');
+      assert.equal((await store.findActiveMappings({ providerId: 'pluto',
+        region: 'latam', contentType: 'series', tmdbId: 42 })).length, 1);
+      assert.equal((await store.findMappings({ providerId: 'pluto', region: 'latam',
+        contentType: 'movie', tmdbId: 550 })).length, 2);
     } finally {
       if (pool) await pool.end();
       await admin.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);

@@ -2,7 +2,7 @@
 
 const PROVIDER_ID = /^[a-z0-9][a-z0-9_-]{0,127}$/;
 const REGION = /^[a-z0-9][a-z0-9_-]{0,31}$/;
-const CONTENT_TYPES = new Set(['movie', 'episode']);
+const CONTENT_TYPES = new Set(['movie', 'series', 'episode']);
 const HARD_MAX_MAPPINGS = 32;
 const DEFAULT_MAX_MAPPINGS = 8;
 const MAX_METADATA_DEPTH = 8;
@@ -61,10 +61,10 @@ const normalizeIdentity = ({ providerId, region, mediaContext } = {}) => {
   if (!PROVIDER_ID.test(normalizedProvider) || !REGION.test(normalizedRegion) ||
       !isPlainObject(mediaContext) || !CONTENT_TYPES.has(mediaContext.contentType) ||
       !Number.isInteger(mediaContext.tmdbId) || mediaContext.tmdbId < 1) return null;
-  if (mediaContext.contentType === 'movie') {
+  if (mediaContext.contentType !== 'episode') {
     if (mediaContext.season != null || mediaContext.episode != null) return null;
     return Object.freeze({ providerId: normalizedProvider, region: normalizedRegion,
-      contentType: 'movie', tmdbId: mediaContext.tmdbId,
+      contentType: mediaContext.contentType, tmdbId: mediaContext.tmdbId,
       seasonNumber: null, episodeNumber: null });
   }
   if (!Number.isInteger(mediaContext.season) || mediaContext.season < 0 ||

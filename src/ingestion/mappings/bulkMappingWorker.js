@@ -76,7 +76,7 @@ const createBulkMappingWorker = ({ registry, bulkStore, runStore, mappingStore,
     for (const provider of providers) {
       if (mappingCount >= target || stopRequested) break;
       if (media.contentType === 'movie' && !provider.supportsMovies ||
-          media.contentType === 'episode' && !provider.supportsSeries) continue;
+          media.contentType !== 'movie' && !provider.supportsSeries) continue;
       providerId = provider.id;
       try {
         const found = await registry.execute(provider, media);

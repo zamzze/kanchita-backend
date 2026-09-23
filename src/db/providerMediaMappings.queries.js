@@ -3,7 +3,7 @@
 const PROVIDER_ID = /^[a-z0-9][a-z0-9_-]{0,127}$/;
 const REGION = /^[a-z0-9][a-z0-9_-]{0,31}$/;
 const STATUSES = new Set(['active', 'inactive', 'review']);
-const CONTENT_TYPES = new Set(['movie', 'episode']);
+const CONTENT_TYPES = new Set(['movie', 'series', 'episode']);
 
 const mappingColumns = `id, provider_id, region, content_type, tmdb_id,
   season_number, episode_number, external_id, provider_title, provider_slug,

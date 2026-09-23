@@ -25,6 +25,9 @@ const episode = (id, tmdbId = id) => ({ content_type: 'episode',
   content_id: randomUUID(), tmdb_id: tmdbId, title: `Series ${id}`,
   original_title: `Series ${id}`, release_year: 2025,
   season_number: 2, episode_number: 3 });
+const series = (id, tmdbId = id) => ({ content_type: 'series', content_id: randomUUID(),
+  tmdb_id: tmdbId, title: `Series ${id}`, original_title: `Series ${id}`,
+  release_year: 2025, season_number: null, episode_number: null });
 const provider = (id, discoverMapping = async () => [], extra = {}) => ({
   id, enabled: true, priority: 10, supportsMovies: true, supportsSeries: true,
   region: 'latam', maxConcurrent: 1, minDelayMs: 0, discoverMapping, ...extra,
@@ -150,6 +153,14 @@ test('mapping contract accepts identity metadata but rejects URLs and secret met
   assert.equal(normalizeMappingResult(descriptor, media,
     { ...found('alpha'), streamUrl: 'https://media.example.test/' }), null);
   assert.equal(normalizeMappingResult(descriptor, media, found('other')), null);
+  const show = normalizeMedia({ contentType: 'series', tmdbId: 100, title: 'Show' });
+  assert.ok(show);
+  assert.equal(normalizeMedia({ contentType: 'series', tmdbId: 100,
+    title: 'Show', season: 1 }), null);
+  const showMapping = normalizeMappingResult(descriptor, show, found('alpha', 'show-id'));
+  assert.equal(showMapping.contentType, 'series');
+  assert.equal(showMapping.seasonNumber, null);
+  assert.equal(showMapping.episodeNumber, null);
 });
 
 test('registry validates descriptors, rejects duplicates and orders priority deterministically', () => {
@@ -236,8 +247,8 @@ test('miss and provider failure are isolated; later provider can succeed', async
   assert.equal(stores.mappings.length, 1);
 });
 
-test('movie/episode filtering and disabled provider', async () => {
-  const stores = fakeStores([movie(1), episode(2)]);
+test('movie/series/episode filtering and disabled provider', async () => {
+  const stores = fakeStores([movie(1), series(2), episode(3)]);
   const calls = [];
   const registry = createMappingRegistry([
     provider('movie_only', async () => { calls.push('movie'); return []; },
@@ -248,8 +259,8 @@ test('movie/episode filtering and disabled provider', async () => {
       { enabled: false }),
   ]);
   const result = await createBulkMappingWorker({ registry, ...stores }).run({});
-  assert.deepEqual(calls, ['movie', 'series']);
-  assert.equal(result.progress.no_mapping, 2);
+  assert.deepEqual(calls, ['movie', 'series', 'series']);
+  assert.equal(result.progress.no_mapping, 3);
 });
 
 test('dry-run does not create runs, items or mappings and reports each batch', async () => {
@@ -391,7 +402,7 @@ test('PostgreSQL worker persists mappings, uses disjoint claims and preserves ID
       const mappingStore = createProviderMediaMappingStore(db);
       const run = await bulkStore.createRunWithItems({ limit: null,
         providers: ['alpha'], targetMappings: 1, workers: 2, batchSize: 1 });
-      assert.equal(run.requested_count, 5);
+      assert.equal(run.requested_count, 6);
       await runStore.resumeRun(run.id);
       const [left, right] = await Promise.all([
         runStore.claimNextPendingItems(run.id, 1),
@@ -403,15 +414,15 @@ test('PostgreSQL worker persists mappings, uses disjoint claims and preserves ID
       const result = await createBulkMappingWorker({ registry, bulkStore,
         runStore, mappingStore }).run({ resume: run.id });
       assert.equal(result.status, 'completed');
-      assert.equal(result.progress.mapped, 5);
+      assert.equal(result.progress.mapped, 6);
       assert.equal((await db.query(`SELECT COUNT(*)::integer AS n
-        FROM provider_media_mappings`)).rows[0].n, 5);
+        FROM provider_media_mappings`)).rows[0].n, 6);
       const verifiedBefore = (await db.query(`SELECT last_verified_at FROM
         provider_media_mappings WHERE content_type='movie' AND tmdb_id=1`)).rows[0]
         .last_verified_at;
       const rerun = await createBulkMappingWorker({ registry, bulkStore,
         runStore, mappingStore }).run({ targetMappings: 1, workers: 2, batchSize: 2 });
-      assert.equal(rerun.progress.skipped, 5);
+      assert.equal(rerun.progress.skipped, 6);
       await createBulkMappingWorker({ registry, bulkStore, runStore, mappingStore,
         now: () => Date.now() + 60_000 }).run({ targetMappings: 2,
         workers: 2, batchSize: 2 });
@@ -420,7 +431,7 @@ test('PostgreSQL worker persists mappings, uses disjoint claims and preserves ID
         .last_verified_at;
       assert.ok(verifiedAfter > verifiedBefore);
       assert.equal((await db.query(`SELECT COUNT(*)::integer AS n
-        FROM provider_media_mappings`)).rows[0].n, 5);
+        FROM provider_media_mappings`)).rows[0].n, 6);
       assert.deepEqual((await db.query('SELECT id FROM movies ORDER BY tmdb_id')).rows
         .map((row) => row.id), movies);
     } finally {

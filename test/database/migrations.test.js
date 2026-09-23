@@ -40,6 +40,7 @@ test('migration files are ordered and checksummed deterministically', async () =
       '008_temporary_stream_urls.sql',
       '009_provider_media_mappings.sql',
       '010_bulk_ingestion_persistence.sql',
+      '011_series_provider_mappings.sql',
     ]
   );
   assert.ok(migrations.every(({ checksum }) => /^[a-f0-9]{64}$/.test(checksum)));
@@ -59,6 +60,7 @@ test(
       empty: schemaName('empty'),
       legacy: schemaName('legacy'),
       duplicate: schemaName('duplicate'),
+      upgrade: schemaName('upgrade'),
     };
     const adminPool = new Pool({ connectionString: TEST_DB_URL });
     const pools = {};
@@ -71,6 +73,33 @@ test(
       pools.empty = poolForSchema(TEST_DB_URL, schemas.empty);
       pools.legacy = poolForSchema(TEST_DB_URL, schemas.legacy);
       pools.duplicate = poolForSchema(TEST_DB_URL, schemas.duplicate);
+      pools.upgrade = poolForSchema(TEST_DB_URL, schemas.upgrade);
+
+      await t.test('011 upgrades existing Pluto mappings without changing their identities',
+        async () => {
+          const migrations = await loadMigrations();
+          await pools.upgrade.query(`CREATE TABLE schema_migrations (
+            version VARCHAR(255) PRIMARY KEY, checksum CHAR(64) NOT NULL,
+            applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
+          for (const migration of migrations.filter(({ version }) =>
+            version < '011_series_provider_mappings.sql')) {
+            await pools.upgrade.query(migration.sql);
+            await pools.upgrade.query(`INSERT INTO schema_migrations (version, checksum)
+              VALUES ($1,$2)`, [migration.version, migration.checksum]);
+          }
+          const existing = await pools.upgrade.query(`INSERT INTO provider_media_mappings
+            (provider_id,region,content_type,tmdb_id,season_number,episode_number,external_id)
+            VALUES ('pluto','latam','movie',550,NULL,NULL,'legacy-movie'),
+              ('pluto','latam','episode',42,1,2,'legacy-episode')
+            RETURNING id, content_type, external_id`);
+          const result = await runMigrations({ pool: pools.upgrade, logger: silentLogger });
+          assert.deepEqual(result.applied, ['011_series_provider_mappings.sql']);
+          const preserved = await pools.upgrade.query(`SELECT id,content_type,external_id
+            FROM provider_media_mappings ORDER BY id`);
+          assert.deepEqual(preserved.rows, existing.rows);
+          assert.deepEqual((await runMigrations({ pool: pools.upgrade,
+            logger: silentLogger })).applied, []);
+        });
 
       await t.test('applies all migrations to an empty schema only once', async () => {
         const first = await runMigrations({
@@ -88,6 +117,7 @@ test(
           '008_temporary_stream_urls.sql',
           '009_provider_media_mappings.sql',
           '010_bulk_ingestion_persistence.sql',
+          '011_series_provider_mappings.sql',
         ]);
 
         const second = await runMigrations({
@@ -126,6 +156,18 @@ test(
           const names = indexes.rows.map(({ indexname }) => indexname);
           assert.ok(names.includes('provider_media_mappings_lookup_idx'));
           assert.ok(names.includes('provider_media_mappings_episode_lookup_idx'));
+          const series = await pools.empty.query(`
+            INSERT INTO provider_media_mappings
+              (provider_id, region, content_type, tmdb_id, external_id)
+            VALUES ('pluto', 'latam', 'series', 42, 'show-one') RETURNING id
+          `);
+          assert.equal(series.rowCount, 1);
+          await assert.rejects(pools.empty.query(`
+            INSERT INTO provider_media_mappings
+              (provider_id, region, content_type, tmdb_id,
+               season_number, episode_number, external_id)
+            VALUES ('pluto', 'latam', 'series', 42, 1, 1, 'invalid-show')
+          `), (error) => error.code === '23514');
           await pools.empty.query(`
             INSERT INTO provider_media_mappings
               (provider_id, region, content_type, tmdb_id, external_id)

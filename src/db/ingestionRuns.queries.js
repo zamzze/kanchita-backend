@@ -19,9 +19,10 @@ const normalizeRun = (input) => {
 
 const normalizeItemIdentity = (input) => {
   if (!uuid(input?.runId) || !uuid(input?.contentId) ||
-      !['movie', 'episode'].includes(input?.contentType)) return null;
+      !['movie', 'series', 'episode'].includes(input?.contentType)) return null;
   return Object.freeze({ runId: input.runId,
     movieId: input.contentType === 'movie' ? input.contentId : null,
+    seriesId: input.contentType === 'series' ? input.contentId : null,
     episodeId: input.contentType === 'episode' ? input.contentId : null });
 };
 
@@ -67,8 +68,9 @@ const createIngestionRunStore = (db) => {
   const upsertRunItem = async (input) => {
     const identity = normalizeItemIdentity(input);
     if (!identity) throw invalid('INGESTION_ITEM_INVALID_IDENTITY');
-    const column = identity.movieId ? 'movie_id' : 'episode_id';
-    const contentId = identity.movieId || identity.episodeId;
+    const column = identity.movieId ? 'movie_id' : identity.seriesId
+      ? 'series_id' : 'episode_id';
+    const contentId = identity.movieId || identity.seriesId || identity.episodeId;
     const { rows } = await db.query(`INSERT INTO ingestion_run_items (run_id, ${column})
       VALUES ($1,$2)
       ON CONFLICT (run_id, ${column}) WHERE ${column} IS NOT NULL DO UPDATE SET

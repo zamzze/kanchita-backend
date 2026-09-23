@@ -69,11 +69,11 @@ const createCatalogSeedStore = (db) => {
       throw invalid('CATALOG_MAPPING_INVALID_PROVIDER');
     }
     const { rows } = await db.query(`WITH identities AS (
-      SELECT DISTINCT CASE WHEN content_type = 'episode' THEN 'series'
+      SELECT DISTINCT CASE WHEN content_type IN ('episode', 'series') THEN 'series'
         ELSE 'movie' END AS catalog_type, tmdb_id
       FROM provider_media_mappings
       WHERE provider_id = $1 AND status = 'active'
-        AND content_type IN ('movie', 'episode')
+        AND content_type IN ('movie', 'series', 'episode')
     ) SELECT catalog_type, tmdb_id,
       CASE WHEN catalog_type = 'movie' THEN
         EXISTS (SELECT 1 FROM movies WHERE movies.tmdb_id = identities.tmdb_id)

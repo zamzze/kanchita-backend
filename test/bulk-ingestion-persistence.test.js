@@ -64,10 +64,11 @@ test('run and item identities reject unsafe state without importing a DB pool', 
   assert.equal(normalizeRun({ runType: 'catalog_batch', config: { apiKey: 'secret' } }), null);
   assert.equal(normalizeRun({ runType: 'catalog_batch', requestedCount: -1 }), null);
   assert.deepEqual(normalizeItemIdentity({ runId, contentType: 'movie', contentId }),
-    { runId, movieId: contentId, episodeId: null });
+    { runId, movieId: contentId, seriesId: null, episodeId: null });
   assert.deepEqual(normalizeItemIdentity({ runId, contentType: 'episode', contentId }),
-    { runId, movieId: null, episodeId: contentId });
-  assert.equal(normalizeItemIdentity({ runId, contentType: 'series', contentId }), null);
+    { runId, movieId: null, seriesId: null, episodeId: contentId });
+  assert.deepEqual(normalizeItemIdentity({ runId, contentType: 'series', contentId }),
+    { runId, movieId: null, seriesId: contentId, episodeId: null });
   for (const file of ['providerSources.queries.js', 'resolvedStreamCache.queries.js',
     'ingestionRuns.queries.js']) {
     const content = fs.readFileSync(path.join(__dirname, '..', 'src', 'db', file), 'utf8');
@@ -194,6 +195,7 @@ test('PostgreSQL bulk persistence and restart semantics',
       assert.ok(names.includes('provider_sources_active_idx'));
       assert.ok(names.includes('resolved_stream_cache_usable_idx'));
       assert.ok(names.includes('ingestion_run_items_claim_idx'));
+      assert.ok(names.includes('ingestion_run_items_series_unique'));
       const movie = await db.query(`INSERT INTO movies (tmdb_id,title)
         VALUES (550,'Fixture') RETURNING id`);
       const run = await runs.createRun({ runType: 'catalog_batch', requestedCount: 1 });
@@ -221,6 +223,17 @@ test('PostgreSQL bulk persistence and restart semantics',
       assert.equal(totals.mapped_count, 1);
       assert.equal(totals.failed_count, 0);
       assert.equal(totals.checkpoint_json.lastProcessedId, item.id);
+      const show = await db.query(`INSERT INTO series (tmdb_id,title)
+        VALUES (42,'Fixture show') RETURNING id`);
+      const seriesRun = await runs.createRun({ runType: 'provider_mapping', requestedCount: 1 });
+      const seriesItemInput = { runId: seriesRun.id, contentType: 'series',
+        contentId: show.rows[0].id };
+      const seriesItem = await runs.upsertRunItem(seriesItemInput);
+      assert.equal((await runs.upsertRunItem(seriesItemInput)).id, seriesItem.id);
+      await assert.rejects(db.query(`INSERT INTO ingestion_run_items
+        (run_id,movie_id,series_id) VALUES ($1,$2,$3)`,
+      [seriesRun.id, movie.rows[0].id, show.rows[0].id]),
+      (error) => error.code === '23514');
       const migrations = await db.query(`SELECT version FROM schema_migrations
         WHERE version = '010_bulk_ingestion_persistence.sql'`);
       assert.equal(migrations.rowCount, 1);

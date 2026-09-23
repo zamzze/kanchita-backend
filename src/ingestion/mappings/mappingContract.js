@@ -13,7 +13,7 @@ const label = (value, max) => value == null ? null :
     ? value.trim() : undefined;
 
 const normalizeMedia = (input) => {
-  if (!input || !['movie', 'episode'].includes(input.contentType) ||
+  if (!input || !['movie', 'series', 'episode'].includes(input.contentType) ||
       !Number.isSafeInteger(input.tmdbId) || input.tmdbId < 1 ||
       typeof input.title !== 'string' || !input.title.trim() ||
       input.title.length > 255 ||
