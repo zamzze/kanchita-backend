@@ -39,6 +39,7 @@ test('migration files are ordered and checksummed deterministically', async () =
       '007_safe_playback_headers.sql',
       '008_temporary_stream_urls.sql',
       '009_provider_media_mappings.sql',
+      '010_bulk_ingestion_persistence.sql',
     ]
   );
   assert.ok(migrations.every(({ checksum }) => /^[a-f0-9]{64}$/.test(checksum)));
@@ -86,6 +87,7 @@ test(
           '007_safe_playback_headers.sql',
           '008_temporary_stream_urls.sql',
           '009_provider_media_mappings.sql',
+          '010_bulk_ingestion_persistence.sql',
         ]);
 
         const second = await runMigrations({

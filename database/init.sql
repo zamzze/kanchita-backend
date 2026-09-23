@@ -12,4 +12,6 @@ BEGIN;
 \ir migrations/006_fast_stream_engine.sql
 \ir migrations/007_safe_playback_headers.sql
 \ir migrations/008_temporary_stream_urls.sql
+\ir migrations/009_provider_media_mappings.sql
+\ir migrations/010_bulk_ingestion_persistence.sql
 COMMIT;
