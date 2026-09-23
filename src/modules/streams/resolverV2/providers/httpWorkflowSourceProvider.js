@@ -216,7 +216,8 @@ const normalizeExtractManyStep = (step) => {
   const allowed = new Set(['type', 'from', 'parser', 'path', 'fields', 'saveAs', 'maxItems']);
   if (!isPlainObject(step) || Object.keys(step).some((key) => !allowed.has(key)) ||
       !VARIABLE_NAME.test(step.from) || !VARIABLE_NAME.test(step.saveAs) ||
-      step.parser !== 'json' || !normalizeJsonPath(step.path) ||
+      step.parser !== 'json' ||
+      (step.path !== '$' && !normalizeJsonPath(step.path)) ||
       !isPlainObject(step.fields)) return null;
   const entries = Object.entries(step.fields);
   if (entries.length < 1 || entries.length > MAX_COLLECTION_FIELDS ||
@@ -227,6 +228,19 @@ const normalizeExtractManyStep = (step) => {
   return Object.freeze({ type: 'extractMany', from: step.from, parser: 'json',
     path: step.path, fields: Object.freeze(Object.fromEntries(entries)),
     saveAs: step.saveAs, maxItems });
+};
+
+const normalizeFilterManyStep = (step) => {
+  const allowed = new Set(['type', 'from', 'field', 'equals', 'saveAs', 'maxItems']);
+  if (!isPlainObject(step) || Object.keys(step).some((key) => !allowed.has(key)) ||
+      !VARIABLE_NAME.test(step.from) || !VARIABLE_NAME.test(step.saveAs) ||
+      !VARIABLE_NAME.test(step.field) || FORBIDDEN_KEYS.has(step.field)) return null;
+  const equals = normalizeTemplate(step.equals);
+  const maxItems = step.maxItems === undefined ? DEFAULT_MAX_ITEMS : step.maxItems;
+  if (!equals || !Number.isInteger(maxItems) || maxItems < 1 ||
+      maxItems > HARD_MAX_ITEMS) return null;
+  return Object.freeze({ type: 'filterMany', from: step.from, field: step.field,
+    equals, saveAs: step.saveAs, maxItems });
 };
 
 const normalizeEmitStep = (step, each = false) => {
@@ -260,7 +274,7 @@ const normalizeWorkflow = (workflow, maxSteps) => {
   const available = new Set(['externalId', 'tmdbId', 'season', 'episode',
     'contentType', 'region']);
   const responses = new Set();
-  const collections = new Set();
+  const collections = new Map();
   const assigned = new Set(available);
   for (const rawStep of workflow) {
     const type = typeof rawStep?.type === 'string' ? rawStep.type.toLowerCase() : '';
@@ -268,15 +282,17 @@ const normalizeWorkflow = (workflow, maxSteps) => {
       method: typeof rawStep.method === 'string' ? rawStep.method.toUpperCase() : rawStep.method })
       : type === 'extract' ? normalizeExtractStep({ ...rawStep, type })
         : type === 'extractmany' ? normalizeExtractManyStep({ ...rawStep, type })
-          : type === 'emit' ? normalizeEmitStep({ ...rawStep, type })
-            : type === 'emiteach' ? normalizeEmitStep({ ...rawStep, type }, true) : null;
+          : type === 'filtermany' ? normalizeFilterManyStep({ ...rawStep, type })
+            : type === 'emit' ? normalizeEmitStep({ ...rawStep, type })
+              : type === 'emiteach' ? normalizeEmitStep({ ...rawStep, type }, true) : null;
     if (!step) return null;
     const templates = step.type === 'request'
       ? [step.path, ...Object.values(step.query), ...Object.values(step.headers),
         ...Object.values(step.form), ...Object.values(step.json)]
       : step.type === 'emit'
         ? [step.url, step.referer, step.origin, step.languageHint, step.qualityHint,
-          ...Object.values(step.headers)].filter(Boolean) : [];
+          ...Object.values(step.headers)].filter(Boolean)
+        : step.type === 'filterMany' ? [step.equals] : [];
     if (templates.some((template) => templateNames(template)
       .some((name) => !available.has(name)))) return null;
     if (step.type === 'request') {
@@ -287,7 +303,13 @@ const normalizeWorkflow = (workflow, maxSteps) => {
     if (step.type === 'extract' || step.type === 'extractMany') {
       if (!responses.has(step.from) || assigned.has(step.saveAs)) return null;
       if (step.type === 'extract') available.add(step.saveAs);
-      else collections.add(step.saveAs);
+      else collections.set(step.saveAs, new Set(Object.keys(step.fields)));
+      assigned.add(step.saveAs);
+    }
+    if (step.type === 'filterMany') {
+      const fields = collections.get(step.from);
+      if (!fields || !fields.has(step.field) || assigned.has(step.saveAs)) return null;
+      collections.set(step.saveAs, fields);
       assigned.add(step.saveAs);
     }
     if (step.type === 'emitEach' && !collections.has(step.from)) return null;
@@ -382,7 +404,7 @@ const lookupJsonPath = (payload, path) => {
 const extractJson = (payload, path) => scalar(lookupJsonPath(payload, path));
 
 const extractMany = (payload, step) => {
-  const source = lookupJsonPath(payload, step.path);
+  const source = step.path === '$' ? payload : lookupJsonPath(payload, step.path);
   if (!Array.isArray(source)) return null;
   const items = [];
   for (const sourceItem of source.slice(0, step.maxItems)) {
@@ -397,6 +419,21 @@ const extractMany = (payload, step) => {
     if (valid) items.push(Object.freeze(item));
   }
   return Object.freeze(items);
+};
+
+const filterMany = (source, step, variables) => {
+  const expected = renderTemplate(step.equals, variables);
+  if (expected === null) return Object.freeze([]);
+  const selected = [];
+  for (const item of source) {
+    if (selected.length >= step.maxItems) break;
+    const value = item[step.field];
+    // Only canonical scalar representations compare; no loose equality or title matching.
+    if (typeof value === 'string' && value === expected ||
+        typeof value === 'number' && Number.isSafeInteger(value) &&
+          String(value) === expected) selected.push(item);
+  }
+  return Object.freeze(selected);
 };
 
 const extractText = (source, start, end) => {
@@ -559,6 +596,12 @@ const createHttpWorkflowSourceProvider = ({
         if (value === null) return [];
         if (step.type === 'extractMany') collections[step.saveAs] = value;
         else variables[step.saveAs] = value;
+        continue;
+      }
+      if (step.type === 'filterMany') {
+        const source = collections[step.from];
+        if (!Array.isArray(source)) return [];
+        collections[step.saveAs] = filterMany(source, step, variables);
         continue;
       }
       if (step.type === 'emitEach') {
