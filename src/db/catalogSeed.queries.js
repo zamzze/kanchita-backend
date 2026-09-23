@@ -4,6 +4,7 @@ const { invalid, uuid } = require('./bulkPersistence.validation');
 
 const RUN_TYPE = 'catalog_seed'; // ingestion_runs.run_type uses lowercase identifiers.
 const TYPES = Object.freeze(['movie', 'series']);
+const PROVIDER_ID = /^[a-z0-9][a-z0-9_-]{0,127}$/;
 const isCount = (value) => Number.isSafeInteger(value) && value >= 0;
 const validCursor = (value) => value && Number.isInteger(value.year) &&
   Number.isInteger(value.page) && value.page >= 1 && value.page <= 500 &&
@@ -44,6 +45,15 @@ const valuesFor = (type, item) => [item.tmdb_id, item.title, item.original_title
   item.description, item.release_year, item.poster_url, item.backdrop_url,
   item.rating];
 
+const applyCatalogItem = async (client, type, item) => {
+  if (!TYPES.includes(type) || !Number.isSafeInteger(item?.tmdb_id) || item.tmdb_id < 1) {
+    throw invalid('CATALOG_SEED_INVALID_ITEM');
+  }
+  const { rows } = await client.query(type === 'movie' ? movieSql : seriesSql,
+    valuesFor(type, item));
+  return !rows[0] ? 'unchanged' : rows[0].inserted ? 'inserted' : 'updated';
+};
+
 const createCatalogSeedStore = (db) => {
   if (!db || typeof db.query !== 'function' || typeof db.connect !== 'function') {
     throw invalid('CATALOG_SEED_INVALID_DB');
@@ -54,6 +64,25 @@ const createCatalogSeedStore = (db) => {
       (SELECT COUNT(*)::integer FROM series WHERE tmdb_id IS NOT NULL) AS series`);
     return rows[0];
   };
+  const listMappedIdentities = async (providerId) => {
+    if (typeof providerId !== 'string' || !PROVIDER_ID.test(providerId)) {
+      throw invalid('CATALOG_MAPPING_INVALID_PROVIDER');
+    }
+    const { rows } = await db.query(`WITH identities AS (
+      SELECT DISTINCT CASE WHEN content_type = 'episode' THEN 'series'
+        ELSE 'movie' END AS catalog_type, tmdb_id
+      FROM provider_media_mappings
+      WHERE provider_id = $1 AND status = 'active'
+        AND content_type IN ('movie', 'episode')
+    ) SELECT catalog_type, tmdb_id,
+      CASE WHEN catalog_type = 'movie' THEN
+        EXISTS (SELECT 1 FROM movies WHERE movies.tmdb_id = identities.tmdb_id)
+      ELSE EXISTS (SELECT 1 FROM series WHERE series.tmdb_id = identities.tmdb_id)
+      END AS already_present
+      FROM identities ORDER BY catalog_type, tmdb_id`, [providerId]);
+    return rows;
+  };
+  const upsertItem = (type, item) => applyCatalogItem(db, type, item);
   const createRun = async (config) => {
     if (!config || !isCount(config.targets?.movie) || !isCount(config.targets?.series) ||
         !Number.isInteger(config.batchSize) || config.batchSize < 1 || config.batchSize > 100 ||
@@ -127,11 +156,7 @@ const createCatalogSeedStore = (db) => {
         if (!Number.isSafeInteger(item?.tmdb_id) || item.tmdb_id < 1 ||
             seen.has(item.tmdb_id)) continue;
         seen.add(item.tmdb_id);
-        const { rows } = await client.query(type === 'movie' ? movieSql : seriesSql,
-          valuesFor(type, item));
-        if (!rows[0]) delta.unchanged += 1;
-        else if (rows[0].inserted) delta.inserted += 1;
-        else delta.updated += 1;
+        delta[await applyCatalogItem(client, type, item)] += 1;
       }
       delta.failed = failed;
       const counts = await catalogCounts(client);
@@ -182,8 +207,8 @@ const createCatalogSeedStore = (db) => {
       RETURNING *`, [runId, RUN_TYPE]);
     return rows[0] || null;
   };
-  return Object.freeze({ catalogCounts, createRun, getRun, resumeRun, commitBatch,
-    markFailed, completeRun });
+  return Object.freeze({ catalogCounts, listMappedIdentities, upsertItem,
+    createRun, getRun, resumeRun, commitBatch, markFailed, completeRun });
 };
 
 module.exports = { createCatalogSeedStore, RUN_TYPE };
