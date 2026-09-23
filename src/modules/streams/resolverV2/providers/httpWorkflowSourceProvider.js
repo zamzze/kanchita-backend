@@ -11,6 +11,7 @@ const ERROR_CODES = Object.freeze({
   INVALID_CONTENT_TYPE: 'SOURCE_WORKFLOW_INVALID_CONTENT_TYPE',
   INVALID_JSON: 'SOURCE_WORKFLOW_INVALID_JSON',
   CAPTURE_TOO_LARGE: 'SOURCE_WORKFLOW_CAPTURE_TOO_LARGE',
+  AMBIGUOUS_COLLECTION: 'SOURCE_WORKFLOW_AMBIGUOUS_COLLECTION',
 });
 const DEFAULT_MAX_STEPS = 5;
 const HARD_MAX_STEPS = 8;
@@ -243,6 +244,19 @@ const normalizeFilterManyStep = (step) => {
     equals, saveAs: step.saveAs, maxItems });
 };
 
+const normalizeBindOneStep = (step) => {
+  const allowed = new Set(['type', 'from', 'fields']);
+  if (!isPlainObject(step) || Object.keys(step).some((key) => !allowed.has(key)) ||
+      !VARIABLE_NAME.test(step.from) || !isPlainObject(step.fields)) return null;
+  const entries = Object.entries(step.fields);
+  if (entries.length < 1 || entries.length > MAX_COLLECTION_FIELDS ||
+      entries.some(([destination, source]) => !VARIABLE_NAME.test(destination) ||
+        FORBIDDEN_KEYS.has(destination) || !VARIABLE_NAME.test(source) ||
+        FORBIDDEN_KEYS.has(source))) return null;
+  return Object.freeze({ type: 'bindOne', from: step.from,
+    fields: Object.freeze(Object.fromEntries(entries)) });
+};
+
 const normalizeEmitStep = (step, each = false) => {
   const allowed = new Set(['type', ...(each ? ['from'] : []), 'url', 'referer', 'origin', 'headers',
     'languageHint', 'qualityHint', 'metadata']);
@@ -283,8 +297,9 @@ const normalizeWorkflow = (workflow, maxSteps) => {
       : type === 'extract' ? normalizeExtractStep({ ...rawStep, type })
         : type === 'extractmany' ? normalizeExtractManyStep({ ...rawStep, type })
           : type === 'filtermany' ? normalizeFilterManyStep({ ...rawStep, type })
-            : type === 'emit' ? normalizeEmitStep({ ...rawStep, type })
-              : type === 'emiteach' ? normalizeEmitStep({ ...rawStep, type }, true) : null;
+            : type === 'bindone' ? normalizeBindOneStep({ ...rawStep, type })
+              : type === 'emit' ? normalizeEmitStep({ ...rawStep, type })
+                : type === 'emiteach' ? normalizeEmitStep({ ...rawStep, type }, true) : null;
     if (!step) return null;
     const templates = step.type === 'request'
       ? [step.path, ...Object.values(step.query), ...Object.values(step.headers),
@@ -311,6 +326,15 @@ const normalizeWorkflow = (workflow, maxSteps) => {
       if (!fields || !fields.has(step.field) || assigned.has(step.saveAs)) return null;
       collections.set(step.saveAs, fields);
       assigned.add(step.saveAs);
+    }
+    if (step.type === 'bindOne') {
+      const fields = collections.get(step.from);
+      if (!fields || Object.entries(step.fields).some(([destination, source]) =>
+        assigned.has(destination) || !fields.has(source))) return null;
+      for (const destination of Object.keys(step.fields)) {
+        available.add(destination);
+        assigned.add(destination);
+      }
     }
     if (step.type === 'emitEach' && !collections.has(step.from)) return null;
     output.push(step);
@@ -418,22 +442,25 @@ const extractMany = (payload, step) => {
     }
     if (valid) items.push(Object.freeze(item));
   }
-  return Object.freeze(items);
+  return Object.freeze({ items: Object.freeze(items), complete: source.length <= step.maxItems });
 };
 
 const filterMany = (source, step, variables) => {
   const expected = renderTemplate(step.equals, variables);
-  if (expected === null) return Object.freeze([]);
+  if (expected === null) return Object.freeze({ items: Object.freeze([]), complete: true });
   const selected = [];
+  let overflow = false;
   for (const item of source) {
-    if (selected.length >= step.maxItems) break;
     const value = item[step.field];
     // Only canonical scalar representations compare; no loose equality or title matching.
     if (typeof value === 'string' && value === expected ||
         typeof value === 'number' && Number.isSafeInteger(value) &&
-          String(value) === expected) selected.push(item);
+          String(value) === expected) {
+      if (selected.length < step.maxItems) selected.push(item);
+      else overflow = true;
+    }
   }
-  return Object.freeze(selected);
+  return Object.freeze({ items: Object.freeze(selected), complete: !overflow });
 };
 
 const extractText = (source, start, end) => {
@@ -518,6 +545,7 @@ const createHttpWorkflowSourceProvider = ({
     });
     const responses = Object.create(null);
     const collections = Object.create(null);
+    const collectionComplete = Object.create(null);
     const candidates = [];
     const deadlineAt = Math.min(now() + timeoutMs,
       Number.isFinite(runtime.deadlineAt) ? runtime.deadlineAt : Infinity);
@@ -594,14 +622,36 @@ const createHttpWorkflowSourceProvider = ({
           value = extractText(body, step.start, step.end);
         }
         if (value === null) return [];
-        if (step.type === 'extractMany') collections[step.saveAs] = value;
+        if (step.type === 'extractMany') {
+          collections[step.saveAs] = value.items;
+          collectionComplete[step.saveAs] = value.complete;
+        }
         else variables[step.saveAs] = value;
         continue;
       }
       if (step.type === 'filterMany') {
         const source = collections[step.from];
         if (!Array.isArray(source)) return [];
-        collections[step.saveAs] = filterMany(source, step, variables);
+        const result = filterMany(source, step, variables);
+        collections[step.saveAs] = result.items;
+        collectionComplete[step.saveAs] = collectionComplete[step.from] && result.complete;
+        continue;
+      }
+      if (step.type === 'bindOne') {
+        const source = collections[step.from];
+        if (!Array.isArray(source)) return [];
+        if (!collectionComplete[step.from]) {
+          throw providerError(ERROR_CODES.AMBIGUOUS_COLLECTION);
+        }
+        if (source.length === 0) return [];
+        if (source.length !== 1) throw providerError(ERROR_CODES.AMBIGUOUS_COLLECTION);
+        const bindings = Object.create(null);
+        for (const [destination, field] of Object.entries(step.fields)) {
+          const value = source[0][field];
+          if (scalar(value) === null) return [];
+          bindings[destination] = value;
+        }
+        Object.assign(variables, bindings);
         continue;
       }
       if (step.type === 'emitEach') {
