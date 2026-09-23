@@ -2,10 +2,11 @@
   "name": "streaming-api",
   "version": "1.0.0",
   "scripts": {
-    "pretest": "node --test test/temporary-stream-url.test.js test/playback-headers.test.js test/hls-proxy.test.js test/hls-proxy-readiness.test.js test/provider-media-mapping-resolver.test.js test/http-workflow-source-provider.test.js test/bounded-collection-workflow.test.js test/bounded-collection-filter.test.js test/bounded-collection-binding.test.js test/provider-flow-conformance.test.js test/mapped-source-provider-adapter.test.js test/resolver-v2-mapped-workflow-smoke.test.js",
+    "pretest": "node --test test/temporary-stream-url.test.js test/playback-headers.test.js test/hls-proxy.test.js test/hls-proxy-readiness.test.js test/provider-media-mapping-resolver.test.js test/http-workflow-source-provider.test.js test/bounded-collection-workflow.test.js test/bounded-collection-filter.test.js test/bounded-collection-binding.test.js test/bounded-json-collection.test.js test/provider-flow-conformance.test.js test/mapped-source-provider-adapter.test.js test/resolver-v2-mapped-workflow-smoke.test.js",
     "test:bounded-collections": "node --test test/bounded-collection-workflow.test.js",
     "test:bounded-filter": "node --test test/bounded-collection-filter.test.js",
     "test:bounded-binding": "node --test test/bounded-collection-binding.test.js",
+    "test:bounded-json": "node --test test/bounded-json-collection.test.js",
     "test:provider-flow-conformance": "node --test test/provider-flow-conformance.test.js",
     "test:playback-headers": "node --test test/playback-headers.test.js test/hls-proxy.test.js test/hls-proxy-readiness.test.js test/playback-headers-db.test.js test/resolver-v2-primary-acceptance.test.js test/resolver-v2-primary-adapter.test.js",
     "start": "node server.js",

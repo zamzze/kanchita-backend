@@ -231,6 +231,16 @@ const normalizeExtractManyStep = (step) => {
     saveAs: step.saveAs, maxItems });
 };
 
+const normalizeParseJsonManyStep = (step) => {
+  const allowed = new Set(['type', 'from', 'path', 'fields', 'saveAs', 'maxItems']);
+  if (!isPlainObject(step) || Object.keys(step).some((key) => !allowed.has(key))) return null;
+  const collection = normalizeExtractManyStep({ ...step, type: 'extractMany', parser: 'json' });
+  if (!collection) return null;
+  return Object.freeze({ type: 'parseJsonMany', from: collection.from,
+    path: collection.path, fields: collection.fields, saveAs: collection.saveAs,
+    maxItems: collection.maxItems });
+};
+
 const normalizeFilterManyStep = (step) => {
   const allowed = new Set(['type', 'from', 'field', 'equals', 'saveAs', 'maxItems']);
   if (!isPlainObject(step) || Object.keys(step).some((key) => !allowed.has(key)) ||
@@ -296,10 +306,11 @@ const normalizeWorkflow = (workflow, maxSteps) => {
       method: typeof rawStep.method === 'string' ? rawStep.method.toUpperCase() : rawStep.method })
       : type === 'extract' ? normalizeExtractStep({ ...rawStep, type })
         : type === 'extractmany' ? normalizeExtractManyStep({ ...rawStep, type })
-          : type === 'filtermany' ? normalizeFilterManyStep({ ...rawStep, type })
-            : type === 'bindone' ? normalizeBindOneStep({ ...rawStep, type })
-              : type === 'emit' ? normalizeEmitStep({ ...rawStep, type })
-                : type === 'emiteach' ? normalizeEmitStep({ ...rawStep, type }, true) : null;
+          : type === 'parsejsonmany' ? normalizeParseJsonManyStep({ ...rawStep, type })
+            : type === 'filtermany' ? normalizeFilterManyStep({ ...rawStep, type })
+              : type === 'bindone' ? normalizeBindOneStep({ ...rawStep, type })
+                : type === 'emit' ? normalizeEmitStep({ ...rawStep, type })
+                  : type === 'emiteach' ? normalizeEmitStep({ ...rawStep, type }, true) : null;
     if (!step) return null;
     const templates = step.type === 'request'
       ? [step.path, ...Object.values(step.query), ...Object.values(step.headers),
@@ -319,6 +330,11 @@ const normalizeWorkflow = (workflow, maxSteps) => {
       if (!responses.has(step.from) || assigned.has(step.saveAs)) return null;
       if (step.type === 'extract') available.add(step.saveAs);
       else collections.set(step.saveAs, new Set(Object.keys(step.fields)));
+      assigned.add(step.saveAs);
+    }
+    if (step.type === 'parseJsonMany') {
+      if (!available.has(step.from) || assigned.has(step.saveAs)) return null;
+      collections.set(step.saveAs, new Set(Object.keys(step.fields)));
       assigned.add(step.saveAs);
     }
     if (step.type === 'filterMany') {
@@ -627,6 +643,18 @@ const createHttpWorkflowSourceProvider = ({
           collectionComplete[step.saveAs] = value.complete;
         }
         else variables[step.saveAs] = value;
+        continue;
+      }
+      if (step.type === 'parseJsonMany') {
+        const source = variables[step.from];
+        if (typeof source !== 'string' || !source ||
+            source.length > MAX_VARIABLE_LENGTH) return [];
+        let payload;
+        try { payload = JSON.parse(source); } catch { return []; }
+        const value = extractMany(payload, step);
+        if (value === null) return [];
+        collections[step.saveAs] = value.items;
+        collectionComplete[step.saveAs] = value.complete;
         continue;
       }
       if (step.type === 'filterMany') {

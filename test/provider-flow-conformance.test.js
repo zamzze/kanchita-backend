@@ -60,7 +60,7 @@ const workflows = Object.freeze({
     { type: 'request', method: 'GET', path: '/html/embedded', saveAs: 'page' },
     { type: 'extract', from: 'page', parser: 'text', start: '"sources":',
       end: ',"other":', saveAs: 'capturedJson' },
-    { type: 'extractMany', from: 'capturedJson', parser: 'json', path: 'sources',
+    { type: 'parseJsonMany', from: 'capturedJson', path: '$',
       fields: { url: 'file' }, saveAs: 'items' },
     { type: 'emitEach', from: 'items', url: '{item.url}' },
   ]),
@@ -95,13 +95,13 @@ const conformance = Object.freeze({
     firstMissingCapability: null, additionalMissingCapabilities: [],
     workflowStepCount: 3, maxStepsBlocked: false, embedCandidates: 1, validatedStreams: 1 }),
   EMBEDDED_JSON_ARRAY_IN_HTML: Object.freeze({ family: 'EMBEDDED_JSON_ARRAY_IN_HTML',
-    status: 'PARTIALLY_SUPPORTED',
-    stepsRepresentable: 2, firstMissingCapability: 'parse_captured_json_to_collection',
+    status: 'SUPPORTED',
+    stepsRepresentable: 4, firstMissingCapability: null,
     additionalMissingCapabilities: [], workflowStepCount: 4, maxStepsBlocked: false,
-    embedCandidates: 0, validatedStreams: 0 }),
+    embedCandidates: 2, validatedStreams: 2 }),
   MULTI_STEP_COLLECTION_FANOUT: Object.freeze({ family: 'MULTI_STEP_COLLECTION_FANOUT',
     status: 'PARTIALLY_SUPPORTED',
-    stepsRepresentable: 2, firstMissingCapability: 'bounded_request_per_item',
+    stepsRepresentable: 2, firstMissingCapability: 'BOUNDED_REQUEST_EACH',
     additionalMissingCapabilities: ['nested_response_aggregation'],
     workflowStepCount: 7, maxStepsBlocked: false,
     embedCandidates: 0, validatedStreams: 0 }),
@@ -240,21 +240,25 @@ test('C HTML_SINGLE_EMBED: existing iframe selector resolves one validated HLS',
   ]);
 });
 
-test('D EMBEDDED_JSON_ARRAY_IN_HTML: capture works, but captured scalar is not a JSON response',
+test('D EMBEDDED_JSON_ARRAY_IN_HTML: bounded capture parses two validated HLS sources',
   async (t) => {
     const fixture = await fixtureServer(t);
     const captured = extractText(embeddedHtml(fixture.baseUrl), '"sources":', ',"other":');
     assert.equal(JSON.parse(captured).length, 2);
-    assert.equal(normalizeWorkflow(workflows.EMBEDDED_JSON_ARRAY_IN_HTML, HARD_MAX_STEPS), null);
-    const prefix = workflows.EMBEDDED_JSON_ARRAY_IN_HTML.slice(0, 2);
-    assert.ok(normalizeWorkflow(prefix, HARD_MAX_STEPS));
+    assert.ok(normalizeWorkflow(workflows.EMBEDDED_JSON_ARRAY_IN_HTML, HARD_MAX_STEPS));
     const client = createSafeHttpClient({ allowPrivateNetworks: true });
-    const candidates = await mappedSource({ baseUrl: fixture.baseUrl, workflow: prefix,
+    const candidates = await mappedSource({ baseUrl: fixture.baseUrl,
+      workflow: workflows.EMBEDDED_JSON_ARRAY_IN_HTML,
       mediaContext: movie, externalId: 'unused', client });
-    assert.deepEqual(candidates, []);
-    assert.deepEqual(fixture.requests, [{ method: 'GET', path: '/html/embedded' }]);
-    assert.equal(conformance.EMBEDDED_JSON_ARRAY_IN_HTML.firstMissingCapability,
-      'parse_captured_json_to_collection');
+    const result = await validate(client, movie, candidates);
+    assert.equal(candidates.length, conformance.EMBEDDED_JSON_ARRAY_IN_HTML.embedCandidates);
+    assert.equal(result.streams.length, conformance.EMBEDDED_JSON_ARRAY_IN_HTML.validatedStreams);
+    assert.ok(result.streams.every(({ validated, protocol }) => validated && protocol === 'hls'));
+    assert.deepEqual(fixture.requests, [
+      { method: 'GET', path: '/html/embedded' },
+      { method: 'GET', path: '/hls/a.m3u8' },
+      { method: 'GET', path: '/hls/b.m3u8' },
+    ]);
   });
 
 test('E MULTI_STEP_COLLECTION_FANOUT: array extraction works but cannot request per item',
@@ -282,5 +286,5 @@ test('E MULTI_STEP_COLLECTION_FANOUT: array extraction works but cannot request 
       { method: 'GET', path: '/api/qualities' },
     ]);
     assert.equal(conformance.MULTI_STEP_COLLECTION_FANOUT.firstMissingCapability,
-      'bounded_request_per_item');
+      'BOUNDED_REQUEST_EACH');
   });
