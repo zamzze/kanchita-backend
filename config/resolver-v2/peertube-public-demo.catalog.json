@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "sources": [
+    {
+      "id": "peertube_public_demo",
+      "type": "mapped_http_workflow",
+      "enabled": false,
+      "priority": 100,
+      "region": "global",
+      "baseUrl": "https://peertube.cpy.re",
+      "timeoutMs": 8000,
+      "maxBytes": 262144,
+      "maxRedirects": 0,
+      "maxCandidates": 1,
+      "maxSteps": 3,
+      "maxMappingAttempts": 1,
+      "supportsMovies": true,
+      "supportsEpisodes": false,
+      "workflow": [
+        {
+          "type": "request",
+          "method": "GET",
+          "path": "/api/v1/videos/{externalId}",
+          "headers": { "accept": "application/json" },
+          "saveAs": "video"
+        },
+        {
+          "type": "extract",
+          "from": "video",
+          "parser": "json",
+          "path": "streamingPlaylists.0.playlistUrl",
+          "saveAs": "hls"
+        },
+        {
+          "type": "emit",
+          "url": "{hls}"
+        }
+      ]
+    }
+  ],
+  "resolvers": []
+}
