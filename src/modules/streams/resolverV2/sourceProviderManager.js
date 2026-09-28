@@ -11,6 +11,13 @@ const MAX_TOTAL_CANDIDATES = 200;
 const validPositiveInteger = (value, maximum) =>
   Number.isInteger(value) && value >= 1 && value <= maximum;
 
+// Distinct playback options may share a URL while carrying different language or
+// variant metadata. Collapse only options with the same normalized attributes.
+const sourceOptionIdentity = (candidate) => JSON.stringify([
+  candidateIdentity(candidate), candidate.languageHint, candidate.qualityHint,
+  candidate.metadata,
+]);
+
 const createSourceProviderManager = ({
   registry,
   http = null,
@@ -162,7 +169,7 @@ const createSourceProviderManager = ({
             discardedCandidates += 1;
             continue;
           }
-          const identity = candidateIdentity(candidate);
+          const identity = sourceOptionIdentity(candidate);
           if (identities.has(identity)) continue;
           identities.add(identity);
           normalized.push(candidate);
@@ -253,7 +260,7 @@ const createSourceProviderManager = ({
       for (const result of results) {
         if (!result) continue;
         for (const candidate of result.candidates) {
-          const identity = candidateIdentity(candidate);
+          const identity = sourceOptionIdentity(candidate);
           if (identities.has(identity)) continue;
           identities.add(identity);
           candidates.push(candidate);
