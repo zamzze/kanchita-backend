@@ -264,8 +264,8 @@ const normalizeExtractManyStep = (step) => {
       entries.some(([name, path]) => !VARIABLE_NAME.test(name) ||
         FORBIDDEN_KEYS.has(name) || (step.parser === 'json'
           ? !normalizeJsonPath(path)
-          : typeof path !== 'string' || !ATTRIBUTE_NAME.test(path) ||
-            FORBIDDEN_KEYS.has(path)))) return null;
+          : path !== '$text' && (typeof path !== 'string' ||
+            !ATTRIBUTE_NAME.test(path) || FORBIDDEN_KEYS.has(path))))) return null;
   const selector = step.parser === 'html' ? normalizeSelector(step.selector) : null;
   if (step.parser === 'html' ? !selector || step.path !== undefined
     : step.selector !== undefined ||
@@ -367,9 +367,20 @@ const normalizeBindOneStep = (step) => {
     fields: Object.freeze(Object.fromEntries(entries)) });
 };
 
+const normalizeMetadataFields = (value) => {
+  if (value === undefined) return Object.freeze({});
+  if (!isPlainObject(value)) return null;
+  const entries = Object.entries(value);
+  if (entries.length > MAX_COLLECTION_FIELDS || entries.some(([name, field]) =>
+    !VARIABLE_NAME.test(name) || FORBIDDEN_KEYS.has(name) ||
+    typeof field !== 'string' || !VARIABLE_NAME.test(field) ||
+    FORBIDDEN_KEYS.has(field))) return null;
+  return Object.freeze(Object.fromEntries(entries));
+};
+
 const normalizeEmitStep = (step, each = false) => {
   const allowed = new Set(['type', ...(each ? ['from'] : []), 'url', 'referer', 'origin', 'headers',
-    'languageHint', 'qualityHint', 'metadata']);
+    'languageHint', 'qualityHint', 'metadata', ...(each ? ['metadataFields'] : [])]);
   if (!isPlainObject(step) || Object.keys(step).some((key) => !allowed.has(key))) return null;
   if (each && !VARIABLE_NAME.test(step.from)) return null;
   const normalize = each ? normalizeItemTemplate : normalizeTemplate;
@@ -381,15 +392,19 @@ const normalizeEmitStep = (step, each = false) => {
   const qualityHint = step.qualityHint == null ? null : normalize(step.qualityHint);
   const headers = normalizeTemplateObject(step.headers, PLAYBACK_HEADER_ALLOWLIST, normalize);
   const metadata = step.metadata == null ? null : cloneJsonLike(step.metadata);
+  const metadataFields = each ? normalizeMetadataFields(step.metadataFields) : null;
   if (!url || step.referer != null && !referer || step.origin != null && !origin ||
       step.languageHint != null && !languageHint ||
       step.qualityHint != null && !qualityHint || !headers ||
-      step.metadata != null && (!isPlainObject(step.metadata) || metadata === undefined)) {
+      step.metadata != null && (!isPlainObject(step.metadata) || metadata === undefined) ||
+      each && (!metadataFields || Object.keys(metadataFields).some((key) =>
+        metadata !== null && Object.hasOwn(metadata, key)))) {
     return null;
   }
   return Object.freeze({ type: each ? 'emitEach' : 'emit', ...(each ? { from: step.from } : {}),
     url, referer, origin, languageHint, qualityHint,
-    headers, metadata: metadata === null ? null : deepFreeze(metadata) });
+    headers, metadata: metadata === null ? null : deepFreeze(metadata),
+    ...(each ? { metadataFields } : {}) });
 };
 
 const normalizeWorkflow = (workflow, maxSteps) => {
@@ -476,7 +491,11 @@ const normalizeWorkflow = (workflow, maxSteps) => {
         assigned.add(destination);
       }
     }
-    if (step.type === 'emitEach' && !collections.has(step.from)) return null;
+    if (step.type === 'emitEach') {
+      const fields = collections.get(step.from);
+      if (!fields || Object.values(step.metadataFields).some((field) =>
+        !fields.has(field))) return null;
+    }
     output.push(step);
   }
   return Object.freeze(output);
@@ -570,8 +589,16 @@ const extractHtmlMany = (html, step) => {
     const item = Object.create(null);
     let valid = true;
     for (const [field, attribute] of Object.entries(step.fields)) {
-      if (!Object.hasOwn(attributes, attribute)) { valid = false; break; }
-      const value = decodeEntities(attributes[attribute].trim());
+      if (attribute !== '$text' && !Object.hasOwn(attributes, attribute)) {
+        valid = false; break;
+      }
+      const close = attribute === '$text'
+        ? html.toLowerCase().indexOf(`</${tag}`, offset) : -1;
+      if (attribute === '$text' && close < 0) { valid = false; break; }
+      const rawValue = attribute === '$text'
+        ? html.slice(offset, close).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim()
+        : attributes[attribute].trim();
+      const value = decodeEntities(rawValue);
       if (!value || value.length > MAX_VARIABLE_LENGTH) { valid = false; break; }
       item[field] = value;
     }
@@ -711,8 +738,16 @@ const buildCandidate = (step, variables, id, render = renderTemplate) => {
   const qualityHint = step.qualityHint ? render(step.qualityHint, variables) : null;
   if (!url || step.referer && !referer || step.origin && !origin ||
       step.languageHint && !languageHint || step.qualityHint && !qualityHint) return null;
+  const metadata = step.metadataFields && Object.keys(step.metadataFields).length
+    ? cloneJsonLike(step.metadata || {}) : step.metadata;
+  if (metadata === undefined) return null;
+  for (const [name, field] of Object.entries(step.metadataFields || {})) {
+    const value = variables[field];
+    if (scalar(value) === null) return null;
+    metadata[name] = value;
+  }
   const candidate = normalizeEmbedCandidate({ providerId: id, url, referer, origin, headers,
-    languageHint, qualityHint, metadata: step.metadata });
+    languageHint, qualityHint, metadata });
   return candidate ? immutableCandidate(candidate) : null;
 };
 
