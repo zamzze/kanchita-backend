@@ -16,12 +16,26 @@ const safeErrorCode = (error) =>
   typeof error?.code === 'string' && /^[A-Z][A-Z0-9_]{0,63}$/.test(error.code)
     ? error.code : 'RESOLVER_FAILURE';
 
+const stableValue = (value) => Array.isArray(value) ? value.map(stableValue)
+  : value && typeof value === 'object'
+    ? Object.fromEntries(Object.entries(value)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, item]) => [key, stableValue(item)])) : value;
+const sortedHeaders = (headers) => Object.entries(headers || {})
+  .sort(([left], [right]) => left.localeCompare(right));
+// Distinct playback options may share a URL; only identical siblings collapse.
+const optionIdentity = (candidate) => JSON.stringify([
+  candidateIdentity(candidate), sortedHeaders(candidate.headers),
+  candidate.languageHint, candidate.qualityHint, stableValue(candidate.metadata),
+]);
 const streamIdentity = (stream) => JSON.stringify([
   stream.providerId,
   normalizedUrlIdentity(stream.url),
-  Object.entries(stream.headers || {}).sort(([left], [right]) => left.localeCompare(right)),
+  sortedHeaders(stream.headers),
   stream.urlSensitivity || 'normal',
   stream.expiresAt || '',
+  stream.protocol, stream.audioLanguage, stream.subtitleLanguage, stream.quality,
+  stableValue(stream.metadata),
 ]);
 const graphCandidateIdentity = (candidate) => candidateIdentity({
   ...candidate,
@@ -115,7 +129,7 @@ const createResolverEngine = ({
     const streamIdentities = new Set();
     const attempts = [];
     const queue = [];
-    const visited = new Set();
+    const rootOptions = new Set();
     let usedLegacyFallback = false;
     let nodesQueued = 0;
     let nodesProcessed = 0;
@@ -126,18 +140,26 @@ const createResolverEngine = ({
     let maxDepthReached = 0;
     let nodeLimitReached = false;
 
-    const enqueue = (candidate, depth) => {
+    const enqueue = (candidate, depth, ancestors, siblingOptions) => {
       if (depth > maxDepth) { nodesSkippedDepth += 1; return false; }
+      let cycleIdentity;
       let identity;
-      try { identity = graphCandidateIdentity(candidate); } catch { return false; }
-      if (visited.has(identity)) { nodesSkippedVisited += 1; return false; }
+      try {
+        cycleIdentity = graphCandidateIdentity(candidate);
+        identity = optionIdentity(candidate);
+      } catch { return false; }
+      // Ancestors are branch-local so one root option cannot suppress another.
+      if (ancestors.has(cycleIdentity) || siblingOptions.has(identity)) {
+        nodesSkippedVisited += 1;
+        return false;
+      }
       if (nodesQueued >= maxResolutionNodes) { nodeLimitReached = true; return false; }
-      visited.add(identity);
-      queue.push({ candidate, depth });
+      siblingOptions.add(identity);
+      queue.push({ candidate, depth, ancestors: new Set([...ancestors, cycleIdentity]) });
       nodesQueued += 1;
       return true;
     };
-    for (const candidate of candidates) enqueue(candidate, 0);
+    for (const candidate of candidates) enqueue(candidate, 0, new Set(), rootOptions);
 
     const addAttempt = (providerId, resolverId, outcome, attemptStartedAt, errorCode) => {
       attempts.push({ providerId, resolverId, outcome,
@@ -168,9 +190,10 @@ const createResolverEngine = ({
       throwIfStopped();
       while (queue.length > 0 && streams.length < maxStreams) {
         throwIfStopped();
-        const { candidate, depth } = queue.shift();
+        const { candidate, depth, ancestors } = queue.shift();
         nodesProcessed += 1;
         maxDepthReached = Math.max(maxDepthReached, depth);
+        const siblingOptions = new Set();
         const resolvers = registry.detect(candidate);
         if (!Array.isArray(resolvers)) {
           throw resolverEngineError(ENGINE_ERROR_CODES.INVALID_RESULT);
@@ -204,7 +227,7 @@ const createResolverEngine = ({
             nestedCandidatesProduced += nodeResult.nextCandidates.length;
             if (streams.length < maxStreams) {
               for (const nextCandidate of nodeResult.nextCandidates) {
-                enqueue(nextCandidate, depth + 1);
+                enqueue(nextCandidate, depth + 1, ancestors, siblingOptions);
               }
             }
             const durationMs = Math.max(0, now() - attemptStartedAt);

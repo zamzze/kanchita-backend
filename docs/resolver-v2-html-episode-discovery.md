@@ -6,10 +6,14 @@ filter HTTPS, and emit candidates. It does not visit series or season pages.
 
 The ingestion-only `createHtmlEpisodeMappingDiscovery` takes a known series
 TMDB identity and a provider series ID. It reads one series page and at most
-16 same-origin season pages through the injected SafeHttpClient. Structured
-`data-season`, `data-episode`, and `data-href` attributes yield exact
-`episode` mappings through the existing Mapping Factory contract. Identical
-links are deduplicated; conflicting links for the same number are discarded.
+16 same-origin season pages through the injected SafeHttpClient. It accepts
+either structured `data-season`/`data-episode`/`data-href` anchors or ordinary
+same-origin `/temporada/<slug>/` and `/episodio/<slug>/` links. For ordinary
+links it reads bounded visible markers (`Temporada N`, `NxM`); an exact `NxM`
+descendant takes precedence over the flattened anchor text. Uncertain or
+conflicting numbers are discarded. Identical canonical paths are deduplicated
+in first-occurrence order. Valid links yield exact `episode` mappings through
+the existing Mapping Factory contract.
 The caller persists results with the existing provider media mapping store.
 
 Each mapping stores the series TMDB ID, season number, episode number, and a
@@ -42,3 +46,15 @@ config is not a provider catalog entry.
 
 Resolver V2 still accepts only `movie` and `episode` MediaContext values, and
 the playback workflow DSL still has an eight-step maximum.
+
+## Real-shape validation
+
+Status: `VALIDATED_REAL_SHAPE` for the **HTML hierarchy shape**, not for a
+production provider or stream availability. The browser observation supplied
+for the public sample found four season anchors representing three unique
+seasons. Season 3 had eight unique episode `href` paths; eight of eight were
+identified as S3E1–S3E8 using separate descendant `NxM` markers, with zero
+rejections. Local HTTP fixtures reproduce that shape and keep the older
+`data-*` shape covered. No real-site request or mapping write is part of the
+automated tests. This status does not authorize playback resolution, hoster
+access, or registering a provider.

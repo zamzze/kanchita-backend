@@ -53,7 +53,7 @@ test('self, two-node and three-node cycles execute each URL once', async () => {
   }
 });
 
-test('duplicate branches and a diamond converge deterministically', async () => {
+test('same-parent duplicates collapse while diamond branches remain independent', async () => {
   const calls = [];
   const resolvers = [
     resolver('a', 'a.example.test', () => ({ streams: [], nextCandidates: [
@@ -65,8 +65,22 @@ test('duplicate branches and a diamond converge deterministically', async () => 
     resolver('d', 'd.example.test', () => ({ streams: [stream('d')], nextCandidates: [] }), calls),
   ];
   const result = await run(resolvers, [candidate('a.example.test')], { maxDepth: 3 });
-  assert.deepEqual(calls.map(({ id }) => id), ['a', 'b', 'c', 'd']);
+  assert.deepEqual(calls.map(({ id }) => id), ['a', 'b', 'c', 'd', 'd']);
   assert.deepEqual(result.streams.map(({ resolverId }) => resolverId), ['c', 'd']);
+  assert.equal(result.nodesSkippedVisited, 1);
+});
+
+test('two root siblings with the same URL keep independent cycle ancestry', async () => {
+  const calls = [];
+  const local = resolver('a', 'a.example.test', (input) => ({ streams: [],
+    nextCandidates: [candidate('a.example.test', '/e', {
+      languageHint: input.languageHint === 'es-419' ? 'en' : 'es-419',
+    })] }), calls);
+  const result = await run([local], [
+    candidate('a.example.test', '/e', { languageHint: 'es-419' }),
+    candidate('a.example.test', '/e', { languageHint: 'en' }),
+  ], { maxDepth: 2 });
+  assert.equal(calls.length, 2);
   assert.equal(result.nodesSkippedVisited, 2);
 });
 

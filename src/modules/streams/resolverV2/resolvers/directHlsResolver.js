@@ -145,6 +145,7 @@ const createDirectHlsResolver = ({
       validated: true,
       latencyMs: Math.max(0, now() - startedAt),
       hlsInfo,
+      metadata: normalized.metadata,
     });
     if (!stream) throw resolverError('INVALID_STREAM_CANDIDATE');
     return [stream];

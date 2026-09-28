@@ -142,6 +142,25 @@ test('operational resolver failures are traced safely and later success continue
   assert.doesNotMatch(trace, /https?:|\.m3u8|token=|headers|x-fixture/i);
 });
 
+test('empty or failed root option does not prevent a later candidate', async () => {
+  const attempts = [];
+  const probe = resolver('probe', 10, async (candidate) => {
+    attempts.push(new URL(candidate.url).pathname);
+    if (candidate.url.endsWith('/empty')) return [];
+    if (candidate.url.endsWith('/failed')) {
+      throw Object.assign(new Error('fixture failure'), { code: 'HTTP_TIMEOUT' });
+    }
+    return [stream('fixture', 'probe')];
+  });
+  const result = await engine([probe]).resolve({ mediaContext, candidates: [
+    embed('fixture', '/empty'), embed('fixture', '/failed'), embed('fixture', '/ready'),
+  ] });
+  assert.deepEqual(attempts, ['/play/empty', '/play/failed', '/play/ready']);
+  assert.deepEqual(result.attempts.map(({ outcome }) => outcome),
+    ['empty', 'failed', 'resolved']);
+  assert.equal(result.streams.length, 1);
+});
+
 test('empty resolver output is traced and normalized stream output is independent', async () => {
   const result = await engine([
     resolver('empty', 10, async () => []),
