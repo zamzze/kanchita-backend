@@ -85,7 +85,7 @@ const scanTags = (html, visit) => {
       continue;
     }
     if (!closing && (tag === 'script' || tag === 'style')) { ignored = tag; continue; }
-    if (!closing) visit(tag, raw);
+    if (!closing) visit(tag, raw, open, end + 1);
   }
 };
 

@@ -118,13 +118,13 @@ test('discovery yields exact episode mappings from two bounded, unordered season
     const mappings = await discovery(local.baseUrl).discover({
       series, externalId: 'show-1' });
     assert.deepEqual(local.requests,
-      ['/serie/show-1', '/temporada/s1', '/temporada/s2']);
+      ['/serie/show-1', '/temporada/s2', '/temporada/s1']);
     assert.deepEqual(mappings.map((mapping) => [mapping.tmdbId,
       mapping.seasonNumber, mapping.episodeNumber, mapping.externalId]), [
-      [900, 1, 1, '/episodio/s1e1'],
-      [900, 1, 3, '/episodio/s1e3'],
-      [900, 2, 1, '/episodio/s2e1'],
       [900, 2, 3, '/episodio/s2e3'],
+      [900, 2, 1, '/episodio/s2e1'],
+      [900, 1, 3, '/episodio/s1e3'],
+      [900, 1, 1, '/episodio/s1e1'],
     ]);
     assert.ok(mappings.every((mapping) => mapping.contentType === 'episode' &&
       mapping.matchMethod === 'structured_episode_hierarchy'));
@@ -202,4 +202,55 @@ test('discovery rejects over-limit hierarchies before fetching season pages',
     await assert.rejects(discovery(local.baseUrl, { maxSeasons: 2 }).discover({
       series, externalId: 'show-1' }), /HTML_EPISODE_DISCOVERY_LIMIT_EXCEEDED/);
     assert.deepEqual(local.requests, ['/serie/show-1']);
+  });
+
+test('plain href hierarchy preserves first occurrence, deduplicates and keeps exact S/E',
+  async (t) => {
+    const plain = (path, label) => `<a href="${path}"><span>${label}</span></a>`;
+    const entries = {
+      '/serie/show-1': plain('/temporada/s1/', 'Ver temporada 1') +
+        plain('/temporada/s1/', 'Temporada 1') +
+        plain('/temporada/s3/', 'Temporada 3') +
+        plain('/temporada/s2/', 'Temporada 2'),
+      '/temporada/s1/': plain('/episodio/s1e1/', 'Capítulo 1x1'),
+      '/temporada/s2/': '',
+      '/temporada/s3/': Array.from({ length: 8 }, (_, index) =>
+        plain(`/episodio/s3e${index + 1}/`, `Episodio ...3x${index + 1}`)).join('') +
+        plain('/episodio/s3e1/', 'Episodio ...3x1') +
+        plain('/episodio/wrong/', 'Episodio ...2x9') +
+        plain('/episodio/unknown/', 'Sin marcador'),
+    };
+    const local = await fixture(t, entries);
+    const mappings = await discovery(local.baseUrl, {
+      maxSeasons: 3, maxEpisodesPerSeason: 8,
+    }).discover({ series, externalId: 'show-1' });
+    assert.deepEqual(local.requests, ['/serie/show-1', '/temporada/s1/',
+      '/temporada/s3/', '/temporada/s2/']);
+    assert.deepEqual(mappings.map(({ seasonNumber, episodeNumber, externalId }) =>
+      [seasonNumber, episodeNumber, externalId]), [
+      [1, 1, '/episodio/s1e1/'],
+      ...Array.from({ length: 8 }, (_, index) =>
+        [3, index + 1, `/episodio/s3e${index + 1}/`]),
+    ]);
+  });
+
+test('plain href discovery rejects uncertain, conflicting and off-origin identities',
+  async (t) => {
+    const local = await fixture(t, {
+      '/serie/show-1': '<a href="/temporada/s3/">Temporada 3</a>' +
+        '<a href="/temporada/s3/">Temporada 4</a>' +
+        '<a href="/temporada/s1/">Temporada 1</a>' +
+        '<a href="https://outside.example.test/temporada/s2/">Temporada 2</a>' +
+        '<a href="/temporada/no-marker/">Sin marcador</a>',
+      '/temporada/s1/': '<a href="/episodio/good/">Capítulo 1x2</a>' +
+        '<a href="/episodio/wrong/">Capítulo 2x3</a>' +
+        '<a href="/episodio/uncertain/">Capítulo 1</a>' +
+        '<a href="/episodio/conflict/" data-episode="4" ' +
+          'data-href="/episodio/conflict/">Capítulo 1x5</a>',
+    });
+    const mappings = await discovery(local.baseUrl).discover({
+      series, externalId: 'show-1' });
+    assert.deepEqual(local.requests, ['/serie/show-1', '/temporada/s1/']);
+    assert.deepEqual(mappings.map(({ seasonNumber, episodeNumber, externalId }) =>
+      [seasonNumber, episodeNumber, externalId]), [[1, 2, '/episodio/good/']]);
   });

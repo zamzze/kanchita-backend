@@ -14,6 +14,24 @@ const MAX_TIMEOUT_MS = 10_000;
 const validNumber = (value, minimum) => typeof value === 'string' &&
   /^(?:0|[1-9]\d{0,3})$/.test(value) && Number(value) >= minimum;
 
+const visibleAnchorText = (html, lowerHtml, afterOpen) => {
+  const close = lowerHtml.indexOf('</a', afterOpen);
+  if (close < 0 || close - afterOpen > 512) return null;
+  return decodeEntities(html.slice(afterOpen, close).replace(/<[^>]*>/g, ' '))
+    .replace(/\s+/g, ' ').trim();
+};
+
+const plainLinkNumber = (text, kind) => {
+  if (!text) return null;
+  if (kind === 'season') {
+    const matches = [...text.matchAll(/\btemporada\s+([1-9]\d{0,3})\b/gi)];
+    if (!matches.length || matches.some((match) => match[1] !== matches[0][1])) return null;
+    return { number: Number(matches[0][1]) };
+  }
+  const match = /\b([1-9]\d{0,3})\s*[x×]\s*([1-9]\d{0,3})\s*$/i.exec(text);
+  return match ? { season: Number(match[1]), number: Number(match[2]) } : null;
+};
+
 const createHtmlEpisodeMappingDiscovery = ({
   providerId, region, baseUrl, seriesPathTemplate, http,
   maxSeasons = DEFAULT_MAX_SEASONS,
@@ -51,26 +69,52 @@ const createHtmlEpisodeMappingDiscovery = ({
     } catch { return null; }
   };
 
-  const extractLinks = (html, pageUrl, kind, limit) => {
+  const extractLinks = (html, pageUrl, kind, limit, expectedSeason = null) => {
     const attribute = kind === 'season' ? 'data-season' : 'data-episode';
-    const found = new Map();
+    const lowerHtml = html.toLowerCase();
+    const found = [];
+    const byPath = new Map();
+    const byNumber = new Map();
     const conflicts = new Set();
     let inspected = 0;
-    scanTags(html, (tag, raw) => {
-      if (tag !== 'a' || parseAttribute(raw, attribute) === null) return;
+    scanTags(html, (tag, raw, _start, afterOpen) => {
+      if (tag !== 'a') return;
+      const structured = parseAttribute(raw, attribute);
+      const path = sameOriginPath(parseAttribute(raw,
+        structured === null ? 'href' : 'data-href'), pageUrl);
+      if (!path) return;
+      let number;
+      const marker = plainLinkNumber(visibleAnchorText(html, lowerHtml, afterOpen), kind);
+      if (structured !== null) {
+        if (!validNumber(structured, 1)) return;
+        number = Number(structured);
+        if (marker && (marker.number !== number ||
+            (kind === 'episode' && marker.season !== expectedSeason))) return;
+      } else {
+        const plainPathPattern = kind === 'season'
+          ? /^\/temporada\/[^/]+\/?$/i : /^\/episodio\/[^/]+\/?$/i;
+        if (!plainPathPattern.test(path)) return;
+        if (!marker || (kind === 'episode' && marker.season !== expectedSeason)) return;
+        number = marker.number;
+      }
       inspected += 1;
-      if (inspected > limit) return;
-      const value = parseAttribute(raw, attribute);
-      const path = sameOriginPath(parseAttribute(raw, 'data-href'), pageUrl);
-      if (!validNumber(value, 1) || !path) return;
-      const number = Number(value);
-      if (found.has(number) && found.get(number) !== path) conflicts.add(number);
-      else found.set(number, path);
+      if (inspected > limit * 8) return;
+      if (byPath.has(path)) {
+        if (byPath.get(path) !== number) {
+          conflicts.add(byPath.get(path));
+          conflicts.add(number);
+        }
+        return;
+      }
+      byPath.set(path, number);
+      if (byNumber.has(number) && byNumber.get(number) !== path) conflicts.add(number);
+      else byNumber.set(number, path);
+      found.push({ number, path });
     });
-    if (inspected > limit) throw new Error('HTML_EPISODE_DISCOVERY_LIMIT_EXCEEDED');
-    return [...found].filter(([number]) => !conflicts.has(number))
-      .map(([number, path]) => ({ number, path }))
-      .sort((a, b) => a.number - b.number);
+    if (found.length > limit || inspected > limit * 8) {
+      throw new Error('HTML_EPISODE_DISCOVERY_LIMIT_EXCEEDED');
+    }
+    return found.filter(({ number }) => !conflicts.has(number));
   };
 
   const discover = async ({ series, externalId, signal } = {}) => {
@@ -102,7 +146,8 @@ const createHtmlEpisodeMappingDiscovery = ({
     const verifiedAt = now();
     for (const season of seasons) {
       const page = await read(season.path);
-      const episodes = extractLinks(page.html, page.url, 'episode', maxEpisodesPerSeason);
+      const episodes = extractLinks(page.html, page.url, 'episode',
+        maxEpisodesPerSeason, season.number);
       for (const episode of episodes) {
         const media = normalizeMedia({ contentType: 'episode',
           tmdbId: normalizedSeries.tmdbId, title: normalizedSeries.title,

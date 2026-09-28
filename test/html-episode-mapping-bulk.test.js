@@ -139,7 +139,7 @@ test('PostgreSQL manual run, retry/resume, idempotence and exact leaf playback',
       assert.equal(failed.progress.failed, 1);
       assert.equal(failed.mappingChanges.failed, 1);
       assert.deepEqual(local.requests,
-        ['/serie/show-1', '/temporada/s1', '/temporada/s2']);
+        ['/serie/show-1', '/temporada/s2']);
       assert.equal((await db.query(`SELECT COUNT(*)::integer AS count FROM
         provider_media_mappings WHERE content_type='episode'`)).rows[0].count, 0);
       local.recover();
@@ -152,8 +152,8 @@ test('PostgreSQL manual run, retry/resume, idempotence and exact leaf playback',
       assert.equal((await db.query(`SELECT mapped_count FROM ingestion_runs
         WHERE id=$1`, [failed.runId])).rows[0].mapped_count, 3);
       assert.deepEqual(local.requests,
-        ['/serie/show-1', '/temporada/s1', '/temporada/s2',
-          '/serie/show-1', '/temporada/s1', '/temporada/s2']);
+        ['/serie/show-1', '/temporada/s2',
+          '/serie/show-1', '/temporada/s2', '/temporada/s1']);
       assert.ok(logs.some((message) => message.includes('Processed: 1 / 1')));
       const item = (await db.query(`SELECT series_id,status,attempt_count,mapping_count
         FROM ingestion_run_items WHERE run_id=$1`, [failed.runId])).rows[0];
@@ -182,7 +182,7 @@ test('PostgreSQL manual run, retry/resume, idempotence and exact leaf playback',
       assert.equal((await db.query(`SELECT COUNT(*)::integer AS count FROM
         streams`)).rows[0].count, 0);
       assert.deepEqual(local.requests,
-        ['/serie/show-1', '/temporada/s1', '/temporada/s2']);
+        ['/serie/show-1', '/temporada/s2', '/temporada/s1']);
 
       local.requests.length = 0;
       const batch = await worker().run({ mode: 'series_episodes', limit: 1,
@@ -191,7 +191,7 @@ test('PostgreSQL manual run, retry/resume, idempotence and exact leaf playback',
       assert.deepEqual(batch.mappingChanges,
         { inserted: 0, updated: 0, unchanged: 3, failed: 0 });
       assert.deepEqual(local.requests,
-        ['/serie/show-1', '/temporada/s1', '/temporada/s2']);
+        ['/serie/show-1', '/temporada/s2', '/temporada/s1']);
 
       const configDir = mkdtempSync(join(tmpdir(), 'kanchita-html-episode-'));
       const configPath = join(configDir, 'provider.json');
@@ -215,7 +215,7 @@ test('PostgreSQL manual run, retry/resume, idempotence and exact leaf playback',
         assert.deepEqual(cliResumed.mappingChanges,
           { inserted: 0, updated: 0, unchanged: 3, failed: 0 });
         assert.deepEqual(local.requests,
-          ['/serie/show-1', '/temporada/s1', '/temporada/s2']);
+          ['/serie/show-1', '/temporada/s2', '/temporada/s1']);
         local.requests.length = 0;
         const cliRun = await main(['--html-episode-config', configPath,
           '--series-tmdb-id', '900'], { httpClient,
@@ -224,7 +224,7 @@ test('PostgreSQL manual run, retry/resume, idempotence and exact leaf playback',
         assert.deepEqual(cliRun.mappingChanges,
           { inserted: 0, updated: 0, unchanged: 3, failed: 0 });
         assert.deepEqual(local.requests,
-          ['/serie/show-1', '/temporada/s1', '/temporada/s2']);
+          ['/serie/show-1', '/temporada/s2', '/temporada/s1']);
       } finally {
         if (previousDbUrl === undefined) delete process.env.DB_URL;
         else process.env.DB_URL = previousDbUrl;
