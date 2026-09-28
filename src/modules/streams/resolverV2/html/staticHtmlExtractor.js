@@ -122,4 +122,6 @@ module.exports = {
   decodeEntities,
   extractLinks,
   normalizeSelectors,
+  parseAttribute,
+  scanTags,
 };
