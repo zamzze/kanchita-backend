@@ -6,6 +6,8 @@ const { createBulkMappingWorker, formatMappingProgress } =
   require('../src/ingestion/mappings/bulkMappingWorker');
 const { ID } = require('../src/ingestion/mappings/mappingContract');
 const { uuid } = require('../src/db/bulkPersistence.validation');
+const { createHtmlEpisodeMappingProvider } =
+  require('../src/ingestion/mappings/htmlEpisodeMappingProvider');
 
 const invalid = () => Object.assign(new Error('BULK_MAPPING_CLI_INVALID_ARGS'),
   { code: 'BULK_MAPPING_CLI_INVALID_ARGS' });
@@ -20,14 +22,24 @@ const parseArgs = (args) => {
     const name = args[index];
     if (name === '--dry-run' && !dryRun) { dryRun = true; continue; }
     if (!['--limit', '--providers', '--target-mappings', '--workers',
-      '--batch-size', '--resume'].includes(name) || Object.hasOwn(values, name) ||
+      '--batch-size', '--resume', '--html-episode-config',
+      '--series-tmdb-id'].includes(name) || Object.hasOwn(values, name) ||
       index + 1 >= args.length || args[index + 1].startsWith('--')) throw invalid();
     values[name] = args[++index];
   }
   if (values['--resume']) {
-    if (dryRun || Object.keys(values).length !== 1 ||
+    if (dryRun || Object.keys(values).some((key) =>
+      !['--resume', '--html-episode-config'].includes(key)) ||
         !uuid(values['--resume'])) throw invalid();
-    return Object.freeze({ resume: values['--resume'] });
+    return Object.freeze({ resume: values['--resume'],
+      ...(values['--html-episode-config']
+        ? { htmlEpisodeConfigPath: values['--html-episode-config'] } : {}) });
+  }
+  const htmlEpisodeConfigPath = values['--html-episode-config'];
+  if (values['--series-tmdb-id'] && !htmlEpisodeConfigPath ||
+      htmlEpisodeConfigPath && !values['--series-tmdb-id'] && !values['--limit'] ||
+      htmlEpisodeConfigPath && (values['--providers'] || values['--target-mappings'])) {
+    throw invalid();
   }
   const providers = values['--providers'] === undefined ? null :
     values['--providers'].split(',');
@@ -38,8 +50,10 @@ const parseArgs = (args) => {
     ['--target-mappings', 'targetMappings', 32],
     ['--workers', 'workers', 8],
     ['--batch-size', 'batchSize', 100],
+    ['--series-tmdb-id', 'tmdbId', 2_147_483_647],
   ];
-  const output = { dryRun, providers };
+  const output = { dryRun, providers,
+    ...(htmlEpisodeConfigPath ? { mode: 'series_episodes', htmlEpisodeConfigPath } : {}) };
   for (const [flag, field, max] of numeric) {
     if (values[flag] === undefined) continue;
     const parsed = number(values[flag], max);
@@ -49,16 +63,23 @@ const parseArgs = (args) => {
   return Object.freeze(output);
 };
 
-const createCliRegistry = () => createMappingRegistry([{
+const createCliRegistry = ({ htmlEpisodeConfig, mappingStore, http } = {}) =>
+  createMappingRegistry([{
   id: 'pluto', enabled: true, priority: 0,
   supportsMovies: true, supportsSeries: true, region: 'latam',
   maxConcurrent: 1, minDelayMs: 0,
   // Existing Pluto mappings count toward the target. No discovery is performed here.
   discoverMapping: async () => [],
-}]);
+}, ...(htmlEpisodeConfig ? [createHtmlEpisodeMappingProvider({
+    ...htmlEpisodeConfig, mappingStore, http,
+  })] : [])]);
 
-const main = async (args = process.argv.slice(2)) => {
+const main = async (args = process.argv.slice(2),
+  { httpClient = null, now = Date.now } = {}) => {
   const options = parseArgs(args);
+  if (httpClient && typeof httpClient.request !== 'function' ||
+      typeof now !== 'function') throw invalid();
+  const { htmlEpisodeConfigPath, ...workerOptions } = options;
   if (!process.env.DB_URL) throw Object.assign(new Error('BULK_MAPPING_DB_URL_MISSING'),
     { code: 'BULK_MAPPING_DB_URL_MISSING' });
   const { Pool } = require('pg');
@@ -73,16 +94,41 @@ const main = async (args = process.argv.slice(2)) => {
   process.on('SIGINT', stop);
   process.on('SIGTERM', stop);
   try {
-    worker = createBulkMappingWorker({ registry: createCliRegistry(),
+    const mappingStore = createProviderMediaMappingStore(pool);
+    let htmlEpisodeConfig = null;
+    if (htmlEpisodeConfigPath) {
+      const { readFileSync } = require('node:fs');
+      const parsed = JSON.parse(readFileSync(htmlEpisodeConfigPath, 'utf8'));
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) ||
+          Object.keys(parsed).some((key) => ![
+            'id', 'region', 'baseUrl', 'seriesPathTemplate', 'maxSeasons',
+            'maxEpisodesPerSeason', 'timeoutMs'].includes(key))) throw invalid();
+      htmlEpisodeConfig = parsed;
+      if (workerOptions.mode === 'series_episodes') {
+        workerOptions.providers = [parsed.id];
+      }
+    }
+    const http = htmlEpisodeConfig
+      ? httpClient || require('../src/modules/streams/http/safeHttpClient')
+        .createSafeHttpClient() : null;
+    worker = createBulkMappingWorker({ registry: createCliRegistry({
+      htmlEpisodeConfig, mappingStore, http,
+    }),
       bulkStore: createBulkMappingStore(pool),
       runStore: createIngestionRunStore(pool),
-      mappingStore: createProviderMediaMappingStore(pool),
+      mappingStore,
       logger: (message) => process.stdout.write(`${message}\n`),
+      now,
     });
-    const result = await worker.run(options);
+    const result = await worker.run(workerOptions);
     process.stdout.write(`${formatMappingProgress({ progress: result.progress,
       runId: result.runId, startedAt: Date.now() - result.elapsedMs,
       now: Date.now() })}\n`);
+    if (htmlEpisodeConfig) process.stdout.write(
+      `Mappings this invocation: inserted=${result.mappingChanges.inserted} ` +
+      `updated=${result.mappingChanges.updated} ` +
+      `unchanged=${result.mappingChanges.unchanged} ` +
+      `failed=${result.mappingChanges.failed}\n`);
     return result;
   } finally {
     process.off('SIGINT', stop);

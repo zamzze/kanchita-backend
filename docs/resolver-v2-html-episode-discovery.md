@@ -19,7 +19,26 @@ and 32 episodes per season, with hard limits of 16 and 64 respectively; each
 HTML response is capped at 256 KiB, redirects are disabled, and one global
 deadline covers the run. A hierarchy exceeding a limit fails closed.
 
-This helper is not scheduled or registered as a live provider. Site-specific
-configuration and authorized-source validation remain separate work. Resolver
-V2 still accepts only `movie` and `episode` MediaContext values, and the
-workflow DSL still has an eight-step maximum.
+The existing `ingest:mappings` command runs this discovery manually or in a
+bounded batch. It requires a local JSON configuration with `id`, `region`,
+`baseUrl`, and `seriesPathTemplate` (optional `maxSeasons`,
+`maxEpisodesPerSeason`, `timeoutMs`). A matching **active series mapping**
+must already identify the provider's series root. No site is built in or
+enabled by default.
+
+```text
+npm run ingest:mappings -- --html-episode-config local-provider.json --series-tmdb-id 900
+npm run ingest:mappings -- --html-episode-config local-provider.json --limit 10
+npm run ingest:mappings -- --resume RUN_UUID --html-episode-config local-provider.json
+```
+
+The command reuses `provider_mapping` runs/items, `SKIP LOCKED` claims,
+failure requeue on resume, and `provider_media_mappings.upsertMapping`.
+The `--limit` selection is ordered by TMDB ID. Progress counts series items;
+the final inserted/updated/unchanged/failed counts describe episode mappings
+processed in that invocation. A failed item can be retried without creating
+duplicate episode mappings. The command is not a scheduler, and the local
+config is not a provider catalog entry.
+
+Resolver V2 still accepts only `movie` and `episode` MediaContext values, and
+the playback workflow DSL still has an eight-step maximum.

@@ -13,14 +13,17 @@ const normalizeProvider = (input) => {
       !Number.isInteger(input.maxConcurrent) || input.maxConcurrent < 1 ||
       input.maxConcurrent > 8 || !Number.isInteger(input.minDelayMs) ||
       input.minDelayMs < 0 || input.minDelayMs > 60_000 ||
-      typeof input.discoverMapping !== 'function') {
+      typeof input.discoverMapping !== 'function' ||
+      (input.discoverSeriesEpisodes !== undefined &&
+        typeof input.discoverSeriesEpisodes !== 'function')) {
     throw invalid('MAPPING_PROVIDER_INVALID');
   }
   return Object.freeze({ id: input.id, enabled: input.enabled,
     priority: input.priority, supportsMovies: input.supportsMovies,
     supportsSeries: input.supportsSeries, region: input.region,
     maxConcurrent: input.maxConcurrent, minDelayMs: input.minDelayMs,
-    discoverMapping: input.discoverMapping });
+    discoverMapping: input.discoverMapping,
+    discoverSeriesEpisodes: input.discoverSeriesEpisodes || null });
 };
 
 const createMappingRegistry = (providers = [], {
@@ -51,8 +54,9 @@ const createMappingRegistry = (providers = [], {
     return Object.freeze(list().filter((provider) => provider.enabled &&
       (wanted === null || wanted.has(provider.id))));
   };
-  const execute = async (provider, media) => {
-    if (get(provider?.id) !== provider || !provider.enabled) {
+  const executeMethod = async (provider, media, method) => {
+    if (get(provider?.id) !== provider || !provider.enabled ||
+        typeof provider[method] !== 'function') {
       throw invalid('MAPPING_PROVIDER_UNKNOWN');
     }
     const state = states.get(provider.id);
@@ -65,13 +69,17 @@ const createMappingRegistry = (providers = [], {
     state.nextAt = startAt + provider.minDelayMs;
     try {
       if (waitMs) await sleep(waitMs);
-      return await provider.discoverMapping(media);
+      return await provider[method](media);
     } finally {
       state.active -= 1;
       state.waiters.shift()?.();
     }
   };
-  return Object.freeze({ register, list, get, select, execute });
+  const execute = (provider, media) => executeMethod(provider, media, 'discoverMapping');
+  const executeSeriesEpisodes = (provider, media) =>
+    executeMethod(provider, media, 'discoverSeriesEpisodes');
+  return Object.freeze({ register, list, get, select, execute,
+    executeSeriesEpisodes });
 };
 
 module.exports = { createMappingRegistry, normalizeProvider };

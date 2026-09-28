@@ -21,22 +21,35 @@ const catalogSql = `SELECT content_type, content_id, tmdb_id, title, original_ti
   ) catalog ORDER BY CASE content_type WHEN 'movie' THEN 0
     WHEN 'series' THEN 1 ELSE 2 END,
     tmdb_id, season_number NULLS FIRST, episode_number NULLS FIRST, content_id`;
+const scopedCatalogSql = (typeIndex, tmdbIndex, limitIndex) =>
+  `SELECT * FROM (${catalogSql}) scoped
+   WHERE ($${typeIndex}::text IS NULL OR content_type=$${typeIndex})
+     AND ($${tmdbIndex}::integer IS NULL OR tmdb_id=$${tmdbIndex})
+   ORDER BY CASE content_type WHEN 'movie' THEN 0
+     WHEN 'series' THEN 1 ELSE 2 END,
+     tmdb_id, season_number NULLS FIRST, episode_number NULLS FIRST, content_id
+   LIMIT $${limitIndex}::integer`;
 
 const createBulkMappingStore = (db) => {
   if (!db || typeof db.query !== 'function' || typeof db.connect !== 'function') {
     throw invalid('BULK_MAPPING_INVALID_DB');
   }
-  const listMedia = async (limit = null) => {
+  const listMedia = async (limit = null, contentType = null, tmdbId = null) => {
     if (limit !== null && (!Number.isInteger(limit) || limit < 1 || limit > 100_000)) {
       throw invalid('BULK_MAPPING_INVALID_LIMIT');
     }
-    const { rows } = await db.query(`${catalogSql} LIMIT $1::integer`,
-      [limit ?? 100_000]);
+    if (contentType !== null && !['movie', 'series', 'episode'].includes(contentType) ||
+        tmdbId !== null && (!Number.isInteger(tmdbId) || tmdbId < 1)) {
+      throw invalid('BULK_MAPPING_INVALID_FILTER');
+    }
+    const { rows } = await db.query(scopedCatalogSql(1, 2, 3),
+      [contentType, tmdbId, limit ?? 100_000]);
     return rows;
   };
   const createRunWithItems = async (config) => {
     if (!config || Object.keys(config).some((key) => ![
-      'limit', 'providers', 'targetMappings', 'workers', 'batchSize'].includes(key)) ||
+      'limit', 'providers', 'targetMappings', 'workers', 'batchSize',
+      'mode', 'tmdbId'].includes(key)) ||
         (config.limit !== null &&
           (!Number.isInteger(config.limit) || config.limit < 1 || config.limit > 100_000)) ||
         (config.providers !== null && (!Array.isArray(config.providers) ||
@@ -48,6 +61,14 @@ const createBulkMappingStore = (db) => {
         config.batchSize > 100) {
       throw invalid('BULK_MAPPING_INVALID_CONFIG');
     }
+    if (!['standard', 'series_episodes'].includes(config.mode ?? 'standard') ||
+        (config.tmdbId != null &&
+          (!Number.isInteger(config.tmdbId) || config.tmdbId < 1)) ||
+        (config.mode === 'series_episodes' &&
+          config.tmdbId == null && config.limit == null)) {
+      throw invalid('BULK_MAPPING_INVALID_CONFIG');
+    }
+    const contentType = config.mode === 'series_episodes' ? 'series' : null;
     const client = await db.connect();
     try {
       await client.query('BEGIN');
@@ -60,8 +81,8 @@ const createBulkMappingStore = (db) => {
         SELECT $1, CASE WHEN content_type = 'movie' THEN content_id END,
           CASE WHEN content_type = 'series' THEN content_id END,
           CASE WHEN content_type = 'episode' THEN content_id END
-        FROM (${catalogSql} LIMIT $2::integer) selected RETURNING id`,
-      [runId, config.limit ?? 100_000]);
+        FROM (${scopedCatalogSql(2, 3, 4)}) selected RETURNING id`,
+      [runId, contentType, config.tmdbId ?? null, config.limit ?? 100_000]);
       const { rows } = await client.query(`UPDATE ingestion_runs SET
         requested_count=$2, updated_at=NOW() WHERE id=$1 RETURNING *`,
       [runId, inserted.rowCount]);

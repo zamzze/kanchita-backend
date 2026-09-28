@@ -5,6 +5,7 @@ const { normalizeMedia, normalizeMappingResult } = require('./mappingContract');
 
 const invalid = (code) => Object.assign(new Error(code), { code });
 const positive = (value, max) => Number.isInteger(value) && value >= 1 && value <= max;
+const MAX_EPISODE_DISCOVERY_RESULTS = 1024;
 const formatTime = (seconds) => {
   if (!Number.isFinite(seconds) || seconds < 0) return '--:--:--';
   const total = Math.floor(seconds);
@@ -34,15 +35,20 @@ const normalizeOptions = (input) => {
       !positive(input.workers ?? 2, 8) ||
       !positive(input.batchSize ?? 25, 100) ||
       (input.limit != null && !positive(input.limit, 100_000)) ||
+      (input.tmdbId != null && !positive(input.tmdbId, 2_147_483_647)) ||
+      !['standard', 'series_episodes'].includes(input.mode ?? 'standard') ||
+      (input.mode === 'series_episodes' && input.tmdbId == null && input.limit == null) ||
       (input.providers != null && (!Array.isArray(input.providers) ||
         input.providers.some((id) => typeof id !== 'string'))) ||
       (input.resume != null && !uuid(input.resume)) ||
       (input.resume != null && (input.dryRun || input.providers != null ||
         input.limit != null || input.targetMappings != null ||
-        input.workers != null || input.batchSize != null))) {
+        input.workers != null || input.batchSize != null ||
+        input.tmdbId != null || input.mode != null))) {
     throw invalid('BULK_MAPPING_INVALID_OPTIONS');
   }
   return Object.freeze({ limit: input.limit ?? null,
+    mode: input.mode ?? 'standard', tmdbId: input.tmdbId ?? null,
     providers: input.providers ?? null, targetMappings: input.targetMappings ?? 2,
     workers: input.workers ?? 2, batchSize: input.batchSize ?? 25,
     dryRun: input.dryRun === true, resume: input.resume ?? null });
@@ -61,6 +67,57 @@ const createBulkMappingWorker = ({ registry, bulkStore, runStore, mappingStore,
   }
   let stopRequested = false;
   const stop = () => { stopRequested = true; };
+  let mappingChanges;
+
+  const processSeriesEpisodes = async (media, providers, dryRun) => {
+    if (media.contentType !== 'series') return { status: 'skipped', mappingCount: 0,
+      providerId: '-' };
+    let mappingCount = 0;
+    let failed = false;
+    let providerId = '-';
+    const seen = new Set();
+    for (const provider of providers) {
+      if (stopRequested || !provider.supportsSeries ||
+          !provider.discoverSeriesEpisodes) continue;
+      providerId = provider.id;
+      try {
+        const found = await registry.executeSeriesEpisodes(provider, media);
+        if (!Array.isArray(found) || found.length > MAX_EPISODE_DISCOVERY_RESULTS) {
+          throw invalid('MAPPING_PROVIDER_INVALID_RESULT');
+        }
+        for (const raw of found) {
+          if (!raw || raw.contentType !== 'episode' || raw.tmdbId !== media.tmdbId ||
+              !Number.isInteger(raw.seasonNumber) || raw.seasonNumber < 1 ||
+              !Number.isInteger(raw.episodeNumber) || raw.episodeNumber < 1) {
+            failed = true; mappingChanges.failed += 1; continue;
+          }
+          const episodeMedia = normalizeMedia({ contentType: 'episode',
+            tmdbId: media.tmdbId, title: media.title,
+            season: raw.seasonNumber, episode: raw.episodeNumber });
+          const mapping = normalizeMappingResult(provider, episodeMedia, {
+            providerId: raw.providerId, region: raw.region,
+            externalId: raw.externalId, providerTitle: raw.providerTitle,
+            providerSlug: raw.providerSlug, matchMethod: raw.matchMethod,
+            matchConfidence: raw.matchConfidence, metadata: raw.metadata,
+          }, new Date(now()));
+          if (!mapping || mapping.providerId !== provider.id) {
+            failed = true; mappingChanges.failed += 1; continue;
+          }
+          const identity = `${mapping.providerId}:${mapping.region}:${mapping.externalId}`;
+          if (seen.has(identity)) continue;
+          seen.add(identity);
+          if (dryRun) { mappingCount += 1; continue; }
+          const result = await mappingStore.upsertMapping(mapping);
+          if (['inserted', 'updated', 'unchanged'].includes(result?.change)) {
+            mappingChanges[result.change] += 1;
+            mappingCount += 1;
+          } else { failed = true; mappingChanges.failed += 1; }
+        }
+      } catch { failed = true; mappingChanges.failed += 1; }
+    }
+    return { status: failed ? 'failed' : mappingCount ? 'completed' : 'no_mapping',
+      mappingCount, providerId };
+  };
 
   const processMedia = async (media, providers, target, dryRun) => {
     const existing = await bulkStore.findActiveMappings(media);
@@ -105,6 +162,7 @@ const createBulkMappingWorker = ({ registry, bulkStore, runStore, mappingStore,
 
   const run = async (rawOptions = {}) => {
     stopRequested = false;
+    mappingChanges = { inserted: 0, updated: 0, unchanged: 0, failed: 0 };
     const options = normalizeOptions(rawOptions);
     let runRow = null;
     let config = options;
@@ -117,9 +175,15 @@ const createBulkMappingWorker = ({ registry, bulkStore, runStore, mappingStore,
       config = normalizeOptions(runRow.config_json);
     }
     const providers = registry.select(config.providers);
+    if (config.mode === 'series_episodes' &&
+        (typeof registry.executeSeriesEpisodes !== 'function' ||
+          !providers.some((provider) => provider.discoverSeriesEpisodes))) {
+      throw invalid('BULK_MAPPING_INVALID_EPISODE_PROVIDER');
+    }
     const startedAt = now();
     if (config.dryRun) {
-      const rows = await bulkStore.listMedia(config.limit);
+      const rows = await bulkStore.listMedia(config.limit,
+        config.mode === 'series_episodes' ? 'series' : null, config.tmdbId);
       const progress = { total: rows.length, processed: 0, mapped: 0,
         no_mapping: 0, skipped: 0, failed: 0 };
       for (let index = 0; index < rows.length && !stopRequested;
@@ -130,8 +194,10 @@ const createBulkMappingWorker = ({ registry, bulkStore, runStore, mappingStore,
             tmdbId: row.tmdb_id, title: row.title,
             originalTitle: row.original_title, year: row.release_year,
             season: row.season_number, episode: row.episode_number });
-          const outcome = media ? await processMedia(media, providers,
-            config.targetMappings, true) : { status: 'failed', providerId: '-' };
+          const outcome = media ? config.mode === 'series_episodes'
+            ? await processSeriesEpisodes(media, providers, true)
+            : await processMedia(media, providers, config.targetMappings, true)
+            : { status: 'failed', providerId: '-' };
           lastProvider = outcome.providerId;
           progress.processed += 1;
           progress[outcome.status === 'completed' ? 'mapped' :
@@ -142,12 +208,14 @@ const createBulkMappingWorker = ({ registry, bulkStore, runStore, mappingStore,
         catch { /* Diagnostics cannot change the run. */ }
       }
       return Object.freeze({ runId: null, status: 'dry_run', progress,
+        mappingChanges: Object.freeze({ ...mappingChanges }),
         elapsedMs: Math.max(0, now() - startedAt) });
     }
     if (!runRow) {
       runRow = await bulkStore.createRunWithItems({ limit: config.limit,
         providers: config.providers, targetMappings: config.targetMappings,
-        workers: config.workers, batchSize: config.batchSize });
+        workers: config.workers, batchSize: config.batchSize,
+        mode: config.mode, tmdbId: config.tmdbId });
     }
     return bulkStore.withRunLock(runRow.id, async () => {
       if (runRow.status === 'running') await bulkStore.recoverRunningRun(runRow.id);
@@ -170,8 +238,9 @@ const createBulkMappingWorker = ({ registry, bulkStore, runStore, mappingStore,
                 originalTitle: row?.original_title, year: row?.release_year,
                 season: row?.season_number, episode: row?.episode_number });
               if (!media) throw invalid('BULK_MAPPING_MEDIA_INVALID');
-              const outcome = await processMedia(media, providers,
-                config.targetMappings, false);
+              const outcome = config.mode === 'series_episodes'
+                ? await processSeriesEpisodes(media, providers, false)
+                : await processMedia(media, providers, config.targetMappings, false);
               lastProvider = outcome.providerId;
               if (outcome.status === 'failed') {
                 await runStore.markItemFailed({ itemId: item.id,
@@ -208,6 +277,7 @@ const createBulkMappingWorker = ({ registry, bulkStore, runStore, mappingStore,
         : await bulkStore.finishRun(runRow.id);
       return Object.freeze({ runId: runRow.id,
         status: finalRun?.status || 'running', progress,
+        mappingChanges: Object.freeze({ ...mappingChanges }),
         elapsedMs: Math.max(0, now() - startedAt) });
     });
   };
