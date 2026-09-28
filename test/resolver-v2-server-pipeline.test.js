@@ -81,13 +81,13 @@ test('invalid enabled HTTP resolver configuration is not registered', () => {
     logger: { log: () => {} },
   });
   assert.deepEqual(composition.resolverRegistry.list().map(({ descriptor }) => descriptor.id),
-    ['direct_hls']);
+    ['direct_hls', 'direct_mp4']);
 });
 test('SourceProvider to declarative server resolver to validated HLS works in shadow', async (t) => {
   const network = await fixtureNetwork(t);
   const composition = compositionFor(network);
   assert.deepEqual(composition.resolverRegistry.list().map(({ descriptor }) => descriptor.id),
-    ['resolver_a', 'direct_hls']);
+    ['resolver_a', 'direct_hls', 'direct_mp4']);
   const result = await composition.shadowResolver.run(mediaContext);
   assert.equal(result.status, 'success');
   assert.equal(result.candidateCount, 1);

@@ -57,7 +57,7 @@ const createPrimaryAcceptanceGate = ({
     const stream = normalizeStreamCandidate(candidate);
     if (!stream) return reject(null, PRIMARY_CODES.INVALID_STREAM);
     if (stream.validated !== true) return reject(stream, PRIMARY_CODES.UNVALIDATED);
-    if (stream.protocol !== 'hls') {
+    if (!['hls', 'mp4'].includes(stream.protocol)) {
       return reject(stream, PRIMARY_CODES.UNSUPPORTED_PROTOCOL);
     }
     let parsed;
@@ -69,7 +69,8 @@ const createPrimaryAcceptanceGate = ({
     if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password) {
       return reject(stream, PRIMARY_CODES.INVALID_STREAM);
     }
-    if (Object.keys(rawPlaybackHeaders.headers).length > 0 && !playbackTransportAvailable) {
+    if (Object.keys(rawPlaybackHeaders.headers).length > 0 &&
+        (stream.protocol === 'mp4' || !playbackTransportAvailable)) {
       return reject(stream, PRIMARY_CODES.HEADERS_UNSUPPORTED);
     }
     if (!['direct', 'http'].includes(stream.metadata?.resolverStrategy)) {

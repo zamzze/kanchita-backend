@@ -2,6 +2,8 @@
 
 const { createStreamStore } = require('../../db/streams.queries');
 const { inspectManifestCleanliness } = require('./streamCleanlinessInspector');
+const { createSafeHttpClient } = require('./http/safeHttpClient');
+const { createDirectMp4Resolver } = require('./resolverV2/resolvers/directMp4Resolver');
 const { playbackHeadersOrNull } = require('./playbackHeaders');
 const { TEMPORARY_URL_SAFETY_WINDOW_MS, isTemporaryUrlReusable,
   normalizeUrlSensitivity } =
@@ -52,12 +54,25 @@ const createStreamLifecycle = ({
   verifyIntervalMinutes,
   temporaryUrlSafetySeconds = TEMPORARY_URL_SAFETY_WINDOW_MS / 1000,
   playbackTransportAvailable = false,
+  mp4Validator = null,
 } = {}) => {
   const store = createStreamStore(db);
   const ttlMs = cacheTtlMinutes * 60 * 1000;
   const verifyIntervalMs = verifyIntervalMinutes * 60 * 1000;
   const temporarySafetyWindowMs = temporaryUrlSafetySeconds * 1000;
   const fallbackExpiry = () => new Date(Date.now() + ttlMs);
+  const directMp4 = mp4Validator ? null : createDirectMp4Resolver({
+    httpClient: createSafeHttpClient(),
+  });
+  const validateMp4 = mp4Validator || (async (url, { headers = {} } = {}) => {
+    try {
+      const streams = await directMp4.resolve({ providerId: 'cached_mp4', url, headers });
+      return { valid: streams.length > 0,
+        code: streams.length > 0 ? null : 'RESOLUTION_FAILED' };
+    } catch {
+      return { valid: false, code: 'RESOLUTION_FAILED' };
+    }
+  });
 
   const validateCandidate = async (stream) => {
     if (!stream.stream_url) return null;
@@ -73,7 +88,9 @@ const createStreamLifecycle = ({
       await store.markStale(stream.id);
       return null;
     }
-    const validation = await validator(stream.stream_url, { headers: playbackHeaders });
+    const validation = stream.stream_type === 'mp4'
+      ? await validateMp4(stream.stream_url, { headers: playbackHeaders })
+      : await validator(stream.stream_url, { headers: playbackHeaders });
     if (!validation.valid) {
       logger.warn(`[Streams] validation failed: ${validation.code}`);
       await store.markStale(stream.id);
@@ -99,7 +116,8 @@ const createStreamLifecycle = ({
     const streams = await store.findDirectStreams(contentType, contentId);
     const transportable = (stream) => {
       const headers = playbackHeadersOrNull(stream.playback_headers);
-      return headers && (Object.keys(headers).length === 0 || playbackTransportAvailable);
+      return headers && (Object.keys(headers).length === 0 ||
+        stream.stream_type !== 'mp4' && playbackTransportAvailable);
     };
     const fresh = streams.filter((stream) =>
       transportable(stream) && isFreshReadyStream(stream, verifyIntervalMs, Date.now(),
@@ -185,7 +203,9 @@ const createStreamLifecycle = ({
 
     const validation = resolved.validated
       ? { valid: true, code: null, cleanliness: resolved.cleanliness }
-      : await validator(resolved.url);
+      : resolved.streamType === 'mp4'
+        ? await validateMp4(resolved.url)
+        : await validator(resolved.url);
     if (!validation.valid) {
       logger.warn(`[Streams] validation failed: ${validation.code}`);
       if (preserveCurrent && candidate) {
@@ -226,7 +246,7 @@ const createStreamLifecycle = ({
         inspectManifestCleanliness(validation.manifest),
       stream_url: resolved.url,
       embed_url: null,
-      stream_type: 'direct',
+      stream_type: resolved.streamType === 'mp4' ? 'mp4' : 'direct',
       priority: 1,
       provider: resolved.provider || null,
       status: 'ready',

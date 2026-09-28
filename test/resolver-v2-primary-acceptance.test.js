@@ -33,13 +33,25 @@ test('validation, protocol, URL and resolver strategy fail closed', () => {
   assert.equal(gate.evaluate(candidate({ url: 'https://user:pass@example.test/a.m3u8' })).code,
     PRIMARY_CODES.INVALID_STREAM);
   assert.equal(gate.evaluate(candidate({ validated: false })).code, PRIMARY_CODES.UNVALIDATED);
-  for (const protocol of ['mp4', 'dash', 'unknown']) {
+  for (const protocol of ['dash', 'unknown']) {
     assert.equal(gate.evaluate(candidate({ protocol })).code,
       PRIMARY_CODES.UNSUPPORTED_PROTOCOL);
   }
   assert.equal(gate.evaluate(candidate({ metadata: { resolverStrategy: 'browser' } })).code,
     PRIMARY_CODES.INCOMPATIBLE);
   assert.equal(gate.evaluate(candidate({ metadata: null })).code, PRIMARY_CODES.INCOMPATIBLE);
+});
+
+test('validated direct MP4 is primary-compatible only without playback headers', () => {
+  const mp4 = candidate({ url: 'https://media.example.test/movie.mp4', protocol: 'mp4',
+    resolverId: 'direct_mp4' });
+  assert.equal(gate.evaluate(mp4).code, PRIMARY_CODES.ACCEPTED);
+  assert.equal(gate.evaluate({ ...mp4, validated: false }).code, PRIMARY_CODES.UNVALIDATED);
+  const proxyGate = createPrimaryAcceptanceGate({ now: () => now,
+    playbackTransportAvailable: true });
+  assert.equal(proxyGate.evaluate({ ...mp4, headers: {
+    Referer: 'https://player.example.test/watch',
+  } }).code, PRIMARY_CODES.HEADERS_UNSUPPORTED);
 });
 
 test('expiry margin rejects expired and less than sixty seconds', () => {

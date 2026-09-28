@@ -76,11 +76,14 @@ const createDirectHlsResolver = ({
     throw resolverError('INVALID_RESOLVER_OPTIONS');
   }
 
-  const canResolve = (candidate) => normalizeEmbedCandidate(candidate) !== null;
+  const canResolve = (candidate) => {
+    const normalized = normalizeEmbedCandidate(candidate);
+    return normalized !== null && !new URL(normalized.url).pathname.toLowerCase().endsWith('.mp4');
+  };
 
   const resolve = async (candidate, context = {}) => {
     const normalized = normalizeEmbedCandidate(candidate);
-    if (!normalized) return [];
+    if (!normalized || !canResolve(normalized)) return [];
     if (context.signal?.aborted) throw resolverError('HTTP_ABORTED');
 
     const startedAt = now();
@@ -108,7 +111,9 @@ const createDirectHlsResolver = ({
         signal: context.signal,
       });
       if (!head.ok && !HEAD_GET_FALLBACK_STATUSES.has(head.status)) return [];
-      if (head.ok && isHtmlContentType(head.headers['content-type'])) return [];
+      if (head.ok && (isHtmlContentType(head.headers['content-type']) ||
+          String(head.headers['content-type'] || '').split(';', 1)[0].trim().toLowerCase() ===
+            'video/mp4')) return [];
       requestHeaders = sanitizePlaybackHeaders(requestHeaders, requestUrl, head.url);
       requestUrl = head.url;
     }

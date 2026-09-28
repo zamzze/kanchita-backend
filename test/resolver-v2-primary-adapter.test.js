@@ -30,12 +30,24 @@ test('adapter preserves only safe playback headers and rejects other unsupported
   });
   for (const fixture of [
     candidate({ headers: { cookie: 'private' } }),
-    candidate({ protocol: 'mp4' }), candidate({ validated: false }),
+    candidate({ protocol: 'dash' }), candidate({ validated: false }),
     candidate({ metadata: { resolverStrategy: 'browser' } }), { invalid: true },
   ]) {
     assert.throws(() => adaptV2ToLegacyResult(fixture),
       (error) => error.code === ADAPTER_ERROR_CODE);
   }
+});
+
+test('validated MP4 adapts to direct legacy result without proxy headers', () => {
+  const mp4 = candidate({ url: 'https://media.example.test/movie.mp4', protocol: 'mp4',
+    resolverId: 'direct_mp4' });
+  const adapted = adaptV2ToLegacyResult(mp4);
+  assert.equal(adapted.streamType, 'mp4');
+  assert.equal(adapted.url, mp4.url);
+  assert.deepEqual(adapted.playbackHeaders, {});
+  assert.throws(() => adaptV2ToLegacyResult({ ...mp4, headers: {
+    Referer: 'https://player.example.test/watch',
+  } }), (error) => error.code === ADAPTER_ERROR_CODE);
 });
 
 test('VOSE maps to legacy language while retaining explicit audio/subtitle fields', () => {

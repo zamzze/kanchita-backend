@@ -74,9 +74,9 @@ test('builder preserves priority, media support and deterministic registry order
   assert.deepEqual(second.sourceRegistry.list().map((item) => item.descriptor.id),
     ['source_a', 'source_b', 'source_c']);
   assert.deepEqual(first.resolverRegistry.list().map((item) => item.descriptor.id),
-    ['resolver_a', 'resolver_b', 'resolver_c', 'direct_hls']);
+    ['resolver_a', 'resolver_b', 'resolver_c', 'direct_hls', 'direct_mp4']);
   assert.deepEqual(second.resolverRegistry.list().map((item) => item.descriptor.id),
-    ['resolver_a', 'resolver_b', 'resolver_c', 'direct_hls']);
+    ['resolver_a', 'resolver_b', 'resolver_c', 'direct_hls', 'direct_mp4']);
   assert.deepEqual(first.sourceRegistry.listForMedia({ contentType: 'movie', contentId: 'x',
     tmdbId: 1, title: 'X' }).map((item) => item.descriptor.id), ['source_b', 'source_c']);
 });

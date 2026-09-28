@@ -47,15 +47,18 @@ const notFoundError = (contentType) => {
 const formatResponse = (streams, contentId, contentType, subtitleUrl = null, proxy = null) => {
   const serialized = streams.map((stream) => {
     const playbackHeaders = playbackHeadersOrNull(stream.playback_headers);
-    const needsProxy = playbackHeaders && Object.keys(playbackHeaders).length > 0;
+    const hasPlaybackHeaders = playbackHeaders && Object.keys(playbackHeaders).length > 0;
+    const needsProxy = stream.stream_type !== 'mp4' && hasPlaybackHeaders;
+    const playableUrl = playbackHeaders === null || stream.stream_type === 'mp4' &&
+      hasPlaybackHeaders ? null : needsProxy
+      ? proxy?.createPlaybackUrl(stream) || null : stream.stream_url || null;
     return ({
     server_name: stream.server_name,
     quality: stream.quality || 'auto',
     language: stream.language,
     audio_language: stream.audio_language || null,
     subtitle_language: stream.subtitle_language || null,
-    stream_url: playbackHeaders === null ? null : needsProxy
-      ? proxy?.createPlaybackUrl(stream) || null : stream.stream_url || null,
+    stream_url: playableUrl,
     embed_url: stream.embed_url || null,
     stream_type: stream.stream_type,
     priority: stream.priority,

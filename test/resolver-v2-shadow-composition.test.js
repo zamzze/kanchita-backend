@@ -21,7 +21,7 @@ const mediaContext = {
   contentType: 'movie', contentId: 'movie-fixture', tmdbId: 10, title: 'Fixture',
 };
 
-test('production composition starts with zero sources and direct HLS resolver only', async () => {
+test('production composition starts with zero sources and direct media resolvers only', async () => {
   let networkCalls = 0;
   const composition = createShadowPipeline({
     enabled: true,
@@ -34,7 +34,7 @@ test('production composition starts with zero sources and direct HLS resolver on
   });
   assert.deepEqual(composition.sourceRegistry.list(), []);
   assert.deepEqual(composition.resolverRegistry.list().map((item) => item.descriptor.id),
-    ['direct_hls']);
+    ['direct_hls', 'direct_mp4']);
   assert.ok(composition.healthStore);
   assert.ok(composition.observability);
   assert.equal(typeof composition.ranker.selectBest, 'function');
@@ -88,7 +88,7 @@ test('configured HTTP source is registered only when enabled with valid configur
   assert.equal(configured.sourceRegistry.list()[0].descriptor.id, 'provider_a');
   assert.equal(configured.sourceRegistry.list()[0].descriptor.strategy, 'http');
   assert.deepEqual(configured.resolverRegistry.list().map((item) => item.descriptor.id),
-    ['direct_hls']);
+    ['direct_hls', 'direct_mp4']);
 });
 
 test('Pluto is opt-in and accepts the mapping resolver with legacy store compatibility', () => {

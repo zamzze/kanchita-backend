@@ -28,7 +28,7 @@ const createStreamStore = (db = pool) => {
        FROM streams
        WHERE content_type = $1
          AND content_id = $2
-         AND stream_type = 'direct'
+         AND stream_type IN ('direct', 'mp4')
          AND is_active = TRUE
        ORDER BY priority ASC`,
       [contentType, contentId]

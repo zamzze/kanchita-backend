@@ -12,7 +12,9 @@ const adapterError = () => Object.assign(new Error(ADAPTER_ERROR_CODE), {
 const adaptV2ToLegacyResult = (candidate) => {
   const stream = normalizeStreamCandidate(candidate);
   const playbackHeaders = stream ? playbackHeadersOrNull(stream.headers) : null;
-  if (!stream || !playbackHeaders || stream.validated !== true || stream.protocol !== 'hls' ||
+  if (!stream || !playbackHeaders || stream.validated !== true ||
+      !['hls', 'mp4'].includes(stream.protocol) ||
+      (stream.protocol === 'mp4' && Object.keys(playbackHeaders).length > 0) ||
       !['direct', 'http'].includes(stream.metadata?.resolverStrategy)) {
     throw adapterError();
   }
@@ -34,6 +36,7 @@ const adaptV2ToLegacyResult = (candidate) => {
     ...(stream.urlSensitivity === 'temporary_signed'
       ? { urlSensitivity: 'temporary_signed' } : {}),
     validated: true,
+    ...(stream.protocol === 'mp4' ? { streamType: 'mp4' } : {}),
     playbackHeaders,
   });
 };

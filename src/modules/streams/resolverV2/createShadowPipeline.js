@@ -5,6 +5,7 @@ const { createSourceProviderRegistry } = require('./sourceProviderRegistry');
 const { createSourceProviderManager } = require('./sourceProviderManager');
 const { createResolverRegistry } = require('./resolverRegistry');
 const { createDirectHlsResolver } = require('./resolvers/directHlsResolver');
+const { createDirectMp4Resolver } = require('./resolvers/directMp4Resolver');
 const { createResolverEngine } = require('./resolverEngine');
 const { createResolutionPipeline } = require('./resolutionPipeline');
 const { createShadowResolver } = require('./shadowResolver');
@@ -161,7 +162,9 @@ const createShadowPipeline = ({
   const directHlsResolver = createDirectHlsResolver({
     httpClient: activeHttpClient, timeoutMs: runtimeTimeoutMs,
   });
-  const configuredResolvers = [directHlsResolver];
+  const configuredResolvers = [directHlsResolver, createDirectMp4Resolver({
+    httpClient: activeHttpClient, timeoutMs: runtimeTimeoutMs,
+  })];
   try {
     const configuredResolver = createConfiguredHttpResolver({
       enabled: STREAM_RESOLVER_V2_HTTP_RESOLVER_ENABLED,

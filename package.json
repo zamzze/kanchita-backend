@@ -2,7 +2,7 @@
   "name": "streaming-api",
   "version": "1.0.0",
   "scripts": {
-    "pretest": "node --test test/workflow-html-option-metadata.test.js test/bounded-base64-workflow.test.js test/temporary-stream-url.test.js test/playback-headers.test.js test/hls-proxy.test.js test/hls-proxy-readiness.test.js test/provider-media-mapping-resolver.test.js test/http-workflow-source-provider.test.js test/bounded-collection-workflow.test.js test/bounded-collection-filter.test.js test/bounded-collection-binding.test.js test/bounded-json-collection.test.js test/bounded-request-fanout.test.js test/provider-flow-conformance.test.js test/mapped-source-provider-adapter.test.js test/resolver-v2-mapped-workflow-smoke.test.js test/bulk-ingestion-persistence.test.js test/mapped-catalog-ingester.test.js test/bulk-mapping-worker.test.js",
+    "pretest": "node --test test/workflow-html-option-metadata.test.js test/bounded-base64-workflow.test.js test/temporary-stream-url.test.js test/playback-headers.test.js test/hls-proxy.test.js test/hls-proxy-readiness.test.js test/provider-media-mapping-resolver.test.js test/http-workflow-source-provider.test.js test/bounded-collection-workflow.test.js test/bounded-collection-filter.test.js test/bounded-collection-binding.test.js test/bounded-json-collection.test.js test/bounded-request-fanout.test.js test/provider-flow-conformance.test.js test/mapped-source-provider-adapter.test.js test/resolver-v2-mapped-workflow-smoke.test.js test/bulk-ingestion-persistence.test.js test/mapped-catalog-ingester.test.js test/bulk-mapping-worker.test.js test/direct-mp4-resolver.test.js",
     "test:bulk-persistence": "node --test test/bulk-ingestion-persistence.test.js",
     "test:catalog-seeder": "node --test test/catalog-seeder.test.js",
     "test:mapped-catalog": "node --test test/mapped-catalog-ingester.test.js",
@@ -38,7 +38,8 @@
     "ingest:mappings": "node --env-file=.env scripts/ingest-provider-mappings.js",
     "test:resolver-v2": "node --test test/resolver-v2-contracts.test.js test/hls-inspector.test.js",
     "test:http-v2": "node --test test/safe-network.test.js test/safe-http-client.test.js test/resolver-v2-contracts.test.js test/hls-inspector.test.js",
-    "test:resolver-v2-direct": "node --test test/resolver-v2-contracts.test.js test/hls-inspector.test.js test/resolver-v2-registry.test.js test/resolver-v2-registry-result.test.js test/direct-hls-resolver.test.js",
+    "test:resolver-v2-direct": "node --test test/resolver-v2-contracts.test.js test/hls-inspector.test.js test/resolver-v2-registry.test.js test/resolver-v2-registry-result.test.js test/direct-hls-resolver.test.js test/direct-mp4-resolver.test.js",
+    "test:resolver-v2-mp4": "node --test test/direct-mp4-resolver.test.js test/resolver-v2-primary-acceptance.test.js test/resolver-v2-primary-adapter.test.js",
     "test:resolver-v2-engine": "node --test test/resolver-v2-contracts.test.js test/hls-inspector.test.js test/resolver-v2-registry.test.js test/resolver-v2-registry-result.test.js test/direct-hls-resolver.test.js test/resolver-v2-engine.test.js test/legacy-browser-adapter.test.js test/resolver-v2-engine-direct.test.js",
     "test:resolver-v2-sources": "node --test test/source-provider-registry.test.js test/source-provider-manager.test.js test/resolution-pipeline.test.js",
     "test:resolver-v2-shadow": "node --test test/resolver-v2-shadow.test.js test/resolver-v2-shadow-composition.test.js test/resolver-v2-shadow-env.test.js test/streams/stream-processor-shadow.test.js",
