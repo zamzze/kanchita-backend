@@ -2,7 +2,7 @@
   "name": "streaming-api",
   "version": "1.0.0",
   "scripts": {
-    "pretest": "node --test test/temporary-stream-url.test.js test/playback-headers.test.js test/hls-proxy.test.js test/hls-proxy-readiness.test.js test/provider-media-mapping-resolver.test.js test/http-workflow-source-provider.test.js test/bounded-collection-workflow.test.js test/bounded-collection-filter.test.js test/bounded-collection-binding.test.js test/bounded-json-collection.test.js test/bounded-request-fanout.test.js test/provider-flow-conformance.test.js test/mapped-source-provider-adapter.test.js test/resolver-v2-mapped-workflow-smoke.test.js test/bulk-ingestion-persistence.test.js test/mapped-catalog-ingester.test.js test/bulk-mapping-worker.test.js",
+    "pretest": "node --test test/bounded-base64-workflow.test.js test/temporary-stream-url.test.js test/playback-headers.test.js test/hls-proxy.test.js test/hls-proxy-readiness.test.js test/provider-media-mapping-resolver.test.js test/http-workflow-source-provider.test.js test/bounded-collection-workflow.test.js test/bounded-collection-filter.test.js test/bounded-collection-binding.test.js test/bounded-json-collection.test.js test/bounded-request-fanout.test.js test/provider-flow-conformance.test.js test/mapped-source-provider-adapter.test.js test/resolver-v2-mapped-workflow-smoke.test.js test/bulk-ingestion-persistence.test.js test/mapped-catalog-ingester.test.js test/bulk-mapping-worker.test.js",
     "test:bulk-persistence": "node --test test/bulk-ingestion-persistence.test.js",
     "test:catalog-seeder": "node --test test/catalog-seeder.test.js",
     "test:mapped-catalog": "node --test test/mapped-catalog-ingester.test.js",

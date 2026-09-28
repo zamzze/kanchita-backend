@@ -32,6 +32,8 @@ const MAX_OBJECT_ENTRIES = 32;
 const DEFAULT_MAX_ITEMS = 8;
 const HARD_MAX_ITEMS = 32;
 const MAX_COLLECTION_FIELDS = 16;
+const DEFAULT_MAX_DECODED_BYTES = 2048;
+const HARD_MAX_DECODED_BYTES = 4096;
 const MAX_METADATA_DEPTH = 6;
 const MAX_METADATA_ITEMS = 128;
 const VARIABLE_NAME = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
@@ -251,20 +253,28 @@ const normalizeExtractStep = (step) => {
 };
 
 const normalizeExtractManyStep = (step) => {
-  const allowed = new Set(['type', 'from', 'parser', 'path', 'fields', 'saveAs', 'maxItems']);
+  const allowed = new Set(['type', 'from', 'parser', 'path', 'selector', 'fields',
+    'saveAs', 'maxItems']);
   if (!isPlainObject(step) || Object.keys(step).some((key) => !allowed.has(key)) ||
       !VARIABLE_NAME.test(step.from) || !VARIABLE_NAME.test(step.saveAs) ||
-      step.parser !== 'json' ||
-      (step.path !== '$' && !normalizeJsonPath(step.path)) ||
+      !['json', 'html'].includes(step.parser) ||
       !isPlainObject(step.fields)) return null;
   const entries = Object.entries(step.fields);
   if (entries.length < 1 || entries.length > MAX_COLLECTION_FIELDS ||
       entries.some(([name, path]) => !VARIABLE_NAME.test(name) ||
-        FORBIDDEN_KEYS.has(name) || !normalizeJsonPath(path))) return null;
+        FORBIDDEN_KEYS.has(name) || (step.parser === 'json'
+          ? !normalizeJsonPath(path)
+          : typeof path !== 'string' || !ATTRIBUTE_NAME.test(path) ||
+            FORBIDDEN_KEYS.has(path)))) return null;
+  const selector = step.parser === 'html' ? normalizeSelector(step.selector) : null;
+  if (step.parser === 'html' ? !selector || step.path !== undefined
+    : step.selector !== undefined ||
+      (step.path !== '$' && !normalizeJsonPath(step.path))) return null;
   const maxItems = step.maxItems === undefined ? DEFAULT_MAX_ITEMS : step.maxItems;
   if (!Number.isInteger(maxItems) || maxItems < 1 || maxItems > HARD_MAX_ITEMS) return null;
-  return Object.freeze({ type: 'extractMany', from: step.from, parser: 'json',
-    path: step.path, fields: Object.freeze(Object.fromEntries(entries)),
+  return Object.freeze({ type: 'extractMany', from: step.from, parser: step.parser,
+    ...(step.parser === 'json' ? { path: step.path } : { selector }),
+    fields: Object.freeze(Object.fromEntries(entries)),
     saveAs: step.saveAs, maxItems });
 };
 
@@ -310,16 +320,38 @@ const normalizeRequestEachStep = (step) => {
 };
 
 const normalizeFilterManyStep = (step) => {
-  const allowed = new Set(['type', 'from', 'field', 'equals', 'saveAs', 'maxItems']);
+  const allowed = new Set(['type', 'from', 'field', 'equals', 'urlProtocol',
+    'saveAs', 'maxItems']);
   if (!isPlainObject(step) || Object.keys(step).some((key) => !allowed.has(key)) ||
       !VARIABLE_NAME.test(step.from) || !VARIABLE_NAME.test(step.saveAs) ||
       !VARIABLE_NAME.test(step.field) || FORBIDDEN_KEYS.has(step.field)) return null;
-  const equals = normalizeTemplate(step.equals);
+  const equals = step.equals == null ? null : normalizeTemplate(step.equals);
+  const urlProtocol = step.urlProtocol ?? null;
   const maxItems = step.maxItems === undefined ? DEFAULT_MAX_ITEMS : step.maxItems;
-  if (!equals || !Number.isInteger(maxItems) || maxItems < 1 ||
+  if (Boolean(equals) === (urlProtocol === 'https') ||
+      (urlProtocol !== null && urlProtocol !== 'https') ||
+      !Number.isInteger(maxItems) || maxItems < 1 ||
       maxItems > HARD_MAX_ITEMS) return null;
   return Object.freeze({ type: 'filterMany', from: step.from, field: step.field,
-    equals, saveAs: step.saveAs, maxItems });
+    equals, urlProtocol, saveAs: step.saveAs, maxItems });
+};
+
+const normalizeDecodeBase64ManyStep = (step) => {
+  const allowed = new Set(['type', 'from', 'field', 'targetField', 'saveAs',
+    'maxItems', 'maxDecodedBytes']);
+  if (!isPlainObject(step) || Object.keys(step).some((key) => !allowed.has(key)) ||
+      !VARIABLE_NAME.test(step.from) || !VARIABLE_NAME.test(step.saveAs) ||
+      !VARIABLE_NAME.test(step.field) || FORBIDDEN_KEYS.has(step.field) ||
+      !VARIABLE_NAME.test(step.targetField) || FORBIDDEN_KEYS.has(step.targetField)) return null;
+  const maxItems = step.maxItems === undefined ? DEFAULT_MAX_ITEMS : step.maxItems;
+  const maxDecodedBytes = step.maxDecodedBytes === undefined
+    ? DEFAULT_MAX_DECODED_BYTES : step.maxDecodedBytes;
+  if (!Number.isInteger(maxItems) || maxItems < 1 || maxItems > HARD_MAX_ITEMS ||
+      !Number.isInteger(maxDecodedBytes) || maxDecodedBytes < 1 ||
+      maxDecodedBytes > HARD_MAX_DECODED_BYTES) return null;
+  return Object.freeze({ type: 'decodeBase64Many', from: step.from,
+    field: step.field, targetField: step.targetField, saveAs: step.saveAs,
+    maxItems, maxDecodedBytes });
 };
 
 const normalizeBindOneStep = (step) => {
@@ -376,6 +408,7 @@ const normalizeWorkflow = (workflow, maxSteps) => {
       : type === 'extract' ? normalizeExtractStep({ ...rawStep, type })
         : type === 'extractmany' ? normalizeExtractManyStep({ ...rawStep, type })
           : type === 'parsejsonmany' ? normalizeParseJsonManyStep({ ...rawStep, type })
+            : type === 'decodebase64many' ? normalizeDecodeBase64ManyStep({ ...rawStep, type })
             : type === 'requesteach' ? normalizeRequestEachStep({ ...rawStep, type })
               : type === 'filtermany' ? normalizeFilterManyStep({ ...rawStep, type })
                 : type === 'bindone' ? normalizeBindOneStep({ ...rawStep, type })
@@ -388,7 +421,7 @@ const normalizeWorkflow = (workflow, maxSteps) => {
       : step.type === 'emit'
         ? [step.url, step.referer, step.origin, step.languageHint, step.qualityHint,
           ...Object.values(step.headers)].filter(Boolean)
-        : step.type === 'filterMany' ? [step.equals] : [];
+        : step.type === 'filterMany' && step.equals ? [step.equals] : [];
     if (templates.some((template) => templateNames(template)
       .some((name) => !available.has(name)))) return null;
     if (step.type === 'request') {
@@ -425,6 +458,13 @@ const normalizeWorkflow = (workflow, maxSteps) => {
       const fields = collections.get(step.from);
       if (!fields || !fields.has(step.field) || assigned.has(step.saveAs)) return null;
       collections.set(step.saveAs, fields);
+      assigned.add(step.saveAs);
+    }
+    if (step.type === 'decodeBase64Many') {
+      const fields = collections.get(step.from);
+      if (!fields || !fields.has(step.field) || fields.has(step.targetField) ||
+          assigned.has(step.saveAs)) return null;
+      collections.set(step.saveAs, new Set([...fields, step.targetField]));
       assigned.add(step.saveAs);
     }
     if (step.type === 'bindOne') {
@@ -505,6 +545,41 @@ const extractHtml = (html, definition, baseUrl) => {
   return null;
 };
 
+const extractHtmlMany = (html, step) => {
+  const items = [];
+  let offset = 0;
+  let inspected = 0;
+  while (offset < html.length) {
+    const open = html.indexOf('<', offset);
+    if (open < 0) break;
+    const end = html.indexOf('>', open + 1);
+    if (end < 0) break;
+    const raw = html.slice(open + 1, end);
+    offset = end + 1;
+    const nameMatch = /^\s*([a-z][a-z0-9-]*)/i.exec(raw);
+    if (!nameMatch) continue;
+    const tag = nameMatch[1].toLowerCase();
+    const attributes = parseAttributes(raw);
+    if (step.selector.tag && step.selector.tag !== tag ||
+        step.selector.requiredAttribute &&
+          !Object.hasOwn(attributes, step.selector.requiredAttribute)) continue;
+    inspected += 1;
+    if (inspected > step.maxItems) {
+      return Object.freeze({ items: Object.freeze(items), complete: false });
+    }
+    const item = Object.create(null);
+    let valid = true;
+    for (const [field, attribute] of Object.entries(step.fields)) {
+      if (!Object.hasOwn(attributes, attribute)) { valid = false; break; }
+      const value = decodeEntities(attributes[attribute].trim());
+      if (!value || value.length > MAX_VARIABLE_LENGTH) { valid = false; break; }
+      item[field] = value;
+    }
+    if (valid) items.push(Object.freeze(item));
+  }
+  return Object.freeze({ items: Object.freeze(items), complete: true });
+};
+
 const scalar = (value) => ['string', 'number', 'boolean'].includes(typeof value) &&
   String(value).length <= MAX_VARIABLE_LENGTH ? value : null;
 
@@ -546,21 +621,64 @@ const extractMany = (payload, step) => {
 };
 
 const filterMany = (source, step, variables) => {
-  const expected = renderTemplate(step.equals, variables);
-  if (expected === null) return Object.freeze({ items: Object.freeze([]), complete: true });
+  const expected = step.equals ? renderTemplate(step.equals, variables) : null;
+  if (step.equals && expected === null) {
+    return Object.freeze({ items: Object.freeze([]), complete: true });
+  }
   const selected = [];
   let overflow = false;
   for (const item of source) {
     const value = item[step.field];
     // Only canonical scalar representations compare; no loose equality or title matching.
-    if (typeof value === 'string' && value === expected ||
-        typeof value === 'number' && Number.isSafeInteger(value) &&
-          String(value) === expected) {
+    let matches = typeof value === 'string' && value === expected ||
+      typeof value === 'number' && Number.isSafeInteger(value) &&
+        String(value) === expected;
+    if (step.urlProtocol === 'https' && typeof value === 'string' &&
+        value === value.trim()) {
+      try {
+        const url = new URL(value);
+        matches = url.protocol === 'https:' && !url.username && !url.password;
+      } catch { matches = false; }
+    }
+    if (matches) {
       if (selected.length < step.maxItems) selected.push(item);
       else overflow = true;
     }
   }
   return Object.freeze({ items: Object.freeze(selected), complete: !overflow });
+};
+
+const decodeBase64Utf8 = (value, maxBytes) => {
+  if (typeof value !== 'string' || !value || value.length > MAX_VARIABLE_LENGTH ||
+      !/^[A-Za-z0-9+/_-]+={0,2}$/.test(value) ||
+      /[+/]/.test(value) && /[-_]/.test(value) ||
+      value.includes('=') && value.length % 4 !== 0) return null;
+  const unpadded = value.replace(/=+$/, '');
+  if (unpadded.length % 4 === 1 || Math.floor(unpadded.length * 3 / 4) > maxBytes) {
+    return null;
+  }
+  const canonical = unpadded.replace(/-/g, '+').replace(/_/g, '/');
+  const bytes = Buffer.from(canonical, 'base64');
+  if (bytes.length > maxBytes ||
+      bytes.toString('base64').replace(/=+$/, '') !== canonical) return null;
+  try {
+    const decoded = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+    return decoded && decoded.length <= MAX_VARIABLE_LENGTH &&
+      !/[\u0000-\u001f\u007f]/.test(decoded) ? decoded : null;
+  } catch { return null; }
+};
+
+const decodeBase64Many = (source, step) => {
+  const items = [];
+  for (const original of source.slice(0, step.maxItems)) {
+    const decoded = decodeBase64Utf8(original[step.field], step.maxDecodedBytes);
+    if (decoded === null) continue;
+    const item = Object.assign(Object.create(null), original);
+    item[step.targetField] = decoded;
+    items.push(Object.freeze(item));
+  }
+  return Object.freeze({ items: Object.freeze(items),
+    complete: source.length <= step.maxItems });
 };
 
 const extractText = (source, start, end) => {
@@ -705,7 +823,9 @@ const createHttpWorkflowSourceProvider = ({
           if (typeof contentType !== 'string' || !HTML_CONTENT_TYPE.test(contentType.trim())) {
             throw providerError(ERROR_CODES.INVALID_CONTENT_TYPE);
           }
-          value = extractHtml(response.body.toString('utf8'), step, response.url);
+          value = step.type === 'extractMany'
+            ? extractHtmlMany(response.body.toString('utf8'), step)
+            : extractHtml(response.body.toString('utf8'), step, response.url);
         } else if (step.parser === 'json') {
           if (typeof contentType !== 'string' || !JSON_CONTENT_TYPE.test(contentType.trim())) {
             throw providerError(ERROR_CODES.INVALID_CONTENT_TYPE);
@@ -793,6 +913,14 @@ const createHttpWorkflowSourceProvider = ({
         const source = collections[step.from];
         if (!Array.isArray(source)) return [];
         const result = filterMany(source, step, variables);
+        collections[step.saveAs] = result.items;
+        collectionComplete[step.saveAs] = collectionComplete[step.from] && result.complete;
+        continue;
+      }
+      if (step.type === 'decodeBase64Many') {
+        const source = collections[step.from];
+        if (!Array.isArray(source)) return [];
+        const result = decodeBase64Many(source, step);
         collections[step.saveAs] = result.items;
         collectionComplete[step.saveAs] = collectionComplete[step.from] && result.complete;
         continue;
