@@ -14,7 +14,7 @@ process.env.JWT_REFRESH_SECRET ||= 'archive-test-refresh-secret';
 process.env.TMDB_API_KEY ||= 'archive-test-tmdb';
 
 const { createSafeHttpClient } = require('../src/modules/streams/http/safeHttpClient');
-const { createInternetArchiveSourceProvider, selectMp4Files, openLicense } =
+const { createInternetArchiveSourceProvider, selectMp4Files } =
   require('../src/modules/streams/resolverV2/providers/internetArchiveSourceProvider');
 const { createShadowPipeline } = require('../src/modules/streams/resolverV2/createShadowPipeline');
 const { normalizeCatalog } = require('../src/modules/streams/resolverV2/catalog/catalogSchema');
@@ -43,7 +43,7 @@ const startFixture = async (t, { license = LICENSE, files, identifier = ID } = {
     if (request.url === `/metadata/${ID}`) {
       response.writeHead(200, { 'content-type': 'application/json' });
       return response.end(JSON.stringify({ metadata: { identifier, mediatype: 'movies',
-        licenseurl: license }, files: selectedFiles }));
+        ...(license === null ? {} : { licenseurl: license }) }, files: selectedFiles }));
     }
     if (request.url?.startsWith(`/download/${ID}/`)) {
       response.writeHead(302, { location: '/cdn/mp4' });
@@ -69,15 +69,26 @@ const provider = (baseUrl) => createInternetArchiveSourceProvider({
   enabled: true, baseUrl, http: client(), maxCandidates: 3,
 });
 
-test('license gate rejects unknown, restricted and malformed license URLs', () => {
-  assert.equal(openLicense('http://creativecommons.org/licenses/by/3.0/us/'),
-    'https://creativecommons.org/licenses/by/3.0/us/');
-  for (const value of ['', 'https://example.test/licenses/by/4.0/',
-    'https://creativecommons.org/licenses/by-nc/4.0/',
-    'https://creativecommons.org/licenses/by/4.0/?token=x']) {
-    assert.equal(openLicense(value), null);
-  }
-});
+test('provider-local license gate accepts open items without exporting rights metadata',
+  async (t) => {
+    for (const license of [LICENSE, 'http://creativecommons.org/licenses/by/3.0/us/',
+      'https://creativecommons.org/licenses/by-sa/4.0/',
+      'https://creativecommons.org/publicdomain/zero/1.0/']) {
+      const fixture = await startFixture(t, { license });
+      const candidates = await provider(fixture.baseUrl).getSources(media,
+        { providerMediaRef: ref });
+      assert.equal(candidates.length, 2);
+      assert.equal(Object.hasOwn(candidates[0].metadata, 'licenseUrl'), false);
+      assert.equal(Object.hasOwn(candidates[0].metadata, 'rights'), false);
+    }
+    for (const license of [null, '', 'https://example.test/licenses/by/4.0/',
+      'https://creativecommons.org/licenses/by-nc/4.0/',
+      'https://creativecommons.org/licenses/by/4.0/?token=x']) {
+      const fixture = await startFixture(t, { license });
+      assert.deepEqual(await provider(fixture.baseUrl).getSources(media,
+        { providerMediaRef: ref }), []);
+    }
+  });
 
 test('MP4 selection is deterministic, bounded and ignores irrelevant files', () => {
   const files = [
@@ -98,7 +109,7 @@ test('mapped source reads exact item only and emits canonical ordered MP4 candid
   assert.deepEqual(result.map((item) => item.qualityHint), ['1080p', '720p']);
   assert.deepEqual(result.map((item) => item.metadata.filename),
     ['movie-1080.mp4', 'movie-720.mp4']);
-  assert.equal(result[0].metadata.licenseUrl, LICENSE);
+  assert.equal(Object.hasOwn(result[0].metadata, 'licenseUrl'), false);
   assert.equal(result[0].metadata.itemId, ID);
   assert.equal(result[0].url, `${fixture.baseUrl}/download/${ID}/movie-1080.mp4`);
   assert.deepEqual(fixture.requests.map((item) => item.url), [`/metadata/${ID}`]);
@@ -136,7 +147,8 @@ test('catalog source resolves local MP4 through manager, engine and Primary with
     assert.equal(result.selected.validated, true);
     assert.equal(result.selected.url,
       `${fixture.baseUrl}/download/${ID}/movie-1080.mp4`);
-    assert.equal(result.selected.metadata.licenseUrl, LICENSE);
+    assert.equal(Object.hasOwn(result.selected.metadata, 'licenseUrl'), false);
+    assert.equal(Object.hasOwn(result.selected.metadata, 'rights'), false);
     assert.equal(mappingCalls.length, 1);
     assert.deepEqual(fixture.requests.map((item) => item.method),
       ['GET', 'HEAD', 'HEAD', 'GET']);

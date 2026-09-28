@@ -123,6 +123,7 @@ test('isolated PostgreSQL mapping → Primary MP4 → persisted lifecycle → AP
     assert.equal(primary.status, 'accepted');
     assert.equal(primary.selected.protocol, 'mp4');
     assert.equal(primary.selected.validated, true);
+    assert.equal(Object.hasOwn(primary.selected.metadata, 'licenseUrl'), false);
     assert.equal(primary.selected.url, `${baseUrl}/download/${fixtureId}/film.mp4`);
 
     const revalidator = createDirectMp4Resolver({ httpClient:
@@ -161,6 +162,7 @@ test('isolated PostgreSQL mapping → Primary MP4 → persisted lifecycle → AP
     assert.equal(api.stream.type, 'mp4');
     assert.equal(api.stream.url, primary.selected.url);
     assert.equal(api.streams[0].stream_type, 'mp4');
+    assert.equal(/"(?:license|licenseUrl|rights)"/i.test(JSON.stringify(api)), false);
     assert.equal(requests.some((request) => request.path.includes('search') ||
       request.path.includes('catalog')), false);
     assert.deepEqual(requests.filter((request) => request.method === 'GET' &&
@@ -204,8 +206,7 @@ test('isolated PostgreSQL mapping → Primary MP4 → persisted lifecycle → AP
     assert.equal(realPrimary.selected.url, canonical);
     assert.equal(realPrimary.selected.metadata.itemId, 'BigBuckBunny_328');
     assert.equal(realPrimary.selected.metadata.filename, 'BigBuckBunny_512kb.mp4');
-    assert.equal(realPrimary.selected.metadata.licenseUrl,
-      'https://creativecommons.org/licenses/by/3.0/us/');
+    assert.equal(Object.hasOwn(realPrimary.selected.metadata, 'licenseUrl'), false);
 
     const realRevalidator = createDirectMp4Resolver({ httpClient: realHttp,
       timeoutMs: 15000 });
@@ -234,6 +235,7 @@ test('isolated PostgreSQL mapping → Primary MP4 → persisted lifecycle → AP
     assert.equal(realApi.status, 'ready');
     assert.equal(realApi.stream.url, canonical);
     assert.equal(realApi.stream.type, 'mp4');
+    assert.equal(/"(?:license|licenseUrl|rights)"/i.test(JSON.stringify(realApi)), false);
     assert.deepEqual(outbound.map(({ method }) => method),
       ['GET', 'HEAD', 'GET', 'HEAD', 'GET']);
     assert.deepEqual(outbound.filter(({ method }) => method === 'GET')

@@ -10,18 +10,16 @@ const MAX_FILES = 128;
 const MAX_METADATA_BYTES = 512 * 1024;
 const error = (code) => Object.assign(new Error(code), { code });
 
-const openLicense = (value) => {
-  if (typeof value !== 'string') return null;
+const hasOpenLicense = (value) => {
+  if (typeof value !== 'string') return false;
   try {
     const url = new URL(value);
-    if (!['http:', 'https:'].includes(url.protocol) ||
-        url.hostname.toLowerCase() !== 'creativecommons.org' ||
-        url.username || url.password || url.search || url.hash ||
-        !(/^\/licenses\/(?:by|by-sa)\/(?:3\.0|4\.0)(?:\/[a-z]{2})?\/?$/.test(url.pathname) ||
-          /^\/publicdomain\/zero\/1\.0\/?$/.test(url.pathname))) return null;
-    url.protocol = 'https:';
-    return url.toString();
-  } catch { return null; }
+    return ['http:', 'https:'].includes(url.protocol) &&
+      url.hostname.toLowerCase() === 'creativecommons.org' &&
+      !url.username && !url.password && !url.search && !url.hash &&
+      (/^\/licenses\/(?:by|by-sa)\/(?:3\.0|4\.0)(?:\/[a-z]{2})?\/?$/.test(url.pathname) ||
+        /^\/publicdomain\/zero\/1\.0\/?$/.test(url.pathname));
+  } catch { return false; }
 };
 
 const safeFilename = (value) => typeof value === 'string' && value.length <= 512 &&
@@ -110,8 +108,7 @@ const createInternetArchiveSourceProvider = ({
         payload.metadata?.identifier !== ref.externalId ||
         payload.metadata?.mediatype !== 'movies' ||
         payload.is_dark === true || payload.is_restricted === true) return [];
-    const licenseUrl = openLicense(payload.metadata.licenseurl);
-    if (!licenseUrl) return [];
+    if (!hasOpenLicense(payload.metadata.licenseurl)) return [];
     const candidates = [];
     for (const file of selectMp4Files(payload.files, maxCandidates)) {
       const url = canonicalFileUrl(base, ref.externalId, file.name);
@@ -123,7 +120,7 @@ const createInternetArchiveSourceProvider = ({
           sourceType: 'internet_archive', itemId: ref.externalId,
           filename: file.name, format: file.format,
           mime: typeof file.mime === 'string' ? file.mime : null,
-          size: numericField(file.size), licenseUrl,
+          size: numericField(file.size),
           width: numericField(file.width), height,
         },
       });
@@ -139,5 +136,5 @@ const createInternetArchiveSourceProvider = ({
   });
 };
 
-module.exports = { createInternetArchiveSourceProvider, openLicense,
+module.exports = { createInternetArchiveSourceProvider,
   canonicalFileUrl, selectMp4Files, MAX_METADATA_BYTES };

@@ -13,7 +13,9 @@ may need longer (up to the configured 15-second Primary limit).
 The mapped source makes one bounded `GET /metadata/{identifier}` request via
 SafeHttpClient. It requires matching identifier, `mediatype=movies`, and an
 explicit CC BY, CC BY-SA (3.0/4.0) or CC0 license URL. It rejects missing or
-unknown rights and dark/restricted items. From at most 128 file records it
+unknown rights and dark/restricted items. This license check is provider-local:
+license and rights metadata are not copied into EmbedCandidate, StreamCandidate,
+the stream cache or the API. From at most 128 file records it
 selects up to eight MP4 files deterministically by declared dimensions,
 original/derivative status, size and filename; preview/trailer/thumbnail files
 are excluded. The canonical `https://archive.org/download/{identifier}/{filename}`
