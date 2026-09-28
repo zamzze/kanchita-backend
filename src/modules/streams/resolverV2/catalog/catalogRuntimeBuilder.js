@@ -8,6 +8,8 @@ const { createConfiguredHtmlSourceProvider } =
   require('../providers/configuredHtmlSourceProvider');
 const { createHttpWorkflowSourceProvider } =
   require('../providers/httpWorkflowSourceProvider');
+const { createInternetArchiveSourceProvider } =
+  require('../providers/internetArchiveSourceProvider');
 const { createMappedSourceProviderAdapter } =
   require('../providers/mappedSourceProviderAdapter');
 const { createConfiguredHttpResolver } = require('../resolvers/configuredHttpResolver');
@@ -32,11 +34,11 @@ const buildResolverV2CatalogRuntime = ({
   for (const entry of entries.sources || []) {
     if (!entry.enabled) continue;
     if (!['configured_http', 'peertube', 'configured_html', 'pluto',
-      'mapped_http_workflow'].includes(entry.type)) {
+      'mapped_http_workflow', 'internet_archive'].includes(entry.type)) {
       errors.push(CATALOG_CODES.INVALID_SOURCE); continue;
     }
     if (sourceIds.has(entry.id)) { errors.push(CATALOG_CODES.DUPLICATE_SOURCE); continue; }
-    if (entry.type === 'mapped_http_workflow' &&
+    if (['mapped_http_workflow', 'internet_archive'].includes(entry.type) &&
         (!mappingResolver || typeof mappingResolver.resolve !== 'function')) {
       errors.push(CATALOG_CODES.MAPPING_RESOLVER_UNAVAILABLE);
       continue;
@@ -71,12 +73,15 @@ const buildResolverV2CatalogRuntime = ({
             maxRedirects: entry.maxRedirects,
             maxSteps: entry.maxSteps,
             workflow: entry.workflow,
-          } : { headers: token ? { authorization: `Bearer ${token}` } : {} }),
+          } : entry.type === 'internet_archive' ? {}
+            : { headers: token ? { authorization: `Bearer ${token}` } : {} }),
         http,
       };
       const innerSource = entry.type === 'mapped_http_workflow'
-        ? createHttpWorkflowSourceProvider(sourceOptions) : factory(sourceOptions);
-      const source = entry.type === 'mapped_http_workflow'
+        ? createHttpWorkflowSourceProvider(sourceOptions)
+        : entry.type === 'internet_archive'
+          ? createInternetArchiveSourceProvider(sourceOptions) : factory(sourceOptions);
+      const source = ['mapped_http_workflow', 'internet_archive'].includes(entry.type)
         ? createMappedSourceProviderAdapter({ provider: innerSource, mappingResolver,
           region: entry.region, maxMappingAttempts: entry.maxMappingAttempts })
         : innerSource;

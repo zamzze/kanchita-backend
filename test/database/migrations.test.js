@@ -78,14 +78,25 @@ test(
       await t.test('011 upgrades existing Pluto mappings without changing their identities',
         async () => {
           const migrations = await loadMigrations();
-          await pools.upgrade.query(`CREATE TABLE schema_migrations (
-            version VARCHAR(255) PRIMARY KEY, checksum CHAR(64) NOT NULL,
-            applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
-          for (const migration of migrations.filter(({ version }) =>
-            version < '011_series_provider_mappings.sql')) {
-            await pools.upgrade.query(migration.sql);
-            await pools.upgrade.query(`INSERT INTO schema_migrations (version, checksum)
-              VALUES ($1,$2)`, [migration.version, migration.checksum]);
+          // This manual pre-011 fixture must share the runner's lock: parallel suites
+          // also execute 001, whose CREATE EXTENSION is database-wide.
+          const client = await pools.upgrade.connect();
+          try {
+            await client.query('SELECT pg_advisory_lock(hashtext($1)::bigint)',
+              ['kanchita_schema_migrations']);
+            await client.query(`CREATE TABLE schema_migrations (
+              version VARCHAR(255) PRIMARY KEY, checksum CHAR(64) NOT NULL,
+              applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
+            for (const migration of migrations.filter(({ version }) =>
+              version < '011_series_provider_mappings.sql')) {
+              await client.query(migration.sql);
+              await client.query(`INSERT INTO schema_migrations (version, checksum)
+                VALUES ($1,$2)`, [migration.version, migration.checksum]);
+            }
+          } finally {
+            await client.query('SELECT pg_advisory_unlock(hashtext($1)::bigint)',
+              ['kanchita_schema_migrations']).catch(() => {});
+            client.release();
           }
           const existing = await pools.upgrade.query(`INSERT INTO provider_media_mappings
             (provider_id,region,content_type,tmdb_id,season_number,episode_number,external_id)

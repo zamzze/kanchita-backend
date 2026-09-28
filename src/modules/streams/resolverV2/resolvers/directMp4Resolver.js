@@ -63,13 +63,16 @@ const createDirectMp4Resolver = ({ httpClient, timeoutMs = 5_000, now = Date.now
       return [];
     }
     const stream = normalizeStreamCandidate({
-      url: response.url, protocol: 'mp4', providerId: normalized.providerId,
+      // MP4 has no relative playlist references: retain the stable request URL rather than
+      // persisting a redirect target that may be a short-lived CDN address.
+      url: normalized.url, protocol: 'mp4', providerId: normalized.providerId,
       resolverId: descriptor.id,
       headers: sanitizePlaybackHeaders(headers, url, response.url),
       quality: normalized.qualityHint, audioLanguage: normalized.languageHint,
       subtitleLanguage: null, expiresAt: normalized.expiresAt,
       urlSensitivity: normalized.urlSensitivity, validated: true,
       latencyMs: Math.max(0, now() - startedAt),
+      metadata: normalized.metadata,
     });
     if (!stream) throw resolverError('INVALID_STREAM_CANDIDATE');
     return [stream];

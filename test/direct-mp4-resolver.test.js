@@ -92,6 +92,7 @@ const resolver = () => createDirectMp4Resolver({
 test('MP4 validation uses HEAD and a 64-byte Range GET, preserving metadata', async () => {
   const result = await resolver().resolve(candidate('/valid.mp4', {
     qualityHint: '1080p', languageHint: 'es-419',
+    metadata: { itemId: 'fixture-item' },
   }));
   assert.equal(result.length, 1);
   assert.equal(result[0].protocol, 'mp4');
@@ -100,6 +101,7 @@ test('MP4 validation uses HEAD and a 64-byte Range GET, preserving metadata', as
   assert.equal(result[0].validated, true);
   assert.equal(result[0].quality, '1080p');
   assert.equal(result[0].audioLanguage, 'es-419');
+  assert.equal(result[0].metadata.itemId, 'fixture-item');
   assert.ok(result[0].latencyMs >= 0);
   assert.equal(counts.get('HEAD /valid.mp4'), 1);
   assert.equal(counts.get('GET /valid.mp4'), 1);
@@ -114,7 +116,7 @@ test('HTML or incorrect body is rejected, as are ordinary HTTP errors', async ()
 
 test('safe redirects and HEAD failures use bounded GET fallback', async () => {
   const redirected = await resolver().resolve(candidate('/redirect.mp4'));
-  assert.equal(redirected[0].url, `${baseUrl}/valid.mp4`);
+  assert.equal(redirected[0].url, `${baseUrl}/redirect.mp4`);
   assert.equal((await resolver().resolve(candidate('/head-405.mp4'))).length, 1);
   assert.equal((await resolver().resolve(candidate('/head-403.mp4'))).length, 1);
   assert.equal((await resolver().resolve(candidate('/octet.mp4'))).length, 1);

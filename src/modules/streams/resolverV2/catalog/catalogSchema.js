@@ -84,6 +84,25 @@ const normalizeSource = (entry) => {
       baseUrl: baseUrl || '', timeoutMs, maxBytes, maxRedirects, maxCandidates,
       maxSteps, maxMappingAttempts, supportsMovies, supportsEpisodes, workflow });
   }
+  if (entry.type === 'internet_archive') {
+    const allowed = new Set(['id', 'type', 'enabled', 'priority', 'region', 'baseUrl',
+      'timeoutMs', 'maxCandidates', 'maxMappingAttempts', 'supportsMovies',
+      'supportsEpisodes']);
+    if (Object.keys(entry).some((key) => !allowed.has(key))) return null;
+    const region = typeof entry.region === 'string' ? entry.region.trim().toLowerCase() : '';
+    const baseUrl = typeof entry.baseUrl === 'string' && normalizeBaseUrl(entry.baseUrl)
+      ? normalizeBaseUrl(entry.baseUrl).toString().replace(/\/$/, '') : null;
+    const maxMappingAttempts = integer(entry.maxMappingAttempts, 3, 1,
+      HARD_MAX_MAPPING_ATTEMPTS);
+    const archiveSupportsEpisodes = boolean(entry.supportsEpisodes, false);
+    if (!id || enabled === null || priority === null || timeoutMs === null ||
+        maxCandidates === null || maxCandidates > 8 || maxMappingAttempts === null ||
+        supportsMovies === null || archiveSupportsEpisodes === null || !REGION.test(region) ||
+        (enabled && !baseUrl)) return null;
+    return Object.freeze({ id, type: 'internet_archive', enabled, priority, region,
+      baseUrl: baseUrl || '', timeoutMs, maxCandidates, maxMappingAttempts,
+      supportsMovies, supportsEpisodes: archiveSupportsEpisodes });
+  }
   if (entry.type === 'peertube') {
     const allowed = new Set(['id', 'type', 'enabled', 'priority', 'baseUrl', 'timeoutMs',
       'maxCandidates', 'mediaMap', 'supportsMovies', 'supportsEpisodes']);

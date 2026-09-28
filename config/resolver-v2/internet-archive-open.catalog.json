@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "sources": [
+    {
+      "id": "internet_archive",
+      "type": "internet_archive",
+      "enabled": false,
+      "priority": 100,
+      "region": "global",
+      "baseUrl": "https://archive.org",
+      "timeoutMs": 10000,
+      "maxCandidates": 3,
+      "maxMappingAttempts": 3,
+      "supportsMovies": true,
+      "supportsEpisodes": false
+    }
+  ],
+  "resolvers": []
+}
