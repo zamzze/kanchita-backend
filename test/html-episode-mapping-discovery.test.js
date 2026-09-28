@@ -254,3 +254,45 @@ test('plain href discovery rejects uncertain, conflicting and off-origin identit
     assert.deepEqual(mappings.map(({ seasonNumber, episodeNumber, externalId }) =>
       [seasonNumber, episodeNumber, externalId]), [[1, 2, '/episodio/good/']]);
   });
+
+test('real-shape descendant markers map eight episodes without joining title digits',
+  async (t) => {
+    const episodeAnchor = (number) => `<a href="/episodio/s3e${number}/">` +
+      `<img src="/poster-${number}.jpg"><span>Episodio ${number}</span>` +
+      `<span>3x${number}</span></a>`;
+    const local = await fixture(t, {
+      '/serie/show-1': '<a href="/temporada/s3/">Temporada 3</a>',
+      '/temporada/s3/': Array.from({ length: 8 }, (_, index) =>
+        episodeAnchor(index + 1)).join(''),
+    });
+    const mappings = await discovery(local.baseUrl).discover({
+      series, externalId: 'show-1' });
+    assert.deepEqual(local.requests, ['/serie/show-1', '/temporada/s3/']);
+    assert.deepEqual(mappings.map(({ seasonNumber, episodeNumber, externalId }) =>
+      [seasonNumber, episodeNumber, externalId]),
+    Array.from({ length: 8 }, (_, index) =>
+      [3, index + 1, `/episodio/s3e${index + 1}/`]));
+  });
+
+test('exact descendant markers take precedence and reject contradictory or invalid markers',
+  async (t) => {
+    const anchor = (path, inner) => `<a href="/episodio/${path}/">${inner}</a>`;
+    const local = await fixture(t, {
+      '/serie/show-1': '<a href="/temporada/s3/">Temporada 3</a>',
+      '/temporada/s3/':
+        anchor('preferred', '<span>3x4</span><span>Episodio 23x9</span>') +
+        anchor('repeated', '<span>3x5</span><span>3x5</span>') +
+        anchor('conflicting', '<span>3x6</span><span>3x7</span>') +
+        anchor('wrong-season', '<span>2x8</span>') +
+        anchor('zero', '<span>3x0</span>') +
+        anchor('missing', '<span>Episodio 6</span>'),
+    });
+    const mappings = await discovery(local.baseUrl).discover({
+      series, externalId: 'show-1' });
+    assert.deepEqual(mappings.map(({ seasonNumber, episodeNumber, externalId }) =>
+      [seasonNumber, episodeNumber, externalId]), [
+      [3, 4, '/episodio/preferred/'],
+      [3, 5, '/episodio/repeated/'],
+    ]);
+    assert.deepEqual(local.requests, ['/serie/show-1', '/temporada/s3/']);
+  });

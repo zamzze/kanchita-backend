@@ -14,11 +14,31 @@ const MAX_TIMEOUT_MS = 10_000;
 const validNumber = (value, minimum) => typeof value === 'string' &&
   /^(?:0|[1-9]\d{0,3})$/.test(value) && Number(value) >= minimum;
 
-const visibleAnchorText = (html, lowerHtml, afterOpen) => {
+const anchorBody = (html, lowerHtml, afterOpen) => {
   const close = lowerHtml.indexOf('</a', afterOpen);
   if (close < 0 || close - afterOpen > 512) return null;
-  return decodeEntities(html.slice(afterOpen, close).replace(/<[^>]*>/g, ' '))
+  return html.slice(afterOpen, close);
+};
+
+const visibleAnchorText = (body) => body && decodeEntities(body.replace(/<[^>]*>/g, ' '))
     .replace(/\s+/g, ' ').trim();
+
+const exactDescendantEpisodeMarker = (body) => {
+  if (!body) return null;
+  const safeBody = body.replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/<(?:script|style)\b[^>]*>[\s\S]*?<\/(?:script|style)\s*>/gi, '');
+  let marker = null;
+  for (const match of safeBody.matchAll(/<([a-z][a-z0-9:-]*)\b[^>]{0,256}>([^<]{1,32})<\/\1\s*>/gi)) {
+    const text = decodeEntities(match[2]).trim();
+    if (!/^\d{1,3}x\d{1,4}$/i.test(text)) continue;
+    const [season, number] = text.toLowerCase().split('x').map(Number);
+    if (season < 1 || number < 1 ||
+        (marker && (marker.season !== season || marker.number !== number))) {
+      return { invalid: true };
+    }
+    marker = { season, number };
+  }
+  return marker;
 };
 
 const plainLinkNumber = (text, kind) => {
@@ -84,7 +104,10 @@ const createHtmlEpisodeMappingDiscovery = ({
         structured === null ? 'href' : 'data-href'), pageUrl);
       if (!path) return;
       let number;
-      const marker = plainLinkNumber(visibleAnchorText(html, lowerHtml, afterOpen), kind);
+      const body = anchorBody(html, lowerHtml, afterOpen);
+      const exactMarker = kind === 'episode' ? exactDescendantEpisodeMarker(body) : null;
+      if (exactMarker?.invalid) return;
+      const marker = exactMarker || plainLinkNumber(visibleAnchorText(body), kind);
       if (structured !== null) {
         if (!validNumber(structured, 1)) return;
         number = Number(structured);
