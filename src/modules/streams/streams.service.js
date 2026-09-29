@@ -44,14 +44,17 @@ const notFoundError = (contentType) => {
   return error;
 };
 
-const formatResponse = (streams, contentId, contentType, subtitleUrl = null, proxy = null) => {
+const formatResponse = (streams, contentId, contentType, subtitleUrl = null, proxy = null,
+  playbackModeForStream = null) => {
   const serialized = streams.map((stream) => {
     const playbackHeaders = playbackHeadersOrNull(stream.playback_headers);
     const hasPlaybackHeaders = playbackHeaders && Object.keys(playbackHeaders).length > 0;
     const needsProxy = stream.stream_type !== 'mp4' && hasPlaybackHeaders;
     const playableUrl = playbackHeaders === null || stream.stream_type === 'mp4' &&
       hasPlaybackHeaders ? null : needsProxy
-      ? proxy?.createPlaybackUrl(stream) || null : stream.stream_url || null;
+      ? proxy?.createPlaybackUrl(stream, {
+        mode: playbackModeForStream?.(stream) || 'full',
+      }) || null : stream.stream_url || null;
     return ({
     server_name: stream.server_name,
     quality: stream.quality || 'auto',
@@ -121,7 +124,11 @@ const createStreamsService = ({
   metrics = createMetricsStore(db),
   stats = createStreamStatsStore(db),
   proxy = null,
+  playbackModeForStream = null,
 } = {}) => {
+  if (playbackModeForStream !== null && typeof playbackModeForStream !== 'function') {
+    throw new Error('STREAM_PLAYBACK_MODE_INVALID');
+  }
   const activeProxy = proxy || createHlsProxy({ enabled: STREAM_HLS_PROXY_ENABLED,
     secret: STREAM_HLS_PROXY_SIGNING_SECRET, publicBaseUrl: API_BASE_URL,
     temporaryUrlSafetySeconds,
@@ -188,7 +195,8 @@ const createStreamsService = ({
         await prewarm.prepareNextEpisode(contentId);
       }
       const subtitleUrl = await fetchSubtitle(contentType, contentId, content);
-      return formatResponse(cache.streams, contentId, contentType, subtitleUrl, activeProxy);
+      return formatResponse(cache.streams, contentId, contentType, subtitleUrl, activeProxy,
+        playbackModeForStream);
     }
     await metrics.increment('cache_miss_total');
     if (cache.backoff) {

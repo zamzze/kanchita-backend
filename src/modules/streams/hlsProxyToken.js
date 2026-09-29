@@ -4,6 +4,8 @@ const crypto = require('node:crypto');
 
 const MAX_TOKEN_TTL_SECONDS = 15 * 60;
 const TOKEN_VERSION = 1;
+const HLS_PROXY_MODES = Object.freeze({ FULL: 'full', PLAYLISTS_ONLY: 'playlists-only' });
+const validProxyMode = (mode) => Object.values(HLS_PROXY_MODES).includes(mode);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const tokenError = () => Object.assign(new Error('HLS_PROXY_TOKEN_INVALID'), {
   code: 'HLS_PROXY_TOKEN_INVALID',
@@ -19,9 +21,9 @@ const createHlsProxyTokenCodec = ({ secret, ttlSeconds = 10 * 60, now = Date.now
   const key = crypto.createHash('sha256').update(`enc:${secret}`, 'utf8').digest();
   const macKey = crypto.createHash('sha256').update(`mac:${secret}`, 'utf8').digest();
   const sign = (parts) => crypto.createHmac('sha256', macKey).update(parts).digest();
-  const issue = ({ streamId, targetUrl, kind = 'resource' }) => {
+  const issue = ({ streamId, targetUrl, kind = 'resource', mode = HLS_PROXY_MODES.FULL }) => {
     if (typeof streamId !== 'string' || !UUID.test(streamId) ||
-        !['manifest', 'resource'].includes(kind)) throw tokenError();
+        !['manifest', 'resource'].includes(kind) || !validProxyMode(mode)) throw tokenError();
     let parsed;
     try { parsed = new URL(targetUrl); } catch { throw tokenError(); }
     if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password) {
@@ -31,7 +33,9 @@ const createHlsProxyTokenCodec = ({ secret, ttlSeconds = 10 * 60, now = Date.now
     const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
     cipher.setAAD(Buffer.from(`kanchita-hls-proxy:${TOKEN_VERSION}`));
     const payload = Buffer.from(JSON.stringify({ v: TOKEN_VERSION, sid: streamId,
-      target: parsed.toString(), kind, exp: Math.floor(now() / 1000) + ttlSeconds }));
+      target: parsed.toString(), kind,
+      ...(mode === HLS_PROXY_MODES.PLAYLISTS_ONLY ? { mode } : {}),
+      exp: Math.floor(now() / 1000) + ttlSeconds }));
     const encrypted = Buffer.concat([cipher.update(payload), cipher.final()]);
     const protectedParts = `${encode(iv)}.${encode(encrypted)}.${encode(cipher.getAuthTag())}`;
     return `${protectedParts}.${encode(sign(protectedParts))}`;
@@ -60,6 +64,7 @@ const createHlsProxyTokenCodec = ({ secret, ttlSeconds = 10 * 60, now = Date.now
       if (payload.v !== TOKEN_VERSION || typeof payload.sid !== 'string' ||
           !UUID.test(payload.sid) ||
           !['manifest', 'resource'].includes(payload.kind) ||
+          !validProxyMode(payload.mode ?? HLS_PROXY_MODES.FULL) ||
           !Number.isInteger(payload.exp) || payload.exp <= Math.floor(now() / 1000)) {
         throw tokenError();
       }
@@ -68,7 +73,8 @@ const createHlsProxyTokenCodec = ({ secret, ttlSeconds = 10 * 60, now = Date.now
         throw tokenError();
       }
       return Object.freeze({ streamId: payload.sid, targetUrl: target.toString(),
-        kind: payload.kind, expiresAt: payload.exp });
+        kind: payload.kind, mode: payload.mode ?? HLS_PROXY_MODES.FULL,
+        expiresAt: payload.exp });
     } catch {
       throw tokenError();
     }
@@ -76,4 +82,5 @@ const createHlsProxyTokenCodec = ({ secret, ttlSeconds = 10 * 60, now = Date.now
   return Object.freeze({ issue, verify, ttlSeconds });
 };
 
-module.exports = { MAX_TOKEN_TTL_SECONDS, createHlsProxyTokenCodec };
+module.exports = { MAX_TOKEN_TTL_SECONDS, HLS_PROXY_MODES, validProxyMode,
+  createHlsProxyTokenCodec };

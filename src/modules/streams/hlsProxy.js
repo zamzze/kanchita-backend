@@ -3,7 +3,8 @@
 const { createSafeHttpClient, bodyText } = require('./http/safeHttpClient');
 const { createStreamStore } = require('../../db/streams.queries');
 const { isPlaybackTransportConfigured, playbackHeadersOrNull } = require('./playbackHeaders');
-const { createHlsProxyTokenCodec } = require('./hlsProxyToken');
+const { createHlsProxyTokenCodec, HLS_PROXY_MODES, validProxyMode } =
+  require('./hlsProxyToken');
 const { rewriteHlsManifest } = require('./hlsManifestRewriter');
 
 const SAFE_RESPONSE_HEADERS = Object.freeze([
@@ -43,12 +44,12 @@ const createHlsProxy = ({
     if (!publicBaseUrl) return path;
     return new URL(path, publicBaseUrl.endsWith('/') ? publicBaseUrl : `${publicBaseUrl}/`).toString();
   };
-  const createPlaybackUrl = (stream) => {
-    if (!available || !stream?.id) return null;
+  const createPlaybackUrl = (stream, { mode = HLS_PROXY_MODES.FULL } = {}) => {
+    if (!available || !stream?.id || !validProxyMode(mode)) return null;
     const headers = playbackHeadersOrNull(stream.playback_headers);
     if (!headers || Object.keys(headers).length === 0) return null;
     return toPublicUrl(codec.issue({ streamId: stream.id,
-      targetUrl: stream.stream_url, kind: 'manifest' }));
+      targetUrl: stream.stream_url, kind: 'manifest', mode }));
   };
   const copyHeaders = (res, headers, { omitLength = false } = {}) => {
     for (const name of SAFE_RESPONSE_HEADERS) {
@@ -93,7 +94,8 @@ const createHlsProxy = ({
         if (!response.ok) return next(proxyError(response.status === 404 ? 404 : 502));
         const manifest = bodyText(response);
         const rewritten = rewriteHlsManifest(manifest, response.url, (targetUrl, kind) =>
-          toPublicUrl(codec.issue({ streamId: payload.streamId, targetUrl, kind })));
+          toPublicUrl(codec.issue({ streamId: payload.streamId, targetUrl, kind,
+            mode: payload.mode })), { mode: payload.mode });
         copyHeaders(res, response.headers, { omitLength: true });
         res.type('application/vnd.apple.mpegurl');
         return res.status(200).send(rewritten);
