@@ -12,6 +12,8 @@ const { createInternetArchiveSourceProvider } =
   require('../providers/internetArchiveSourceProvider');
 const { createMappedSourceProviderAdapter } =
   require('../providers/mappedSourceProviderAdapter');
+const { createPersistedProviderSourceProvider } =
+  require('../providers/persistedProviderSourceProvider');
 const { createConfiguredHttpResolver } = require('../resolvers/configuredHttpResolver');
 const { createConfiguredHtmlResolver } = require('../resolvers/configuredHtmlResolver');
 const { CATALOG_CODES } = require('./catalogErrors');
@@ -24,6 +26,7 @@ const buildResolverV2CatalogRuntime = ({
   existingSourceIds = [],
   existingResolverIds = [],
   mappingResolver = null,
+  sourceStore = null,
 } = {}) => {
   const sources = [];
   const resolvers = [];
@@ -34,13 +37,18 @@ const buildResolverV2CatalogRuntime = ({
   for (const entry of entries.sources || []) {
     if (!entry.enabled) continue;
     if (!['configured_http', 'peertube', 'configured_html', 'pluto',
-      'mapped_http_workflow', 'internet_archive'].includes(entry.type)) {
+      'mapped_http_workflow', 'internet_archive', 'persisted_sources'].includes(entry.type)) {
       errors.push(CATALOG_CODES.INVALID_SOURCE); continue;
     }
     if (sourceIds.has(entry.id)) { errors.push(CATALOG_CODES.DUPLICATE_SOURCE); continue; }
-    if (['mapped_http_workflow', 'internet_archive'].includes(entry.type) &&
+    if (['mapped_http_workflow', 'internet_archive', 'persisted_sources'].includes(entry.type) &&
         (!mappingResolver || typeof mappingResolver.resolve !== 'function')) {
       errors.push(CATALOG_CODES.MAPPING_RESOLVER_UNAVAILABLE);
+      continue;
+    }
+    if (entry.type === 'persisted_sources' &&
+        (!sourceStore || typeof sourceStore.findActiveSourcesForMapping !== 'function')) {
+      errors.push(CATALOG_CODES.INVALID_SOURCE);
       continue;
     }
     const token = entry.authTokenEnv ? env[entry.authTokenEnv] : null;
@@ -77,7 +85,13 @@ const buildResolverV2CatalogRuntime = ({
             : { headers: token ? { authorization: `Bearer ${token}` } : {} }),
         http,
       };
-      const innerSource = entry.type === 'mapped_http_workflow'
+      const innerSource = entry.type === 'persisted_sources'
+        ? createPersistedProviderSourceProvider({ id: entry.id, region: entry.region,
+          enabled: true, priority: entry.priority, timeoutMs: entry.timeoutMs,
+          maxCandidates: entry.maxCandidates, maxMappingAttempts: entry.maxMappingAttempts,
+          supportsMovies: entry.supportsMovies, supportsEpisodes: entry.supportsEpisodes,
+          mappingResolver, sourceStore })
+        : entry.type === 'mapped_http_workflow'
         ? createHttpWorkflowSourceProvider(sourceOptions)
         : entry.type === 'internet_archive'
           ? createInternetArchiveSourceProvider(sourceOptions) : factory(sourceOptions);

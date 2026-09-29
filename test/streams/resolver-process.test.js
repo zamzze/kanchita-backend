@@ -200,6 +200,7 @@ test('resolver subprocess isolation and IPC contract', async (t) => {
     const completed = [];
     const queue = {
       recoverStaleJobs: async () => [],
+      renewJobLease: async () => true,
       claimNextJob: async () => jobs.shift() || null,
       completeJob: async (id) => completed.push(id),
       failJob: async (id, workerId, code) => failed.push({ id, workerId, code }),
@@ -238,6 +239,7 @@ test('resolver subprocess isolation and IPC contract', async (t) => {
     let completed = 0;
     const queue = {
       recoverStaleJobs: async () => [],
+      renewJobLease: async () => true,
       claimNextJob: async () => jobs.shift() || null,
       completeJob: async () => { completed += 1; },
       failJob: async (id, workerId, code) => failureCodes.push(code),
@@ -271,6 +273,7 @@ test('resolver subprocess isolation and IPC contract', async (t) => {
     let failures = 0;
     const queue = {
       recoverStaleJobs: async () => [],
+      renewJobLease: async () => true,
       claimNextJob: async () => {
         claims += 1;
         return claims === 1

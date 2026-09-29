@@ -61,6 +61,19 @@ const normalizeSource = (entry) => {
   const maxCandidates = integer(entry.maxCandidates, 8, 1, 32);
   const supportsMovies = boolean(entry.supportsMovies, true);
   const supportsEpisodes = boolean(entry.supportsEpisodes, true);
+  if (entry.type === 'persisted_sources') {
+    const allowed = new Set(['id', 'type', 'enabled', 'priority', 'region',
+      'timeoutMs', 'maxCandidates', 'maxMappingAttempts', 'supportsMovies',
+      'supportsEpisodes']);
+    if (Object.keys(entry).some((key) => !allowed.has(key))) return null;
+    const region = typeof entry.region === 'string' ? entry.region.trim().toLowerCase() : '';
+    const maxMappingAttempts = integer(entry.maxMappingAttempts, 3, 1, 8);
+    if (!id || enabled === null || priority === null || timeoutMs === null ||
+        maxCandidates === null || maxMappingAttempts === null ||
+        supportsMovies === null || supportsEpisodes === null || !REGION.test(region)) return null;
+    return Object.freeze({ id, type: 'persisted_sources', enabled, priority, region,
+      timeoutMs, maxCandidates, maxMappingAttempts, supportsMovies, supportsEpisodes });
+  }
   if (entry.type === 'mapped_http_workflow') {
     const allowed = new Set(['id', 'type', 'enabled', 'priority', 'region', 'baseUrl',
       'timeoutMs', 'maxBytes', 'maxRedirects', 'maxCandidates', 'maxSteps',

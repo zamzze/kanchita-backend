@@ -49,11 +49,23 @@ const createProviderSourceStore = (db) => {
       JSON.stringify(source.metadata)]);
     return rows[0];
   };
-  const findActiveSourcesForMapping = async (mappingId) => {
+  const findActiveSourcesForMapping = async (mappingId, { limit, sourceType } = {}) => {
     if (!positiveId(mappingId)) throw invalid('PROVIDER_SOURCE_INVALID_ID');
+    if (limit !== undefined &&
+        (!Number.isInteger(limit) || limit < 1 || limit > 64)) {
+      throw invalid('PROVIDER_SOURCE_INVALID_LIMIT');
+    }
+    if (sourceType !== undefined && !TYPES.has(sourceType)) {
+      throw invalid('PROVIDER_SOURCE_INVALID_TYPE');
+    }
+    const values = [mappingId];
+    const typeClause = sourceType === undefined ? ''
+      : ` AND source_type = $${values.push(sourceType)}`;
+    const limitClause = limit === undefined ? '' : ` LIMIT $${values.push(limit)}`;
     const { rows } = await db.query(`SELECT * FROM provider_sources
       WHERE mapping_id = $1 AND status = 'active'
-      ORDER BY discovered_at DESC, id`, [mappingId]);
+      ${typeClause}
+      ORDER BY discovered_at DESC, id${limitClause}`, values);
     return rows;
   };
   const markSourceStatus = async ({ sourceId, status }) => {

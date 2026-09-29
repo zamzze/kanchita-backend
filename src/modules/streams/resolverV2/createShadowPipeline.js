@@ -74,6 +74,7 @@ const createShadowPipeline = ({
   plutoProvider = {},
   providerMappingResolver = null,
   providerMappingStore = null,
+  providerSourceStore = null,
   httpResolver = {},
   healthStore = null,
   observability = null,
@@ -195,6 +196,7 @@ const createShadowPipeline = ({
         const built = catalogRuntimeBuilder({ catalog: loadedCatalog, http: activeHttpClient,
           hlsResolver: directHlsResolver, env: catalogEnv,
           mappingResolver: providerMappingResolver,
+          sourceStore: providerSourceStore,
           existingSourceIds: configuredProviders.map(({ descriptor }) => descriptor.id),
           existingResolverIds: configuredResolvers.map(({ descriptor }) => descriptor.id) });
         configuredProviders.push(...built.sources);

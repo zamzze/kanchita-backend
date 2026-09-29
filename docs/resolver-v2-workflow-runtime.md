@@ -6,6 +6,27 @@
 
 El mapping aporta `externalId`; el workflow no busca por título. El catálogo valida la configuración y el runtime vuelve a normalizarla. Los resultados del workflow son candidatos, no streams ya validados: la validación y selección pertenecen al ResolverEngine.
 
+## Fuentes HLS persistidas
+
+Una entrada opt-in del catálogo de tipo `persisted_sources`, con `id` igual al
+`provider_id` del mapping y `region` explícita, conecta el worker existente:
+
+`MediaContext → mapping exacto → provider_sources (active/direct_hls) → PersistedProviderSourceProvider → EmbedCandidate[] → ResolverEngine → DirectHlsResolver → StreamCandidate validado`
+
+El provider sólo lee; no descarga manifests, no hace discovery ni altera estados.
+Lee como máximo ocho mappings y 64 filas por mapping, emite hasta
+`maxCandidates` (8 por defecto, máximo 32), conserva orden y salta filas
+inválidas, inactivas o de tipos distintos a `direct_hls`. Únicamente `referer`
+y `origin` válidos pueden llegar como headers de playback. No se registra
+sin entrada habilitada de catálogo y sin stores de mapping/fuentes disponibles.
+
+`provider_media_mappings` guarda identidad estable del contenido;
+`provider_sources` guarda una fuente semi-permanente y su Referer;
+`streams` sigue siendo la caché de reproducción sujeta a TTL y revalidación.
+Los segmentos nunca se persisten. Si una fuente deja de funcionar, este
+adaptador no realiza redescubrimiento ni cambia su estado: eso pertenece a un
+proceso de ingestión posterior.
+
 ## DSL
 
 | Step | Entrada permitida → salida | Límites, provenance y fallos | Red / candidates |

@@ -25,6 +25,7 @@ const { createProviderMediaMappingStore } =
   require('../../db/providerMediaMappings.queries');
 const { createProviderMediaMappingResolver } =
   require('./providerMediaMappingResolver');
+const { createProviderSourceStore } = require('../../db/providerSources.queries');
 const { isPlaybackTransportConfigured } = require('./playbackHeaders');
 const {
   STREAM_CACHE_TTL_MINUTES,
@@ -56,6 +57,7 @@ const {
   STREAM_HLS_PROXY_SIGNING_SECRET,
   API_BASE_URL,
   PLUTO_ENABLED,
+  STREAM_RESOLVER_V2_CATALOG_ENABLED,
 } = require('../../config/env');
 
 const createStreamProcessor = ({
@@ -111,10 +113,14 @@ const createStreamProcessor = ({
   const primaryMetricStore = primaryMetrics || (mode === 'primary' ? metrics : null);
   const needsComposition = (mode === 'primary' && !primaryResolver) ||
     (mode === 'shadow' && !shadowResolver);
-  const providerMappingStore = needsComposition && PLUTO_ENABLED
+  const needsMappedSources = needsComposition &&
+    (PLUTO_ENABLED || STREAM_RESOLVER_V2_CATALOG_ENABLED);
+  const providerMappingStore = needsMappedSources
     ? createProviderMediaMappingStore(db) : null;
   const providerMappingResolver = providerMappingStore
     ? createProviderMediaMappingResolver({ store: providerMappingStore }) : null;
+  const providerSourceStore = needsComposition && STREAM_RESOLVER_V2_CATALOG_ENABLED
+    ? createProviderSourceStore(db) : null;
   const v2Composition = needsComposition ? createShadowPipeline({
     enabled: mode === 'shadow',
     timeoutMs: STREAM_RESOLVER_V2_SHADOW_TIMEOUT_MS,
@@ -124,6 +130,7 @@ const createStreamProcessor = ({
     primaryTimeoutMs,
     primaryMetrics: primaryMetricStore,
     providerMappingResolver,
+    providerSourceStore,
   }) : null;
   const shadow = shadowResolver || v2Composition?.shadowResolver || null;
   const primary = primaryResolver || v2Composition?.primaryResolver || null;
