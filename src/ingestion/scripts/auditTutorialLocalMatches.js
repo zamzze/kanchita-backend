@@ -213,7 +213,7 @@ const main = async () => {
     });
   }
 
-  const resolved = (counts.matched_high || 0) + (counts.matched_unique_title || 0);
+  const resolved = counts.matched_high || 0;
   const summary = {
     generatedAt: new Date().toISOString(),
     privacy: {
@@ -232,7 +232,7 @@ const main = async () => {
     resolvedLocally: resolved,
     unresolvedForTmdb: tutorials.length - resolved,
     matchedCandidateHasActivePlayback: matchedToPlayback,
-    nextStep: 'TMDB_ONLY_FOR_UNRESOLVED',
+    nextStep: 'TMDB_VERIFY_UNIQUE_TITLE_AND_MATCH_UNRESOLVED',
   };
 
   fs.mkdirSync(PRIVATE_DIR, { recursive: true });
