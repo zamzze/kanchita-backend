@@ -64,15 +64,18 @@ const normalizeSource = (entry) => {
   if (entry.type === 'persisted_sources') {
     const allowed = new Set(['id', 'type', 'enabled', 'priority', 'region',
       'timeoutMs', 'maxCandidates', 'maxMappingAttempts', 'supportsMovies',
-      'supportsEpisodes']);
+      'supportsEpisodes', 'hlsProxyMode']);
     if (Object.keys(entry).some((key) => !allowed.has(key))) return null;
     const region = typeof entry.region === 'string' ? entry.region.trim().toLowerCase() : '';
     const maxMappingAttempts = integer(entry.maxMappingAttempts, 3, 1, 8);
+    const hlsProxyMode = entry.hlsProxyMode ?? 'full';
     if (!id || enabled === null || priority === null || timeoutMs === null ||
         maxCandidates === null || maxMappingAttempts === null ||
-        supportsMovies === null || supportsEpisodes === null || !REGION.test(region)) return null;
+        supportsMovies === null || supportsEpisodes === null || !REGION.test(region) ||
+        !['full', 'playlists-only'].includes(hlsProxyMode)) return null;
     return Object.freeze({ id, type: 'persisted_sources', enabled, priority, region,
-      timeoutMs, maxCandidates, maxMappingAttempts, supportsMovies, supportsEpisodes });
+      timeoutMs, maxCandidates, maxMappingAttempts, supportsMovies, supportsEpisodes,
+      hlsProxyMode });
   }
   if (entry.type === 'mapped_http_workflow') {
     const allowed = new Set(['id', 'type', 'enabled', 'priority', 'region', 'baseUrl',

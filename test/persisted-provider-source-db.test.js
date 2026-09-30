@@ -5,6 +5,8 @@ const crypto = require('node:crypto');
 const http = require('node:http');
 const { test } = require('node:test');
 const { Pool } = require('pg');
+const express = require('express');
+const request = require('supertest');
 
 process.env.NODE_ENV = 'test';
 process.env.PORT ||= '3000';
@@ -40,6 +42,15 @@ const { createStreamLifecycle } =
   require('../src/modules/streams/streamLifecycle');
 const { createStreamProcessor } =
   require('../src/modules/streams/streamProcessor');
+const { createStreamsService } = require('../src/modules/streams/streams.service');
+const { createHlsProxy } = require('../src/modules/streams/hlsProxy');
+const { createHlsProxyRouter } = require('../src/modules/streams/hlsProxy.routes');
+const { createHlsProxyTokenCodec } = require('../src/modules/streams/hlsProxyToken');
+const { createTrustedPlaybackModeForStream } =
+  require('../src/modules/streams/trustedPlaybackTransport');
+const { loadResolverV2Catalog } =
+  require('../src/modules/streams/resolverV2/catalog/catalogLoader');
+const { createStreamStore } = require('../src/db/streams.queries');
 const configuredPool = require('../src/config/db');
 
 test('isolated PostgreSQL exact mapping → persisted source → worker Primary → streams',
@@ -126,4 +137,34 @@ test('isolated PostgreSQL exact mapping → persisted source → worker Primary 
         source.id);
       assert.equal((await db.query('SELECT COUNT(*)::integer AS count FROM resolved_stream_cache'))
         .rows[0].count, 0);
+
+      const trustedCatalog = loadResolverV2Catalog({ enabled: true,
+        filePath: 'fixture.json', readFile: () => JSON.stringify({ version: 1,
+          sources: [{ ...catalog.sources[0], hlsProxyMode: 'playlists-only' }] }) });
+      const codec = createHlsProxyTokenCodec({
+        secret: 'persisted-source-playback-test-secret-32',
+      });
+      const proxy = createHlsProxy({ enabled: true, tokenCodec: codec,
+        store: createStreamStore(db),
+        httpClient: createSafeHttpClient({ allowPrivateNetworks: true }) });
+      const service = createStreamsService({ db, proxy,
+        playbackModeForStream: createTrustedPlaybackModeForStream(trustedCatalog),
+        validator: async () => ({ valid: true }),
+        findContent: async () => ({ tmdb_id: 550 }),
+        subtitleFetcher: async () => null,
+        stats: { recordRequest: async () => {} },
+        metrics: { increment: async () => {} },
+        logger: { log() {}, warn() {} } });
+      const ready = await service.getMovieStreams(movieId);
+      assert.equal(ready.status, 'ready');
+      const playbackUrl = ready.stream.url;
+      assert.equal(codec.verify(playbackUrl.split('/').at(-1)).mode, 'playlists-only');
+      const app = express();
+      app.use('/stream-proxy', createHlsProxyRouter(proxy));
+      app.use((error, _req, res, _next) =>
+        res.status(error.statusCode || 500).json({ code: error.code }));
+      const manifest = await request(app).get(playbackUrl);
+      assert.equal(manifest.status, 200);
+      assert.match(manifest.text, new RegExp(`http://127\\.0\\.0\\.1:${server.address().port}/segment\\.ts`));
+      assert.equal(manifestRequests, 2);
   });

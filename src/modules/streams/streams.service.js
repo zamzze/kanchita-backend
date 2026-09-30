@@ -11,6 +11,8 @@ const { createStreamStatsStore } = require('./streamStats');
 const { createMetricsStore } = require('./streamMetrics');
 const { createStreamPrewarm } = require('./streamPrewarm');
 const { createHlsProxy } = require('./hlsProxy');
+const { HLS_PROXY_MODES, validProxyMode } = require('./hlsProxyToken');
+const { loadTrustedPlaybackModeForStream } = require('./trustedPlaybackTransport');
 const { playbackHeadersOrNull } = require('./playbackHeaders');
 const {
   STREAM_CACHE_TTL_MINUTES,
@@ -50,10 +52,19 @@ const formatResponse = (streams, contentId, contentType, subtitleUrl = null, pro
     const playbackHeaders = playbackHeadersOrNull(stream.playback_headers);
     const hasPlaybackHeaders = playbackHeaders && Object.keys(playbackHeaders).length > 0;
     const needsProxy = stream.stream_type !== 'mp4' && hasPlaybackHeaders;
+    let selectedMode = HLS_PROXY_MODES.FULL;
+    if (needsProxy && playbackModeForStream) {
+      try {
+        const proposed = playbackModeForStream(stream);
+        if (validProxyMode(proposed)) selectedMode = proposed;
+      } catch {
+        // A broken server-side policy must not relax the default transport.
+      }
+    }
     const playableUrl = playbackHeaders === null || stream.stream_type === 'mp4' &&
       hasPlaybackHeaders ? null : needsProxy
       ? proxy?.createPlaybackUrl(stream, {
-        mode: playbackModeForStream?.(stream) || 'full',
+        mode: selectedMode,
       }) || null : stream.stream_url || null;
     return ({
     server_name: stream.server_name,
@@ -124,7 +135,7 @@ const createStreamsService = ({
   metrics = createMetricsStore(db),
   stats = createStreamStatsStore(db),
   proxy = null,
-  playbackModeForStream = null,
+  playbackModeForStream = loadTrustedPlaybackModeForStream(),
 } = {}) => {
   if (playbackModeForStream !== null && typeof playbackModeForStream !== 'function') {
     throw new Error('STREAM_PLAYBACK_MODE_INVALID');

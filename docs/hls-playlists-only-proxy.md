@@ -1,13 +1,16 @@
 # HLS playlist-only transport
 
 The default HLS playback transport remains `full`: playlists and media resources
-are fetched through the existing opaque, SSRF-checked proxy. The optional
-`playlists-only` mode is selected by trusted server code per stream via
-`createPlaybackUrl(stream, { mode: 'playlists-only' })` or the injected
-`playbackModeForStream` callback in `createStreamsService`. The mode is bound to
-the signed proxy token and inherited by child playlist tokens. It cannot be
-selected from a client query parameter. No provider or default production
-service selects this mode yet.
+are fetched through the existing opaque, SSRF-checked proxy. A server-owned,
+enabled Resolver V2 catalog entry of type `persisted_sources` may opt its
+provider ID into `hlsProxyMode: "playlists-only"`. Any missing, disabled, or
+invalid entry remains `full`. The HTTP service reloads this trusted catalog at
+startup and selects by the persisted stream's provider ID; the worker does not
+persist the mode. The mode is bound to the signed proxy token and inherited by
+child playlist tokens. Query parameters, request bodies, client headers,
+MediaContext, source headers, and stream metadata cannot select it. The
+low-level `createPlaybackUrl` option and service callback remain server-only
+injection points, not public API inputs.
 
 In `playlists-only` mode, master/media playlists and URI-bearing HLS tags still
 use the proxy. Only a plain media URI following `#EXTINF`, with a `.ts` pathname

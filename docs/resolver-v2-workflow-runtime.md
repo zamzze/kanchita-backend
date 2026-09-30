@@ -27,6 +27,30 @@ Los segmentos nunca se persisten. Si una fuente deja de funcionar, este
 adaptador no realiza redescubrimiento ni cambia su estado: eso pertenece a un
 proceso de ingestión posterior.
 
+La política de transporte vive únicamente en la configuración confiable del
+provider en ese catálogo: `hlsProxyMode` admite `full` (default) o
+`playlists-only`. No se toma de `provider_sources.headers_json`, metadata,
+MediaContext ni de la petición del cliente. El servicio HTTP la deriva del
+`provider` de la fila `streams` al emitir un token HLS firmado; no requiere
+columna nueva. El cliente sólo consume la URL resultante:
+
+```text
+provider config [trusted] ───────────┐
+                                     ↓
+mapping → provider_source → EmbedCandidate → DirectHlsResolver
+                                     ↓
+                              StreamCandidate
+                                     ↓
+                        trusted playback transport
+                              ├─ full
+                              └─ playlists-only
+```
+
+`provider_media_mappings` es identidad estable, `provider_sources` es fuente
+semi-permanente, `streams` es caché de reproducción y el token firmado
+autoriza el transporte seleccionado. Sólo playlists y segmentos TS elegibles
+siguen la semántica existente; no se amplían las reglas del proxy.
+
 ## DSL
 
 | Step | Entrada permitida → salida | Límites, provenance y fallos | Red / candidates |
