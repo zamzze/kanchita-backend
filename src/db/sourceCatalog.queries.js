@@ -60,6 +60,31 @@ const createSourceCatalogStore = (db = pool) => {
     return rows[0];
   };
 
+  const findActiveMappedServers = async (contentType, contentId) => {
+    const { rows } = await db.query(
+      `SELECT
+         scs.id AS catalog_source_id,
+         scs.catalog_item_id,
+         scs.server_index,
+         scs.iframe_url,
+         scs.iframe_host,
+         scs.source_type,
+         sci.provider_id,
+         sci.tmdb_id
+       FROM source_catalog_items sci
+       JOIN source_catalog_servers scs
+         ON scs.catalog_item_id = sci.id
+       WHERE sci.fetch_status = 'ok'
+         AND sci.match_status = 'matched'
+         AND sci.mapped_content_type = $1
+         AND sci.mapped_content_id = $2
+         AND scs.is_active = TRUE
+       ORDER BY scs.server_index ASC, scs.id ASC`,
+      [contentType, contentId]
+    );
+    return rows;
+  };
+
   const getImportSummary = async () => {
     const { rows } = await db.query(
       `SELECT
@@ -79,6 +104,7 @@ const createSourceCatalogStore = (db = pool) => {
     upsertItemWithClient,
     deactivateServersWithClient,
     upsertServerWithClient,
+    findActiveMappedServers,
     getImportSummary,
   };
 };
