@@ -283,7 +283,7 @@ const main = function () {
     coverage: {
       recordsWithRefererPage: recordsWithPage,
       recordsWithAtLeastOneHit: recordsWithHit,
-      exactUrlValueHits,
+      exactUrlValueHits: exactValueHits,
       containedHits
     },
     shapes: {
