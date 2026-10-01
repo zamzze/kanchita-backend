@@ -40,7 +40,11 @@ const safeError = (error) => ({
   code: typeof error?.code === 'string' ? error.code : 'CANARY_ERROR',
 });
 
-const loadSample = async (pattern) => {
+const loadSample = async (shape) => {
+  const prefix = shape === 'watch_token'
+    ? 'https://nupload.my/watch/%'
+    : 'https://nupload.my/iframe%';
+
   const { rows } = await pool.query(
     `SELECT
        scs.iframe_url,
@@ -58,10 +62,30 @@ const loadSample = async (pattern) => {
        AND scs.iframe_host = $1
        AND scs.iframe_url LIKE $2
      ORDER BY scs.id ASC
-     LIMIT 1`,
-    [TARGET_HOST, pattern]
+     LIMIT 100`,
+    [TARGET_HOST, prefix]
   );
-  return rows[0] || null;
+
+  for (const row of rows) {
+    try {
+      const url = new URL(row.iframe_url);
+      const pathname = url.pathname.replace(/\/+$/, '');
+      if (shape === 'watch_token' &&
+          pathname.startsWith('/watch/') &&
+          url.search.length === 0) {
+        return row;
+      }
+      if (shape === 'iframe_query' &&
+          pathname === '/iframe' &&
+          url.search.length > 0) {
+        return row;
+      }
+    } catch {
+      // Ignore malformed rows; source-shape audit already counts them separately.
+    }
+  }
+
+  return null;
 };
 
 const probeDirect = async (candidate, hlsResolver, mp4Resolver) => {
@@ -208,8 +232,8 @@ const probeSample = async (shape, row, http, hlsResolver, mp4Resolver) => {
 
 const main = async () => {
   const [watch, iframe] = await Promise.all([
-    loadSample('https://nupload.my/watch/%'),
-    loadSample('https://nupload.my/iframe?%'),
+    loadSample('watch_token'),
+    loadSample('iframe_query'),
   ]);
 
   const http = createSafeHttpClient({
