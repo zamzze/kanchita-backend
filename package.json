@@ -43,7 +43,8 @@
     "audit:tutorial-nupload-html-structure": "node --env-file=.env src/ingestion/scripts/auditNuploadHtmlStructure.js",
     "audit:tutorial-nupload-xhr-shape": "node --env-file=.env src/ingestion/scripts/auditNuploadXhrShape.js",
     "audit:tutorial-nupload-xhr-dataflow": "node --env-file=.env src/ingestion/scripts/auditNuploadXhrDataflow.js",
-    "audit:tutorial-nupload-identifier-provenance": "node --env-file=.env src/ingestion/scripts/auditNuploadIdentifierProvenance.js"
+    "audit:tutorial-nupload-identifier-provenance": "node --env-file=.env src/ingestion/scripts/auditNuploadIdentifierProvenance.js",
+    "audit:tutorial-nupload-workflow-components": "node --env-file=.env src/ingestion/scripts/auditNuploadWorkflowComponents.js"
   },
   "dependencies": {
     "adm-zip": "^0.5.17",
