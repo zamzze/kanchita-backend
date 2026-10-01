@@ -36,6 +36,7 @@ test('migration files are ordered and checksummed deterministically', async () =
       '004_stream_lifecycle.sql',
       '005_stream_resolution_jobs.sql',
       '006_fast_stream_engine.sql',
+      '007_tutorial_source_catalog.sql',
     ]
   );
   assert.ok(migrations.every(({ checksum }) => /^[a-f0-9]{64}$/.test(checksum)));
@@ -80,6 +81,7 @@ test(
           '004_stream_lifecycle.sql',
           '005_stream_resolution_jobs.sql',
           '006_fast_stream_engine.sql',
+          '007_tutorial_source_catalog.sql',
         ]);
 
         const second = await runMigrations({
@@ -280,6 +282,44 @@ test(
           ),
           (error) => error.code === '23514'
         );
+      });
+
+      await t.test('creates the tutorial source catalog contract', async () => {
+        const relations = await pools.empty.query(`
+          SELECT to_regclass(name) IS NOT NULL AS present
+          FROM unnest(ARRAY[
+            'source_catalog_items',
+            'source_catalog_servers'
+          ]) AS name
+        `);
+        assert.ok(relations.rows.every(({ present }) => present));
+
+        const itemConstraints = await pools.empty.query(`
+          SELECT conname
+          FROM pg_constraint
+          WHERE conrelid = 'source_catalog_items'::regclass
+        `);
+        const itemConstraintNames = itemConstraints.rows.map((row) => row.conname);
+        for (const name of [
+          'source_catalog_items_provider_url_unique',
+          'source_catalog_items_fetch_status_check',
+          'source_catalog_items_match_status_check',
+          'source_catalog_items_content_type_check',
+          'source_catalog_items_mapping_pair_check',
+          'source_catalog_items_server_count_check',
+        ]) {
+          assert.ok(itemConstraintNames.includes(name));
+        }
+
+        const serverConstraints = await pools.empty.query(`
+          SELECT conname
+          FROM pg_constraint
+          WHERE conrelid = 'source_catalog_servers'::regclass
+        `);
+        const serverConstraintNames = serverConstraints.rows.map((row) => row.conname);
+        assert.ok(serverConstraintNames.includes('source_catalog_servers_item_url_unique'));
+        assert.ok(serverConstraintNames.includes('source_catalog_servers_index_check'));
+        assert.ok(serverConstraintNames.includes('source_catalog_servers_type_check'));
       });
 
       await t.test('creates the fast stream engine contracts', async () => {
