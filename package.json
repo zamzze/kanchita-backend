@@ -36,7 +36,8 @@
     "audit:tutorial-apply-consistency": "node --env-file=.env src/ingestion/scripts/auditTutorialApplyConsistency.js",
     "apply:tutorial-movies": "node --env-file=.env src/ingestion/scripts/applyTutorialMovieMatches.js",
     "audit:tutorial-post-apply": "node --env-file=.env src/ingestion/scripts/auditTutorialPostApply.js",
-    "plan:tutorial-publication": "node --env-file=.env src/ingestion/scripts/planTutorialPublication.js"
+    "plan:tutorial-publication": "node --env-file=.env src/ingestion/scripts/planTutorialPublication.js",
+    "audit:tutorial-source-shape": "node --env-file=.env src/ingestion/scripts/auditTutorialSourceShape.js"
   },
   "dependencies": {
     "adm-zip": "^0.5.17",
