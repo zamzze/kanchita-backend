@@ -33,7 +33,8 @@
     "audit:tutorial-invalid-slugs": "node src/ingestion/scripts/auditTutorialInvalidSlugs.js",
     "test:catalog-provider": "node --test test/streams/source-catalog-provider.test.js",
     "plan:tutorial-movie-apply": "node --env-file=.env src/ingestion/scripts/planTutorialMovieApply.js",
-    "audit:tutorial-apply-consistency": "node --env-file=.env src/ingestion/scripts/auditTutorialApplyConsistency.js"
+    "audit:tutorial-apply-consistency": "node --env-file=.env src/ingestion/scripts/auditTutorialApplyConsistency.js",
+    "apply:tutorial-movies": "node --env-file=.env src/ingestion/scripts/applyTutorialMovieMatches.js"
   },
   "dependencies": {
     "adm-zip": "^0.5.17",
