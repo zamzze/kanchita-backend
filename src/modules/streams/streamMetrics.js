@@ -14,6 +14,7 @@ const METRIC_NAMES = new Set([
   'provider_resolution_total',
   'provider_success_total',
   'provider_failure_total',
+  'provider_skip_total',
   'browser_resolution_total',
   'browser_slot_wait_ms',
   'resolver_duration_ms',
