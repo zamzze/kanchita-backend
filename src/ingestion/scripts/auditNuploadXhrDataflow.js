@@ -103,7 +103,7 @@ const findHeaderShapes = (text, xhrName) => {
   if (!safeName(xhrName)) return [];
   const escaped = xhrName.replace(/[$]/g, '\\$&');
   const regex = new RegExp(
-    escaped + '\\.setRequestHeader\\s*\\(\\s*([\\'\"])([^\\'\"\\r\\n]{1,128})\\1\\s*,\\s*([^\\)\\r\\n]{1,512})',
+    escaped + String.raw`\.setRequestHeader\s*\(\s*(['"])([^'"\r\n]{1,128})\1\s*,\s*([^\)\r\n]{1,512})`,
     'g'
   );
   const output = [];
@@ -124,7 +124,7 @@ const findEventShapes = (text, xhrName) => {
   const escaped = xhrName.replace(/[$]/g, '\\$&');
   const events = new Set();
   const add = new RegExp(
-    escaped + '\\.addEventListener\\s*\\(\\s*([\\'\"])([A-Za-z0-9_-]{1,32})\\1',
+    escaped + String.raw`\.addEventListener\s*\(\s*(['"])([A-Za-z0-9_-]{1,32})\1`,
     'g'
   );
   for (const match of text.matchAll(add)) events.add(match[2].toLowerCase());
@@ -137,7 +137,7 @@ const findResponseType = (text, xhrName) => {
   if (!safeName(xhrName)) return null;
   const escaped = xhrName.replace(/[$]/g, '\\$&');
   const regex = new RegExp(
-    escaped + '\\.responseType\\s*=\\s*([\\'\"])([^\\'\"\\r\\n]{0,64})\\1',
+    escaped + String.raw`\.responseType\s*=\s*(['"])([^'"\r\n]{0,64})\1`,
     'i'
   );
   const match = regex.exec(text);
