@@ -25,7 +25,8 @@
     "audit:tutorial-movies": "node src/ingestion/scripts/auditTutorialMovieShape.js",
     "audit:tutorial-html-metadata": "node src/ingestion/scripts/auditTutorialHtmlMetadata.js",
     "audit:tutorial-local-matches": "node --env-file=.env src/ingestion/scripts/auditTutorialLocalMatches.js",
-    "audit:tutorial-tmdb-pilot": "node --env-file=.env src/ingestion/scripts/auditTutorialTmdbPilot.js"
+    "audit:tutorial-tmdb-pilot": "node --env-file=.env src/ingestion/scripts/auditTutorialTmdbPilot.js",
+    "audit:tutorial-listing-context": "node src/ingestion/scripts/auditTutorialListingContext.js"
   },
   "dependencies": {
     "adm-zip": "^0.5.17",
