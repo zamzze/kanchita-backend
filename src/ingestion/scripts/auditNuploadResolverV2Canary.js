@@ -3,10 +3,10 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const pool = require('../../config/db');
-const { createSafeHttpClient } = require('../modules/streams/http/safeHttpClient');
-const { extractLinks } = require('../modules/streams/resolverV2/html/staticHtmlExtractor');
-const { createDirectHlsResolver } = require('../modules/streams/resolverV2/resolvers/directHlsResolver');
-const { createDirectMp4Resolver } = require('../modules/streams/resolverV2/resolvers/directMp4Resolver');
+const { createSafeHttpClient } = require('../../modules/streams/http/safeHttpClient');
+const { extractLinks } = require('../../modules/streams/resolverV2/html/staticHtmlExtractor');
+const { createDirectHlsResolver } = require('../../modules/streams/resolverV2/resolvers/directHlsResolver');
+const { createDirectMp4Resolver } = require('../../modules/streams/resolverV2/resolvers/directMp4Resolver');
 
 const REPORT_DIR = path.resolve(process.cwd(), 'reports');
 const TARGET_HOST = 'nupload.my';
