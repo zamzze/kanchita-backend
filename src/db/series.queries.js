@@ -11,8 +11,8 @@ const findAll = async ({ limit = 20, offset = 0, genre_id } = {}, db = pool) => 
   }
 
   const { rows } = await db.query(
-    `SELECT s.id, s.title, s.release_year, s.poster_url,
-            s.backdrop_url, s.rating, s.status
+    `SELECT s.id, s.tmdb_id, s.title, s.release_year, s.poster_url,
+            s.backdrop_url, s.rating, s.status, s.created_at
      FROM series s ${genreJoin}
      WHERE s.is_published = TRUE ${genreWhere}
      ORDER BY s.created_at DESC
