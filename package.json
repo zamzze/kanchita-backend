@@ -30,6 +30,7 @@
     "audit:tutorial-harvest-context": "node src/ingestion/scripts/auditTutorialHarvestContext.js",
     "audit:tutorial-harvest-shape": "node src/ingestion/scripts/auditTutorialHarvestShape.js",
     "match:tutorial-movies:v1": "node --env-file=.env src/ingestion/scripts/matchTutorialMoviesV1.js",
+    "match:tutorial-movies:v2": "node src/ingestion/scripts/matchTutorialMoviesV2.js",
     "audit:tutorial-invalid-slugs": "node src/ingestion/scripts/auditTutorialInvalidSlugs.js",
     "test:catalog-provider": "node --test test/streams/source-catalog-provider.test.js",
     "plan:tutorial-movie-apply": "node --env-file=.env src/ingestion/scripts/planTutorialMovieApply.js",
@@ -50,13 +51,12 @@
   "dependencies": {
     "adm-zip": "^0.5.17",
     "bcryptjs": "^2.4.3",
-    "cors": "^2.8.5",
-    "express": "^4.18.2",
+    "cors": "^4.18.2",
     "express-rate-limit": "^7.1.5",
     "helmet": "^7.1.0",
     "jsonwebtoken": "^9.0.2",
     "node-cron": "^3.0.3",
-    "node-unrar-js": "^2.0.2",
+    "node-unrar-js": "^0.2.0",
     "pg": "^8.11.3",
     "puppeteer-real-browser": "^1.3.5"
   },
