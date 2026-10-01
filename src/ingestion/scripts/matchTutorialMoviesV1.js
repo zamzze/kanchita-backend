@@ -136,7 +136,9 @@ const loadCompleted = async () => {
     if (!line.trim()) continue;
     try {
       const record = JSON.parse(line);
-      if (record.tutorialUrl) completed.set(record.tutorialUrl, record);
+      if (record.tutorialUrl && record?.match?.method !== 'tmdb_error') {
+        completed.set(record.tutorialUrl, record);
+      }
     } catch {
       // Ignore an interrupted final line and keep the completed checkpoints.
     }
@@ -379,7 +381,7 @@ const main = async () => {
   fs.mkdirSync(REPORT_DIR, { recursive: true });
 
   if (RESET) {
-    for (const file of [NDJSON_FILE, LATEST_FILE, SUMMARY_FILE]) {
+    for (const file of [NDJSON_FILE, LATEST_FILE, CACHE_FILE, SUMMARY_FILE]) {
       if (fs.existsSync(file)) fs.unlinkSync(file);
     }
   }
