@@ -13,7 +13,7 @@ const findAll = async ({ limit = 20, offset = 0, genre_id } = {}) => {
 
   const { rows } = await pool.query(
     `SELECT m.id, m.tmdb_id, m.title, m.release_year, m.duration_seconds,
-            m.poster_url, m.backdrop_url, m.rating,
+            m.poster_url, m.backdrop_url, m.rating, m.created_at,
             EXISTS (
               SELECT 1
               FROM streams s
