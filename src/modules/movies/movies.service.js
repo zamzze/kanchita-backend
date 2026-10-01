@@ -1,5 +1,24 @@
 const moviesDb = require('../../db/movies.queries');
 
+const withPlayback = (movie) => {
+  const {
+    playback_ready: playbackReady,
+    catalog_source_count: catalogSourceCountRaw,
+    ...content
+  } = movie;
+
+  const catalogSourceCount = Number(catalogSourceCountRaw || 0);
+
+  return {
+    ...content,
+    playback: {
+      ready: playbackReady === true,
+      has_catalog_sources: catalogSourceCount > 0,
+      catalog_source_count: catalogSourceCount,
+    },
+  };
+};
+
 const getAll = async ({ page = 1, limit = 20, genre_id } = {}) => {
   const safePage  = Math.max(1, parseInt(page, 10));
   const safeLimit = Math.min(50, Math.max(1, parseInt(limit, 10)));
@@ -11,7 +30,7 @@ const getAll = async ({ page = 1, limit = 20, genre_id } = {}) => {
   ]);
 
   return {
-    items,
+    items: items.map(withPlayback),
     pagination: {
       page:        safePage,
       limit:       safeLimit,
@@ -28,7 +47,7 @@ const getById = async (id) => {
     err.statusCode = 404;
     throw err;
   }
-  return movie;
+  return withPlayback(movie);
 };
 
 const getAllGenres = async () => {
