@@ -9,6 +9,43 @@ const { createResolutionQueue } = require('../streams/resolutionQueue');
 const db = require('../../db/ingestion.queries');
 const { redactSensitive } = require('../../utils/redact');
 const resolutionQueue = createResolutionQueue(pool);
+const moviesService = require('../movies/movies.service');
+const seriesService = require('../series/series.service');
+
+const getHomeCatalog = async ({
+  movieLimit = 24,
+  seriesLimit = 24,
+  recentLimit = 12,
+} = {}) => {
+  const [moviePage, seriesPage] = await Promise.all([
+    moviesService.getAll({ page: 1, limit: movieLimit }),
+    seriesService.getAll({ page: 1, limit: seriesLimit }),
+  ]);
+
+  const movies = moviePage.items || [];
+  const series = seriesPage.items || [];
+  const recent = [
+    ...movies.map((item) => ({ ...item, type: 'movie' })),
+    ...series.map((item) => ({ ...item, type: 'series' })),
+  ]
+    .sort((left, right) =>
+      new Date(right.created_at || 0).getTime() -
+      new Date(left.created_at || 0).getTime()
+    )
+    .slice(0, recentLimit);
+
+  const featured =
+    recent.find((item) => Boolean(item.backdrop_url)) ||
+    recent[0] ||
+    null;
+
+  return {
+    featured,
+    movies,
+    series,
+    recently_added: recent,
+  };
+};
 
 const searchAndFetch = async (query, contentType = 'movie') => {
   const endpoint = contentType === 'movie' ? '/search/movie' : '/search/tv';
@@ -117,4 +154,4 @@ const triggerContentPreparation = (tmdbId, contentId, contentType, title, year) 
   });
 };
 
-module.exports = { searchAndFetch, getOrFetchContent };
+module.exports = { getHomeCatalog, searchAndFetch, getOrFetchContent };
