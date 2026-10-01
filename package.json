@@ -27,7 +27,8 @@
     "audit:tutorial-local-matches": "node --env-file=.env src/ingestion/scripts/auditTutorialLocalMatches.js",
     "audit:tutorial-tmdb-pilot": "node --env-file=.env src/ingestion/scripts/auditTutorialTmdbPilot.js",
     "audit:tutorial-listing-context": "node src/ingestion/scripts/auditTutorialListingContext.js",
-    "audit:tutorial-harvest-context": "node src/ingestion/scripts/auditTutorialHarvestContext.js"
+    "audit:tutorial-harvest-context": "node src/ingestion/scripts/auditTutorialHarvestContext.js",
+    "audit:tutorial-harvest-shape": "node src/ingestion/scripts/auditTutorialHarvestShape.js"
   },
   "dependencies": {
     "adm-zip": "^0.5.17",
