@@ -1,0 +1,2 @@
+<!doctype html>
+<html><body>This synthetic fixture is not an HLS playlist.</body></html>
