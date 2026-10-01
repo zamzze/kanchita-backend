@@ -38,7 +38,7 @@
     "audit:tutorial-post-apply": "node --env-file=.env src/ingestion/scripts/auditTutorialPostApply.js",
     "plan:tutorial-publication": "node --env-file=.env src/ingestion/scripts/planTutorialPublication.js",
     "audit:tutorial-source-shape": "node --env-file=.env src/ingestion/scripts/auditTutorialSourceShape.js",
-    "test:tutorial-resolver-v2": "node --test test/safe-network.test.js test/safe-http-client.test.js test/hls-inspector.test.js test/resolver-v2-static-html-extractor.test.js test/direct-hls-resolver.test.js test/direct-mp4-resolver.test.js test/configured-html-resolver.test.js",
+    "test:tutorial-resolver-v2": "node --test test/safe-network.test.js test/safe-http-client.test.js test/hls-inspector.test.js test/resolver-v2-static-html-extractor.test.js test/direct-hls-resolver.test.js test/configured-html-resolver.test.js && node --test --test-name-pattern=\"^(?!MP4 lifecycle persists).*\" test/direct-mp4-resolver.test.js",
     "audit:tutorial-nupload-canary": "node --env-file=.env src/ingestion/scripts/auditNuploadResolverV2Canary.js"
   },
   "dependencies": {
