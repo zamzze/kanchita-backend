@@ -29,7 +29,8 @@
     "audit:tutorial-listing-context": "node src/ingestion/scripts/auditTutorialListingContext.js",
     "audit:tutorial-harvest-context": "node src/ingestion/scripts/auditTutorialHarvestContext.js",
     "audit:tutorial-harvest-shape": "node src/ingestion/scripts/auditTutorialHarvestShape.js",
-    "match:tutorial-movies:v1": "node --env-file=.env src/ingestion/scripts/matchTutorialMoviesV1.js"
+    "match:tutorial-movies:v1": "node --env-file=.env src/ingestion/scripts/matchTutorialMoviesV1.js",
+    "audit:tutorial-invalid-slugs": "node src/ingestion/scripts/auditTutorialInvalidSlugs.js"
   },
   "dependencies": {
     "adm-zip": "^0.5.17",
