@@ -9,6 +9,7 @@ const tmdb = require('../tmdb/tmdbClient');
 const argv = process.argv.slice(2);
 const inputArg = argv.find((arg) => !arg.startsWith('--'));
 const RESET = argv.includes('--reset');
+const REPROCESS_INVALID = argv.includes('--reprocess-invalid');
 
 const CONCURRENCY = Math.max(
   1,
@@ -402,7 +403,11 @@ const main = async () => {
   const completed = RESET ? new Map() : await loadCompleted();
   const cache = RESET ? {} : loadJson(CACHE_FILE, {});
 
-  const pending = tutorials.filter((record) => !completed.has(record.tutorialUrl));
+  const pending = tutorials.filter((record) => {
+    const previous = completed.get(record.tutorialUrl);
+    if (!previous) return true;
+    return REPROCESS_INVALID && previous?.match?.method === 'invalid_slug';
+  });
 
   const stats = {
     tutorialsInput: tutorials.length,
@@ -417,6 +422,7 @@ const main = async () => {
     delayMs: DELAY_MS,
     retries: RETRIES,
     limit: LIMIT || null,
+    reprocessInvalid: REPROCESS_INVALID,
   };
 
   console.log('[TutorialMovieMatcherV1] Starting');
@@ -426,6 +432,7 @@ const main = async () => {
   console.log('  resumed           : ' + stats.alreadyCompleted);
   console.log('  pending           : ' + pending.length);
   console.log('  concurrency       : ' + CONCURRENCY);
+  console.log('  reprocess invalid : ' + REPROCESS_INVALID);
   console.log('  no database writes will be performed');
   console.log('');
 
