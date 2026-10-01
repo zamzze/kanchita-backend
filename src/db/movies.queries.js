@@ -12,8 +12,28 @@ const findAll = async ({ limit = 20, offset = 0, genre_id } = {}) => {
   }
 
   const { rows } = await pool.query(
-    `SELECT m.id, m.title, m.release_year, m.duration_seconds,
-            m.poster_url, m.backdrop_url, m.rating
+    `SELECT m.id, m.tmdb_id, m.title, m.release_year, m.duration_seconds,
+            m.poster_url, m.backdrop_url, m.rating,
+            EXISTS (
+              SELECT 1
+              FROM streams s
+              WHERE s.content_type = 'movie'
+                AND s.content_id = m.id
+                AND s.is_active = TRUE
+                AND s.status = 'ready'
+                AND s.stream_url IS NOT NULL
+            ) AS playback_ready,
+            (
+              SELECT COUNT(*)::int
+              FROM source_catalog_items sci
+              JOIN source_catalog_servers scs
+                ON scs.catalog_item_id = sci.id
+               AND scs.is_active = TRUE
+              WHERE sci.fetch_status = 'ok'
+                AND sci.match_status = 'matched'
+                AND sci.mapped_content_type = 'movie'
+                AND sci.mapped_content_id = m.id
+            ) AS catalog_source_count
      FROM movies m
      ${genreJoin}
      WHERE m.is_published = TRUE ${genreWhere}
@@ -28,6 +48,26 @@ const findById = async (id) => {
   const { rows } = await pool.query(
     `SELECT m.*,
             m.original_title,
+            EXISTS (
+              SELECT 1
+              FROM streams s
+              WHERE s.content_type = 'movie'
+                AND s.content_id = m.id
+                AND s.is_active = TRUE
+                AND s.status = 'ready'
+                AND s.stream_url IS NOT NULL
+            ) AS playback_ready,
+            (
+              SELECT COUNT(*)::int
+              FROM source_catalog_items sci
+              JOIN source_catalog_servers scs
+                ON scs.catalog_item_id = sci.id
+               AND scs.is_active = TRUE
+              WHERE sci.fetch_status = 'ok'
+                AND sci.match_status = 'matched'
+                AND sci.mapped_content_type = 'movie'
+                AND sci.mapped_content_id = m.id
+            ) AS catalog_source_count,
             COALESCE(
               json_agg(DISTINCT jsonb_build_object('id', g.id, 'name', g.name))
               FILTER (WHERE g.id IS NOT NULL), '[]'
