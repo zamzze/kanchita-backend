@@ -40,7 +40,8 @@
     "audit:tutorial-source-shape": "node --env-file=.env src/ingestion/scripts/auditTutorialSourceShape.js",
     "test:tutorial-resolver-v2": "node --test test/safe-network.test.js test/safe-http-client.test.js test/hls-inspector.test.js test/resolver-v2-static-html-extractor.test.js test/direct-hls-resolver.test.js test/configured-html-resolver.test.js && node --test --test-name-pattern=\"^(MP4 validation|HTML or incorrect|safe redirects|private addresses|oversized response|HLS and MP4 coexist)\" test/direct-mp4-resolver.test.js",
     "audit:tutorial-nupload-canary": "node --env-file=.env src/ingestion/scripts/auditNuploadResolverV2Canary.js",
-    "audit:tutorial-nupload-html-structure": "node --env-file=.env src/ingestion/scripts/auditNuploadHtmlStructure.js"
+    "audit:tutorial-nupload-html-structure": "node --env-file=.env src/ingestion/scripts/auditNuploadHtmlStructure.js",
+    "audit:tutorial-nupload-xhr-shape": "node --env-file=.env src/ingestion/scripts/auditNuploadXhrShape.js"
   },
   "dependencies": {
     "adm-zip": "^0.5.17",
