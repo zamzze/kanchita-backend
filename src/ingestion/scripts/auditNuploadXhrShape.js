@@ -73,8 +73,7 @@ const classifyExpression = (raw) => {
 
 const collectCallShapes = (text) => {
   const xhrOpen = [];
-  const openRegex = /\.open\s*\(\s*(['"])(GET|POST)\1\s*,\s*([^,\r
-\)]+)/gi;
+  const openRegex = /\.open\s*\(\s*(['"])(GET|POST)\1\s*,\s*([^,\r\n\)]+)/gi;
   for (const match of text.matchAll(openRegex)) {
     xhrOpen.push({
       method: match[2].toUpperCase(),
@@ -83,15 +82,13 @@ const collectCallShapes = (text) => {
   }
 
   const fetchCalls = [];
-  const fetchRegex = /\bfetch\s*\(\s*([^,\r
-\)]+)/gi;
+  const fetchRegex = /\bfetch\s*\(\s*([^,\r\n\)]+)/gi;
   for (const match of text.matchAll(fetchRegex)) {
     fetchCalls.push({ endpoint: classifyExpression(match[1]) });
   }
 
   const headerNames = new Set();
-  const headerRegex = /\.setRequestHeader\s*\(\s*(['"])([^'"\r
-]{1,128})\1/gi;
+  const headerRegex = /\.setRequestHeader\s*\(\s*(['"])([^'"\r\n]{1,128})\1/gi;
   for (const match of text.matchAll(headerRegex)) {
     headerNames.add(match[2].trim().toLowerCase());
   }
@@ -101,15 +98,13 @@ const collectCallShapes = (text) => {
   for (const match of text.matchAll(parameterRegex)) parameterNames.add(match[2]);
 
   const sendArguments = [];
-  const sendRegex = /\.send\s*\(\s*([^\r
-\)]*)/gi;
+  const sendRegex = /\.send\s*\(\s*([^\r\n\)]*)/gi;
   for (const match of text.matchAll(sendRegex)) {
     sendArguments.push(classifyExpression(match[1]));
   }
 
   const atobArguments = [];
-  const atobRegex = /\batob\s*\(\s*([^\r
-\)]+)/gi;
+  const atobRegex = /\batob\s*\(\s*([^\r\n\)]+)/gi;
   for (const match of text.matchAll(atobRegex)) {
     atobArguments.push(classifyExpression(match[1]));
   }
@@ -126,8 +121,7 @@ const collectCallShapes = (text) => {
 
 const literalEndpointShapes = (text) => {
   const output = [];
-  const regex = /(['"])((?:https?:\/\/|\/)[^'"\r
-]{1,1024})\1/g;
+  const regex = /(['"])((?:https?:\/\/|\/)[^'"\r\n]{1,1024})\1/g;
   for (const match of text.matchAll(regex)) {
     const value = match[2];
     if (/\.(?:js|css|png|jpg|jpeg|gif|svg|ico|woff2?)(?:$|[?#])/i.test(value)) continue;
