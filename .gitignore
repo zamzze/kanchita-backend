@@ -31,3 +31,7 @@ docker-compose.override.yml
 compose.override.yml
 
 
+
+# Confidential local ingestion/audit data
+data-private/
+reports/tutorial-*.json

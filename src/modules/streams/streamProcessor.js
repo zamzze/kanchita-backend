@@ -4,6 +4,7 @@ const pool = require('../../config/db');
 const { createHlsValidator } = require('./hlsValidator');
 const { createResolverExecutor } = require('./resolverExecutor');
 const { createProviderManager } = require('./providerManager');
+const { createSourceCatalogProvider } = require('./sourceCatalogProvider');
 const { createProviderHealthStore } = require('./providerHealth');
 const { createBrowserSlotManager } = require('./browserSlots');
 const { createMetricsStore } = require('./streamMetrics');
@@ -37,6 +38,7 @@ const createStreamProcessor = ({
   verifyIntervalMinutes = STREAM_VERIFY_INTERVAL_MINUTES,
   workerId = 'stream-worker',
   providerManager,
+  catalogSourceResolver = null,
 } = {}) => {
   const metrics = createMetricsStore(db);
   const health = createProviderHealthStore(db, {
@@ -50,7 +52,12 @@ const createStreamProcessor = ({
     metrics,
   });
   const manager = providerManager || createProviderManager({
-    providers: [{
+    providers: [
+      createSourceCatalogProvider({
+        db,
+        resolveSource: catalogSourceResolver,
+      }),
+      {
       id: 'provider_c',
       strategy: 'browser',
       supportsMovies: true,

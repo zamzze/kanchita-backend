@@ -60,6 +60,49 @@ test('provider manager prioritizes direct strategies and contains failures', asy
     assert.equal(browserCalls, 0);
   });
 
+  await t.test('provider skip falls through without health penalty', async () => {
+    let providerFailures = 0;
+    let browserCalls = 0;
+    let skipMetrics = 0;
+    const manager = createProviderManager({
+      providers: [
+        {
+          id: 'catalog_fixture',
+          strategy: 'direct',
+          resolve: async () => ({
+            skip: true,
+            reason: 'NO_CATALOG_SOURCES',
+          }),
+        },
+        {
+          id: 'browser_fixture',
+          strategy: 'browser',
+          resolve: async () => {
+            browserCalls += 1;
+            return { url: 'https://media.example/browser.m3u8' };
+          },
+        },
+      ],
+      validator,
+      health: {
+        ...noHealth,
+        recordFailure: async () => { providerFailures += 1; },
+      },
+      metrics: {
+        increment: async (name) => {
+          if (name === 'provider_skip_total') skipMetrics += 1;
+        },
+        observe: async () => {},
+      },
+    });
+
+    const result = await manager.resolve(context);
+    assert.equal(result.provider, 'browser_fixture');
+    assert.equal(browserCalls, 1);
+    assert.equal(providerFailures, 0);
+    assert.equal(skipMetrics, 1);
+  });
+
   await t.test('direct failure falls through and browser is always last', async () => {
     const calls = [];
     const manager = createProviderManager({

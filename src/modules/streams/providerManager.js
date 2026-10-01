@@ -34,6 +34,10 @@ const createProviderManager = ({
       const result = provider.requiresBrowser
         ? await browserSlots.withSlot(workerId, invoke)
         : await invoke();
+      if (result?.skip === true) {
+        await metrics.increment('provider_skip_total');
+        return null;
+      }
       if (!result?.url) throw new Error('empty provider result');
       const validationStartedAt = Date.now();
       const validation = await validator(result.url);
