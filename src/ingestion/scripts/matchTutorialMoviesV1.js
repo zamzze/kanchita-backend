@@ -39,7 +39,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const normalize = (value = '') => String(value)
   .normalize('NFKD')
-  .replace(/\p{M}+/gu, '')
+  .replace(/[\u0300-\u036f]/g, '')
   .toLowerCase()
   .replace(/&/g, ' and ')
   .replace(/[^\p{L}\p{N}]+/gu, ' ')
