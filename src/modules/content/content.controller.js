@@ -1,5 +1,18 @@
-const { searchAndFetch, getOrFetchContent } = require('./content.service');
+const {
+  getHomeCatalog,
+  searchAndFetch,
+  getOrFetchContent,
+} = require('./content.service');
 const { ok, error } = require('../../utils/response');
+
+const getHomeContent = async (req, res, next) => {
+  try {
+    const content = await getHomeCatalog();
+    return ok(res, content);
+  } catch (err) {
+    next(err);
+  }
+};
 
 const searchContent = async (req, res, next) => {
   try {
@@ -25,4 +38,4 @@ const getContent = async (req, res, next) => {
   }
 };
 
-module.exports = { searchContent, getContent };
+module.exports = { getHomeContent, searchContent, getContent };
